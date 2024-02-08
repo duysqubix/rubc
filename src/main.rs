@@ -1,7 +1,8 @@
+mod motherboard;
 mod opcodes;
-
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut mb = opcodes::Motherboard::new();
-    let opmap = opcodes::get_op_code_map();
-    println!("{:?}", opmap[&0x00](&mut mb, 0x00));
+    let res = mb.execute_op_code(0x00);
+    println!("{:?}", res);
+    Ok(())
 }
