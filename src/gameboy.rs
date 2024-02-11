@@ -8,32 +8,63 @@ use crate::{
 use std::default::Default;
 use std::fmt;
 
+pub struct MotherboardBuilder {
+    cpu: Cpu,
+    cart: Option<Cartridge>,
+    opcode_map: OpCodeMap,
+}
+
+impl MotherboardBuilder {
+    pub fn new() -> MotherboardBuilder {
+        MotherboardBuilder {
+            cpu: Cpu::default(),
+            cart: None,
+            opcode_map: opcodes::init_opcodes(),
+        }
+    }
+
+    pub fn build(self) -> Motherboard {
+        Motherboard {
+            cpu: self.cpu,
+            cart: self.cart,
+            opcode_map: self.opcode_map,
+        }
+    }
+
+    pub fn with_cart<'a>(mut self, filename: &'a str) -> MotherboardBuilder {
+        self.cart = Some(Cartridge::new(filename).unwrap());
+        self
+    }
+}
+
 pub struct Motherboard {
     pub cpu: Cpu,
-    pub cart: Cartridge,
+    pub cart: Option<Cartridge>,
     opcode_map: OpCodeMap,
 }
 
 impl Motherboard {
     pub fn new() -> Motherboard {
-        let mut cpu = Cpu::default();
-        cpu.reset();
-        Motherboard {
-            cpu,
-            cart: Cartridge::new("assets/cpu_instrs.gb").unwrap(),
-            opcode_map: opcodes::init_opcodes(),
-        }
+        let mut mb = MotherboardBuilder::new()
+            .with_cart("assests/cpu_instrs.gb")
+            .build();
+        mb.cpu.reset();
+        mb
     }
 
     pub fn execute_op_code(&mut self, op_code: u8, value: u16) -> OpCycles {
-        log::debug!("Executing op code: {:02X}", op_code);
-        self.opcode_map.get(&op_code).expect("Invalid op code")(self, value)
+        // log::debug!("Executing op code: {:02X}", op_code);
+        self.opcode_map
+            .get(&op_code)
+            .expect(format!("Unexpected opcode: {:#x}", op_code).as_str())(self, value)
     }
 
     pub fn execute_op_code_cb(&mut self, op_code: u8) -> OpCycles {
-        log::debug!("Executing op code: CB {:02X}", op_code);
+        // log::debug!("Executing op code: CB {:02X}", op_code);
 
-        self.opcode_map.get(&(op_code)).expect("Invalid op code")(self, 0)
+        self.opcode_map
+            .get(&(op_code))
+            .expect(format!("Unexpected opcode: {:#x}", op_code).as_str())(self, 0)
     }
 
     fn instruction_look_ahead(&self, number: u16) -> String {
@@ -99,6 +130,19 @@ pub struct Cpu {
 }
 
 impl Cpu {
+    pub fn randomize(&mut self) {
+        self.a = rand::random();
+        self.b = rand::random();
+        self.c = rand::random();
+        self.d = rand::random();
+        self.e = rand::random();
+        self.f = rand::random();
+        self.h = rand::random();
+        self.l = rand::random();
+        self.sp = rand::random();
+        self.pc = rand::random();
+    }
+
     pub fn reset(&mut self) {
         // DMG
         self.a = 0x11;
@@ -118,15 +162,15 @@ impl Cpu {
 
 impl fmt::Debug for Cpu {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "A: `{}` F: `{}` B: `{}` C: `{}` D: `{}` E: `{}` H: `{}` L: `{}` SP: `{:0X}` PC: `{:0X}`",
-            format_binary(self.a),
+        write!(f, "A: `{:#x}` F: `{}` B: `{:#x}` C: `{:#x}` D: `{:#x}` E: `{:#x}` H: `{:#x}` L: `{:#x}` SP: `{:0X}` PC: `{:0X}`",
+            self.a,
             format_binary(self.f),
-            format_binary(self.b),
-            format_binary(self.c),
-            format_binary(self.d),
-            format_binary(self.e),
-            format_binary(self.h),
-            format_binary(self.l),
+            self.b,
+            self.c,
+            self.d,
+            self.e,
+            self.h,
+            self.l,
             self.sp,
             self.pc,
         )
