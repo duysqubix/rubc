@@ -32,6 +32,7 @@ impl MotherboardBuilder {
             cpu: self.cpu,
             cart: self.cart,
             double_speed: false,
+            ime: false,
             cgb_mode: self.cgb_mode.unwrap_or(false),
             opcode_map: self.opcode_map,
             opcode_map_cb: self.opcode_map_cb,
@@ -54,6 +55,7 @@ pub struct Motherboard {
     pub cart: Option<Cartridge>,
     pub double_speed: bool,
     pub cgb_mode: bool,
+    pub ime: bool,
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
 }

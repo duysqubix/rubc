@@ -1689,5 +1689,481 @@ pub fn init_opcodes() -> OpCodeMap {
             mb.execute_op_code_cb(cb_opcode).expect("Failed to execute CB opcode")
         },
 
+        // CALL Z, u16
+        0xCCu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(3);
+
+            if is_bit_set(mb.cpu.f, BIT_FLAGZ) {
+                let sp1 = mb.cpu.sp.wrapping_sub(1);
+                let sp2 = mb.cpu.sp.wrapping_sub(2);
+
+                let pch = ((mb.cpu.pc >> 8) & 0xFF) as u8;
+                let pcl = (mb.cpu.pc & 0xFF) as u8;
+                memory_write(sp1, pch);
+                memory_write(sp2, pcl);
+                mb.cpu.sp = sp2;
+                mb.cpu.pc = value;
+                CYCLE_RETURN_24
+            } else {
+                CYCLE_RETURN_12
+            }
+        },
+
+        // CALL u16
+        0xCDu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(3);
+
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+
+            let pch = ((mb.cpu.pc >> 8) & 0xFF) as u8;
+            let pcl = (mb.cpu.pc & 0xFF) as u8;
+            memory_write(sp1, pch);
+            memory_write(sp2, pcl);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = value;
+            CYCLE_RETURN_24
+        },
+
+        // ADC A, u8
+        0xCEu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let v = value as u8;
+            add_carry_register_from_value!(mb, a, v);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // RST 08H
+        0xCFu8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, ((mb.cpu.pc >> 8) & 0xFF) as u8);
+            memory_write(sp2, (mb.cpu.pc & 0xFF) as u8);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = 0x08;
+            CYCLE_RETURN_16
+        },
+
+        // RET NC
+        0xD0u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            if !is_bit_set(mb.cpu.f, BIT_FLAGC) {
+                let lo = memory_read(mb.cpu.sp);
+                mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+                let hi = memory_read(mb.cpu.sp);
+                mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+                mb.cpu.pc = ((hi as u16) << 8) | lo as u16;
+                CYCLE_RETURN_20
+            } else {
+                mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+                CYCLE_RETURN_8
+            }
+        },
+
+        // POP DE
+        0xD1u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            let lo = memory_read(mb.cpu.sp);
+            mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+            let hi = memory_read(mb.cpu.sp);
+            mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+            mb.cpu.d = hi;
+            mb.cpu.e = lo;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_12
+        },
+
+        // JP NC, u16
+        0xD2u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            if !is_bit_set(mb.cpu.f, BIT_FLAGC) {
+                mb.cpu.pc = value;
+                CYCLE_RETURN_16
+            } else {
+                mb.cpu.pc = mb.cpu.pc.wrapping_add(3);
+                CYCLE_RETURN_12
+            }
+        },
+
+        // CALL NC, u16
+        0xD4u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(3);
+
+            if !is_bit_set(mb.cpu.f, BIT_FLAGC) {
+                let sp1 = mb.cpu.sp.wrapping_sub(1);
+                let sp2 = mb.cpu.sp.wrapping_sub(2);
+
+                let pch = ((mb.cpu.pc >> 8) & 0xFF) as u8;
+                let pcl = (mb.cpu.pc & 0xFF) as u8;
+                memory_write(sp1, pch);
+                memory_write(sp2, pcl);
+                mb.cpu.sp = sp2;
+                mb.cpu.pc = value;
+                CYCLE_RETURN_24
+            } else {
+                CYCLE_RETURN_12
+            }
+        },
+
+        // PUSH DE
+        0xD5u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, mb.cpu.d);
+            memory_write(sp2, mb.cpu.e);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_16
+        },
+
+        // SUB u8
+        0xD6u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let v = value as u8;
+            sub_register_from_value!(mb, a, v);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // RST 10H
+        0xD7u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, ((mb.cpu.pc >> 8) & 0xFF) as u8);
+            memory_write(sp2, (mb.cpu.pc & 0xFF) as u8);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = 0x10;
+            CYCLE_RETURN_16
+        },
+
+        // RET C
+        0xD8u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            if is_bit_set(mb.cpu.f, BIT_FLAGC) {
+                let lo = memory_read(mb.cpu.sp);
+                mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+                let hi = memory_read(mb.cpu.sp);
+                mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+                mb.cpu.pc = ((hi as u16) << 8) | lo as u16;
+                CYCLE_RETURN_20
+            } else {
+                mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+                CYCLE_RETURN_8
+            }
+        },
+
+        // RETI
+        0xD9u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            let lo = memory_read(mb.cpu.sp);
+            mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+            let hi = memory_read(mb.cpu.sp);
+            mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+            mb.cpu.pc = ((hi as u16) << 8) | lo as u16;
+            mb.ime = true;
+            CYCLE_RETURN_16
+        },
+
+        // JP C, u16
+        0xDAu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            if is_bit_set(mb.cpu.f, BIT_FLAGC) {
+                mb.cpu.pc = value;
+                CYCLE_RETURN_16
+            } else {
+                mb.cpu.pc = mb.cpu.pc.wrapping_add(3);
+                CYCLE_RETURN_12
+            }
+        },
+
+        // CALL C, u16
+        0xDCu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(3);
+
+            if is_bit_set(mb.cpu.f, BIT_FLAGC) {
+                let sp1 = mb.cpu.sp.wrapping_sub(1);
+                let sp2 = mb.cpu.sp.wrapping_sub(2);
+
+                let pch = ((mb.cpu.pc >> 8) & 0xFF) as u8;
+                let pcl = (mb.cpu.pc & 0xFF) as u8;
+                memory_write(sp1, pch);
+                memory_write(sp2, pcl);
+                mb.cpu.sp = sp2;
+                mb.cpu.pc = value;
+                CYCLE_RETURN_24
+            } else {
+                CYCLE_RETURN_12
+            }
+        },
+
+        // SBC A, u8
+        0xDEu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let v = value as u8;
+            sub_carry_register_from_value!(mb, a, v);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // RST 18H
+        0xDFu8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, ((mb.cpu.pc >> 8) & 0xFF) as u8);
+            memory_write(sp2, (mb.cpu.pc & 0xFF) as u8);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = 0x18;
+            CYCLE_RETURN_16
+        },
+
+        // LDH (u8), A
+        0xE0u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let addr = 0xFF00 | (value as u16);
+            memory_write(addr, mb.cpu.a);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(2);
+            CYCLE_RETURN_12
+        },
+
+        // POP HL
+        0xE1u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            let lo = memory_read(mb.cpu.sp);
+            mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+            let hi = memory_read(mb.cpu.sp);
+            mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+            mb.cpu.h = hi;
+            mb.cpu.l = lo;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_12
+        },
+
+        // LD (C), A
+        0xE2u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            let addr = 0xFF00 | (mb.cpu.c as u16);
+            memory_write(addr, mb.cpu.a);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // PUSH HL
+        0xE5u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, mb.cpu.h);
+            memory_write(sp2, mb.cpu.l);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_16
+        },
+
+        // AND u8
+        0xE6u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let v = value as u8;
+            and_register_with_value!(mb, a, v);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // RST 20H
+        0xE7u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, ((mb.cpu.pc >> 8) & 0xFF) as u8);
+            memory_write(sp2, (mb.cpu.pc & 0xFF) as u8);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = 0x20;
+            CYCLE_RETURN_16
+        },
+
+
+        // ADD SP, i8
+        0xE8u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let value = (value as u8) as i8;
+            let sp = mb.cpu.sp as i32;
+            let r = sp + value as i32;
+            let i8_32 = value as i32;
+
+            clear_bits!(mb.cpu.f, BIT_FLAGZ, BIT_FLAGN, BIT_FLAGH, BIT_FLAGC);
+
+            if ((sp & 0xf) + (i8_32 & 0xf)) & 0x10 > 0xf {
+                set_bits!(mb.cpu.f, BIT_FLAGH);
+            }
+
+            if (sp ^ i8_32 ^ r) & 0x100 == 0x100 {
+                set_bits!(mb.cpu.f, BIT_FLAGC);
+            }
+
+            mb.cpu.sp = r as u16;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(2);
+
+            CYCLE_RETURN_16
+        },
+
+        // JP (HL)
+        0xE9u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.pc = ((mb.cpu.h as u16) << 8) | mb.cpu.l as u16;
+            CYCLE_RETURN_4
+        },
+
+        // LD (u16), A
+        0xEAu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let addr = value;
+            memory_write(addr, mb.cpu.a);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(3);
+            CYCLE_RETURN_16
+        },
+
+        // XOR u8
+        0xEEu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let v = value as u8;
+            xor_register_with_value!(mb, a, v);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // RST 28H
+        0xEFu8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, ((mb.cpu.pc >> 8) & 0xFF) as u8);
+            memory_write(sp2, (mb.cpu.pc & 0xFF) as u8);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = 0x28;
+            CYCLE_RETURN_16
+        },
+
+        // LDH A, (u8)
+        0xF0u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let addr = 0xFF00 | (value as u16);
+            mb.cpu.a = memory_read(addr);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(2);
+            CYCLE_RETURN_12
+        },
+
+        // POP AF
+        0xF1u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.f = memory_read(mb.cpu.sp) & 0xF0 & 0xF0;
+            mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+            mb.cpu.a = memory_read(mb.cpu.sp) ;
+            mb.cpu.sp = mb.cpu.sp.wrapping_add(1);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_12
+        },
+
+        // LD A, (C)
+        0xF2u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            let addr = 0xFF00 | (mb.cpu.c as u16);
+            mb.cpu.a = memory_read(addr);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // DI
+        0xF3u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.ime = false;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_4
+        },
+
+        // PUSH AF
+        0xF5u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, mb.cpu.a);
+            memory_write(sp2, mb.cpu.f);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_16
+        },
+
+        // OR u8
+        0xF6u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let v = value as u8;
+            or_register_with_value!(mb, a, v);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // RST 30H
+        0xF7u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, ((mb.cpu.pc >> 8) & 0xFF) as u8);
+            memory_write(sp2, (mb.cpu.pc & 0xFF) as u8);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = 0x30;
+            CYCLE_RETURN_16
+        },
+
+        // LD HL, SP + i8
+        0xF8u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let value = (value as u8) as i8;
+            let sp = mb.cpu.sp as i32;
+            let r = sp + value as i32;
+            let i8_32 = value as i32;
+
+            clear_bits!(mb.cpu.f, BIT_FLAGZ, BIT_FLAGN, BIT_FLAGH, BIT_FLAGC);
+
+            if ((sp & 0xf) + (i8_32 & 0xf)) & 0x10 > 0xf {
+                set_bits!(mb.cpu.f, BIT_FLAGH);
+            }
+
+            if (sp ^ i8_32 ^ r) & 0x100 == 0x100 {
+                set_bits!(mb.cpu.f, BIT_FLAGC);
+            }
+
+            mb.cpu.h = ((r >> 8) & 0xFF) as u8;
+            mb.cpu.l = (r & 0xFF) as u8;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(2);
+
+            CYCLE_RETURN_12
+        },
+
+        // LD SP, HL
+        0xF9u8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.sp = ((mb.cpu.h as u16) << 8) | mb.cpu.l as u16;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // LD A, (u16)
+        0xFAu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let addr = value;
+            mb.cpu.a = memory_read(addr);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(3);
+            CYCLE_RETURN_16
+        },
+
+        // EI
+        0xFBu8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.ime = true;
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_4
+        },
+
+        // CP u8
+        0xFEu8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
+            let v = value as u8;
+            compare_register_with_value!(mb, a, v);
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+            CYCLE_RETURN_8
+        },
+
+        // RST 38H
+        0xFFu8 => |mb: &mut Motherboard, _value: u16| -> OpCycles {
+            mb.cpu.pc = mb.cpu.pc.wrapping_add(1);
+
+            let sp1 = mb.cpu.sp.wrapping_sub(1);
+            let sp2 = mb.cpu.sp.wrapping_sub(2);
+            memory_write(sp1, ((mb.cpu.pc >> 8) & 0xFF) as u8);
+            memory_write(sp2, (mb.cpu.pc & 0xFF) as u8);
+            mb.cpu.sp = sp2;
+            mb.cpu.pc = 0x38;
+            CYCLE_RETURN_16
+        },
+
     }
 }

@@ -123,12 +123,12 @@ fn compare_state(cp: &gameboy::Cpu, state: &tests::CpuState) -> anyhow::Result<(
 fn main() -> anyhow::Result<()> {
     logger::setup_logger()?;
 
-    let test_dir = "/home/duys/Documents/sm83/v1";
+    let test_dir = "assets/sm83/v1";
     let mut files = std::fs::read_dir(test_dir)?
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, std::io::Error>>()?;
     files.sort();
-    use rayon::prelude::*;
+    // use rayon::prelude::*;
     use std::sync::{Arc, Mutex};
     let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
