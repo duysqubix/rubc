@@ -19,7 +19,7 @@ pub static EXTERNAL_RAM: LazyLock<Mutex<Vec<u8>>> = LazyLock::new(|| {
 
 pub static MEMORY: LazyLock<Mutex<Vec<u8>>> = LazyLock::new(|| {
     // initialize memory
-    let mut memory = vec![0u8; 0xFFFF];
+    let mut memory = vec![0u8; u16::MAX as usize + 1];
     let mut rng = thread_rng();
     for i in &mut memory {
         *i = rng.gen();
@@ -47,7 +47,6 @@ pub fn copy_ram_internal_to_external(rambank: usize) {
 
 #[inline(always)]
 pub fn memory_write(address: u16, value: u8) {
-    // MEMORY.lock().unwrap()[address as usize] = value;
     if address <= ROM1_ADDRESS_END {
         rom_write(address, value);
     } else {

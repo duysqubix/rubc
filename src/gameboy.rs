@@ -11,6 +11,7 @@ use std::fmt;
 pub struct MotherboardBuilder {
     cpu: Cpu,
     cart: Option<Cartridge>,
+    cgb_mode: Option<bool>,
     opcode_map: OpCodeMap,
 }
 
@@ -19,6 +20,7 @@ impl MotherboardBuilder {
         MotherboardBuilder {
             cpu: Cpu::default(),
             cart: None,
+            cgb_mode: None,
             opcode_map: opcodes::init_opcodes(),
         }
     }
@@ -27,6 +29,8 @@ impl MotherboardBuilder {
         Motherboard {
             cpu: self.cpu,
             cart: self.cart,
+            double_speed: false,
+            cgb_mode: self.cgb_mode.unwrap_or(false),
             opcode_map: self.opcode_map,
         }
     }
@@ -35,11 +39,18 @@ impl MotherboardBuilder {
         self.cart = Some(Cartridge::new(filename).unwrap());
         self
     }
+
+    pub fn enable_cgb_mode(mut self) -> MotherboardBuilder {
+        self.cgb_mode = Some(true);
+        self
+    }
 }
 
 pub struct Motherboard {
     pub cpu: Cpu,
     pub cart: Option<Cartridge>,
+    pub double_speed: bool,
+    pub cgb_mode: bool,
     opcode_map: OpCodeMap,
 }
 
@@ -52,19 +63,24 @@ impl Motherboard {
         mb
     }
 
-    pub fn execute_op_code(&mut self, op_code: u8, value: u16) -> OpCycles {
-        // log::debug!("Executing op code: {:02X}", op_code);
-        self.opcode_map
-            .get(&op_code)
-            .expect(format!("Unexpected opcode: {:#x}", op_code).as_str())(self, value)
+    pub fn execute_op_code(&mut self, op_code: u8, value: u16) -> anyhow::Result<OpCycles> {
+        if ILLEGAL_OPCODES.contains(&op_code) {
+            self.cpu.is_stuck = true;
+            return Err(Error::msg(format!("Illegal opcode: {:#x}", op_code)));
+        }
+
+        match self.opcode_map.get(&op_code) {
+            Some(op) => Ok(op(self, value)),
+            None => Err(Error::msg(format!("Unexpected opcode: {:#x}", op_code))),
+        }
     }
 
-    pub fn execute_op_code_cb(&mut self, op_code: u8) -> OpCycles {
+    pub fn execute_op_code_cb(&mut self, op_code: u8) -> anyhow::Result<OpCycles> {
         // log::debug!("Executing op code: CB {:02X}", op_code);
-
-        self.opcode_map
-            .get(&(op_code))
-            .expect(format!("Unexpected opcode: {:#x}", op_code).as_str())(self, 0)
+        match self.opcode_map.get(&op_code) {
+            Some(op) => Ok(op(self, 0)),
+            None => Err(Error::msg(format!("Unexpected opcode: {:#x}", op_code))),
+        }
     }
 
     fn instruction_look_ahead(&self, number: u16) -> String {
@@ -75,7 +91,7 @@ impl Motherboard {
         format!("{:x?}", result)
     }
 
-    pub fn tick(&mut self) -> OpCycles {
+    pub fn tick(&mut self) -> anyhow::Result<OpCycles> {
         let mut cycles: OpCycles = 0;
         if !self.cpu.halted {
             log::debug!(
@@ -107,9 +123,9 @@ impl Motherboard {
                 _ => panic!("Invalid op code length"),
             };
 
-            cycles = self.execute_op_code(op_code, value)
+            cycles = self.execute_op_code(op_code, value)?;
         }
-        cycles
+        Ok(cycles)
     }
 }
 
@@ -130,19 +146,6 @@ pub struct Cpu {
 }
 
 impl Cpu {
-    pub fn randomize(&mut self) {
-        self.a = rand::random();
-        self.b = rand::random();
-        self.c = rand::random();
-        self.d = rand::random();
-        self.e = rand::random();
-        self.f = rand::random();
-        self.h = rand::random();
-        self.l = rand::random();
-        self.sp = rand::random();
-        self.pc = rand::random();
-    }
-
     pub fn reset(&mut self) {
         // DMG
         self.a = 0x11;

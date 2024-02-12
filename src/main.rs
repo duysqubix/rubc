@@ -1,5 +1,4 @@
 #![feature(lazy_cell)]
-#[macro_export]
 mod bits;
 mod gameboy;
 mod globals;
@@ -9,7 +8,6 @@ mod tests;
 mod utils;
 
 use globals::*;
-use rayon::iter::IntoParallelRefMutIterator;
 fn set_initial_state(cp: &mut gameboy::Cpu, state: &tests::CpuState) {
     cp.a = state.a;
     cp.b = state.b;
@@ -21,6 +19,13 @@ fn set_initial_state(cp: &mut gameboy::Cpu, state: &tests::CpuState) {
     cp.l = state.l;
     cp.sp = state.sp;
     cp.pc = state.pc;
+
+    for byte in state.ram.iter() {
+        let addr = byte[0];
+        let value = byte[1];
+        log::trace!("Writing to addr: ${:04X} value: ${:02X}", addr, value);
+        utils::memory_write(addr, value as u8);
+    }
 }
 
 fn compare_state(cp: &gameboy::Cpu, state: &tests::CpuState) -> anyhow::Result<()> {
@@ -97,10 +102,6 @@ fn compare_state(cp: &gameboy::Cpu, state: &tests::CpuState) -> anyhow::Result<(
     Ok(())
 }
 
-fn str_to_u8(s: &str) -> u8 {
-    u8::from_str_radix(s.trim_start_matches("0x"), 16).unwrap()
-}
-
 fn main() -> anyhow::Result<()> {
     logger::setup_logger()?;
 
@@ -111,10 +112,14 @@ fn main() -> anyhow::Result<()> {
     files.sort();
     use rayon::prelude::*;
     use std::sync::{Arc, Mutex};
-    let errors: Arc<Mutex<Vec<anyhow::Error>>> = Arc::new(Mutex::new(Vec::new()));
+    let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
-    files.par_iter().for_each(|file| {
-        println!("{:?}", file);
+    files.iter().for_each(|file| {
+        if !file.is_file() {
+            return;
+        }
+
+        println!("Testing OpCode: {:?}.......", file.file_name().unwrap());
         let error_copy = errors.clone();
         let mut mb = gameboy::MotherboardBuilder::new().build();
 
@@ -126,44 +131,80 @@ fn main() -> anyhow::Result<()> {
             //sanity check
             assert!(compare_state(&mb.cpu, &test.initial).is_ok());
 
-            let opcode_info = test.name.split(' ').collect::<Vec<&str>>();
-            let opcode_length = OPCODE_LENGTHS[str_to_u8(opcode_info[0]) as usize];
+            let mut op_idx = 0;
+            for ram_state in test.initial.ram.iter().enumerate() {
+                if test.initial.pc == ram_state.1[0] {
+                    op_idx = ram_state.0;
+                    break;
+                }
+            }
 
-            match opcode_length {
+            let opcode = test.initial.ram[op_idx][1];
+            let opcode_length = OPCODE_LENGTHS[opcode as usize];
+            log::trace!(
+                "test name: {}, op_idx: {}, opcode: {:02X}, opcode_length: {}",
+                &test.name,
+                op_idx,
+                opcode,
+                opcode_length
+            );
+
+            let res = match opcode_length {
                 3 => {
-                    let opcode = test.initial.ram[0][1];
-                    let byte1 = test.initial.ram[1][1];
-                    let byte2 = test.initial.ram[2][1];
+                    let opcode = test.initial.ram[op_idx][1];
+                    let byte1 = test.initial.ram[op_idx + 1][1];
+                    let byte2 = test.initial.ram[op_idx + 2][1];
                     let value = (byte2 << 8) | byte1;
-                    mb.execute_op_code(opcode as u8, value);
+                    log::trace!(
+                        "Executing op code: {:02X} with value: {:04X}",
+                        opcode,
+                        value
+                    );
+                    mb.execute_op_code(opcode as u8, value)
                 }
                 2 => {
-                    let opcode = test.initial.ram[0][1];
-                    let byte1 = test.initial.ram[1][1];
+                    let opcode = test.initial.ram[op_idx][1];
+                    let byte1 = test.initial.ram[op_idx + 1][1];
                     let value = byte1;
-                    mb.execute_op_code(opcode as u8, value as u16);
+                    log::trace!(
+                        "Executing op code: {:02X} with value: {:04X}",
+                        opcode,
+                        value
+                    );
+
+                    mb.execute_op_code(opcode as u8, value as u16)
                 }
                 1 => {
-                    let opcode = test.initial.ram[0][1];
-                    mb.execute_op_code(opcode as u8, 0);
+                    let opcode = test.initial.ram[op_idx][1];
+                    log::trace!("Executing op code: {:02X}", opcode,);
+
+                    mb.execute_op_code(opcode as u8, 0)
                 }
                 _ => panic!("Invalid op code length"),
+            };
+            if let Err(e) = res {
+                error_copy.lock().unwrap().push(e.to_string());
+                log::error!("Error: {:?}", e);
+                panic!();
+                // return;
             }
+
+            log::trace!("Comparing state");
             compare_state(&mb.cpu, &test.final_state)
-                .inspect_err(|_| {
+                .map_err(|e| {
                     log::debug!(
-                        "Opcode info: {:?}, Opcode length: {}",
-                        opcode_info,
-                        opcode_length
+                        "Opcode info: {:?}, Opcode length: {}, E:  {:?}",
+                        opcode,
+                        opcode_length,
+                        e
                     );
                     log::debug!("I: {:?}", test.initial);
                     log::debug!("G: {:?}", mb.cpu);
                     log::debug!("E: {:?}", test.final_state);
+                    error_copy.lock().unwrap().push(e.to_string());
                 })
-                .map_err(|e| {
-                    error_copy.lock().unwrap().push(e);
-                })
-                .unwrap_or_else(|_| ());
+                .unwrap();
+            // .unwrap_or_else(|_| ());
             // break;
         }
     });
