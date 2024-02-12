@@ -1,9 +1,13 @@
 #![feature(lazy_cell)]
+
+#[macro_use]
 mod bits;
+
 mod gameboy;
 mod globals;
 mod logger;
 mod opcodes;
+mod opcodes_cb;
 mod tests;
 mod utils;
 
@@ -29,6 +33,20 @@ fn set_initial_state(cp: &mut gameboy::Cpu, state: &tests::CpuState) {
 }
 
 fn compare_state(cp: &gameboy::Cpu, state: &tests::CpuState) -> anyhow::Result<()> {
+    log::trace!("Comparing RAM state");
+    for byte in state.ram.iter() {
+        let addr = byte[0];
+        let value = byte[1];
+        let read_value = utils::memory_read(addr);
+        if read_value != value as u8 {
+            return Err(anyhow::anyhow!(
+                "RAM: Expected: ${:02X} Got: ${:02X}",
+                value,
+                read_value
+            ));
+        }
+    }
+
     if cp.a != state.a {
         return Err(anyhow::anyhow!(
             "A: Expected: {:#x} Got: {:#x}",
@@ -105,7 +123,7 @@ fn compare_state(cp: &gameboy::Cpu, state: &tests::CpuState) -> anyhow::Result<(
 fn main() -> anyhow::Result<()> {
     logger::setup_logger()?;
 
-    let test_dir = "/home/duys/.repos/jsmoo/misc/tests/GeneratedTests/sm83/v1";
+    let test_dir = "/home/duys/Documents/sm83/v1";
     let mut files = std::fs::read_dir(test_dir)?
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, std::io::Error>>()?;
@@ -119,13 +137,17 @@ fn main() -> anyhow::Result<()> {
             return;
         }
 
-        println!("Testing OpCode: {:?}.......", file.file_name().unwrap());
+        // if file.file_name().unwrap().to_str().unwrap().contains("cb ") {
+        //     return;
+        // }
+
+        let mut s = format!("Testing OpCode: {:?}.......", file.file_name().unwrap());
         let error_copy = errors.clone();
         let mut mb = gameboy::MotherboardBuilder::new().build();
 
         let tests = tests::read_test_file(file.as_path());
 
-        for test in tests {
+        for test in &tests {
             set_initial_state(&mut mb.cpu, &test.initial);
 
             //sanity check
@@ -172,7 +194,7 @@ fn main() -> anyhow::Result<()> {
                         value
                     );
 
-                    mb.execute_op_code(opcode as u8, value as u16)
+                    mb.execute_op_code(opcode as u8, value)
                 }
                 1 => {
                     let opcode = test.initial.ram[op_idx][1];
@@ -193,7 +215,8 @@ fn main() -> anyhow::Result<()> {
             compare_state(&mb.cpu, &test.final_state)
                 .map_err(|e| {
                     log::debug!(
-                        "Opcode info: {:?}, Opcode length: {}, E:  {:?}",
+                        "Test: {:?}, Opcode info: {:X?}, Opcode length: {}, E:  {:?}",
+                        test.name,
                         opcode,
                         opcode_length,
                         e
@@ -204,9 +227,10 @@ fn main() -> anyhow::Result<()> {
                     error_copy.lock().unwrap().push(e.to_string());
                 })
                 .unwrap();
-            // .unwrap_or_else(|_| ());
-            // break;
         }
+
+        s.push_str(format!("{} tests passed", tests.len()).as_str());
+        log::debug!("{}", s);
     });
     println!("ERRORS FOUND: {:?}", errors.lock().unwrap());
     Ok(())

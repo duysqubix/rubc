@@ -2,7 +2,7 @@ use anyhow::Error;
 
 use crate::{
     globals::*,
-    opcodes,
+    opcodes, opcodes_cb,
     utils::{format_binary, memory_read, rom_read, rom_write, ROM},
 };
 use std::default::Default;
@@ -13,6 +13,7 @@ pub struct MotherboardBuilder {
     cart: Option<Cartridge>,
     cgb_mode: Option<bool>,
     opcode_map: OpCodeMap,
+    opcode_map_cb: OpCodeMap,
 }
 
 impl MotherboardBuilder {
@@ -22,6 +23,7 @@ impl MotherboardBuilder {
             cart: None,
             cgb_mode: None,
             opcode_map: opcodes::init_opcodes(),
+            opcode_map_cb: opcodes_cb::init_opcodes_cb(),
         }
     }
 
@@ -32,6 +34,7 @@ impl MotherboardBuilder {
             double_speed: false,
             cgb_mode: self.cgb_mode.unwrap_or(false),
             opcode_map: self.opcode_map,
+            opcode_map_cb: self.opcode_map_cb,
         }
     }
 
@@ -52,6 +55,7 @@ pub struct Motherboard {
     pub double_speed: bool,
     pub cgb_mode: bool,
     opcode_map: OpCodeMap,
+    opcode_map_cb: OpCodeMap,
 }
 
 impl Motherboard {
@@ -77,7 +81,7 @@ impl Motherboard {
 
     pub fn execute_op_code_cb(&mut self, op_code: u8) -> anyhow::Result<OpCycles> {
         // log::debug!("Executing op code: CB {:02X}", op_code);
-        match self.opcode_map.get(&op_code) {
+        match self.opcode_map_cb.get(&op_code) {
             Some(op) => Ok(op(self, 0)),
             None => Err(Error::msg(format!("Unexpected opcode: {:#x}", op_code))),
         }
@@ -100,12 +104,7 @@ impl Motherboard {
                 self.instruction_look_ahead(3)
             );
 
-            let mut op_code = memory_read(self.cpu.pc);
-            if op_code == 0xCB {
-                self.cpu.pc += 1;
-                op_code = memory_read(self.cpu.pc);
-                return self.execute_op_code_cb(op_code);
-            }
+            let op_code = memory_read(self.cpu.pc);
 
             let value = match OPCODE_LENGTHS[op_code as usize] {
                 1 => 0,
