@@ -9,12 +9,12 @@ pub fn format_binary(value: u8) -> String {
 
 pub static ROM: LazyLock<Mutex<Vec<u8>>> = LazyLock::new(|| {
     // initialize memory
-    Mutex::new(vec![0u8; ROM_BANK_SIZE * ROM_MAX_BANKS])
+    Mutex::new(vec![0u8; (ROM_BANK_SIZE * ROM_MAX_BANKS) + 1])
 });
 
 pub static EXTERNAL_RAM: LazyLock<Mutex<Vec<u8>>> = LazyLock::new(|| {
     // initialize memory
-    Mutex::new(vec![0u8; RAM_BANK_SIZE * RAM_MAX_BANKS])
+    Mutex::new(vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1])
 });
 
 pub static MEMORY: LazyLock<Mutex<Vec<u8>>> = LazyLock::new(|| {
