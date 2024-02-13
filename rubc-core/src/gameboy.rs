@@ -58,6 +58,7 @@ pub struct Gameboy {
     pub double_speed: bool,
     pub cgb_mode: bool,
     pub ime: bool,
+    memory: Vec<u8>,
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
 }
@@ -123,7 +124,9 @@ impl Gameboy {
                     let high = memory_read(self.cpu.pc) as u16;
                     (high << 8) | low
                 }
-                _ => panic!("Invalid op code length"),
+                _ => {
+                    panic!("Invalid opcode length: {:#x}", op_code)
+                }
             };
 
             cycles = self.execute_op_code(op_code, value)?;
@@ -184,7 +187,9 @@ impl fmt::Debug for Cpu {
 }
 
 pub struct Cartridge {
-    pub filename: String,
+    pub filename: Option<String>,
+    pub rom: Vec<u8>,
+    pub sram: Vec<u8>,
     pub rom_banks: usize,
     pub ram_banks: Option<usize>,
 }
@@ -254,10 +259,14 @@ impl Cartridge {
             }
         }
 
+        let empty_rom = vec![0u8; (ROM_BANK_SIZE * ROM_MAX_BANKS) + 1];
+        let ram = vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1];
         Ok(Cartridge {
-            filename: filename.to_string(),
+            filename: Some(filename.to_string()),
             rom_banks,
             ram_banks,
+            rom: ,
+            sram: vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1],
         })
     }
 }

@@ -4,7 +4,7 @@
 use crate::gui::Framework;
 
 use clap::Parser;
-use pixels::{Error, Pixels, SurfaceTexture};
+use pixels::Pixels;
 use rubc_core::logger;
 use std::time;
 use winit::dpi::LogicalSize;
@@ -19,9 +19,12 @@ struct Args {
     rom_file: String,
 }
 
-const WIDTH: u32 = 640;
-const HEIGHT: u32 = 320;
+const WIDTH: u32 = 160;
+const HEIGHT: u32 = 144;
 const SCALE: f32 = 2.0;
+const TITLE: &str = "RuBC";
+const FPS_US: u64 = 16_740;
+const CPU_HZ: u64 = 4_194_304;
 
 fn main() -> rubc_core::Result<()> {
     logger::setup_logger()?;
@@ -32,9 +35,11 @@ fn main() -> rubc_core::Result<()> {
     let mut input = WinitInputHelper::new();
 
     let window = {
-        let size = LogicalSize::new(WIDTH as f64, HEIGHT as f64);
+        let width = WIDTH as f64 * SCALE as f64;
+        let height = HEIGHT as f64 * SCALE as f64;
+        let size = LogicalSize::new(width, height);
         WindowBuilder::new()
-            .with_title("RuBC - Rust Boy Color Emulator")
+            .with_title(TITLE)
             .with_inner_size(size)
             .build(&event_loop)
             .unwrap()
@@ -53,13 +58,12 @@ fn main() -> rubc_core::Result<()> {
             &pixels,
         );
 
-        println!("Scale factor: {}", SCALE);
         (pixels, framework)
     };
 
     let mut emulator = Rubc::new(&args.rom_file);
+    let fps_target = time::Duration::from_micros(FPS_US);
 
-    let fps_target = time::Duration::from_micros(16740);
     event_loop.run(move |event, _, control_flow| {
         // Handle input events
         if input.update(&event) {
@@ -94,7 +98,11 @@ fn main() -> rubc_core::Result<()> {
             if elapsed < fps_target {
                 std::thread::sleep(fps_target - elapsed);
             }
-            window.set_title(&format!("FPS: {:.1}", 1.0 / now.elapsed().as_secs_f64()));
+            window.set_title(&format!(
+                "{} FPS:{:.1}",
+                TITLE,
+                1.0 / now.elapsed().as_secs_f64()
+            ));
         }
 
         match event {
@@ -142,7 +150,13 @@ impl Rubc {
             gameboy: builder.build(),
         }
     }
-    fn update(&mut self) {}
+    fn update(&mut self) {
+        let cycles = CPU_HZ as f64 * ((FPS_US as f64) / 1_000_000.0);
+        for _ in 0..cycles as u64 {
+            self.gameboy.tick().unwrap();
+        }
+        println!("processed {} cycles", cycles as u64);
+    }
     fn draw(&self, frame: &mut [u8]) {
         for (i, pixel) in frame.chunks_exact_mut(4).enumerate() {
             let color = if i % 2 == 0 { 0 } else { 255 };
