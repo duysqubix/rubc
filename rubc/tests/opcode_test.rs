@@ -1,12 +1,82 @@
-#![feature(test)]
+use rubc::utils::format_binary;
+use serde::{Deserialize, Serialize};
+use std::fmt;
+use std::fs;
+
+#[derive(Serialize, Deserialize)]
+pub struct CpuState {
+    // #[serde(deserialize_with = "from_hex")]
+    pub a: u8,
+
+    // #[serde(deserialize_with = "from_hex")]
+    pub b: u8,
+
+    // #[serde(deserialize_with = "from_hex")]
+    pub c: u8,
+
+    // #[serde(deserialize_with = "from_hex")]
+    pub d: u8,
+
+    // #[serde(deserialize_with = "from_hex")]
+    pub e: u8,
+
+    // #[serde(deserialize_with = "from_hex")]
+    pub f: u8,
+
+    // #[serde(deserialize_with = "from_hex")]
+    pub h: u8,
+
+    // #[serde(deserialize_with = "from_hex")]
+    pub l: u8,
+
+    // #[serde(deserialize_with = "from_hex_16")]
+    pub sp: u16,
+
+    // #[serde(deserialize_with = "from_hex_16")]
+    pub pc: u16,
+
+    pub ram: Vec<Vec<u16>>,
+}
+
+impl fmt::Debug for CpuState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "A: `{:#x}` F: `{}` B: `{:#x}` C: `{:#x}` D: `{:#x}` E: `{:#x}` H: `{:#x}` L: `{:#x}` SP: `{:0X}` PC: `{:0X}`",
+            self.a,
+            format_binary(self.f),
+            self.b,
+            self.c,
+            self.d,
+            self.e,
+            self.h,
+            self.l,
+            self.sp,
+            self.pc,
+        )
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Object {
+    pub name: String,
+    pub initial: CpuState,
+
+    #[serde(rename = "final")]
+    pub final_state: CpuState,
+    // cycles: Vec<Vec<String>>,
+}
+
+pub fn read_test_file(file: &std::path::Path) -> Vec<Object> {
+    let data = fs::read_to_string(file).unwrap();
+    let tests: Vec<Object> = serde_json::from_str(&data).unwrap();
+    tests
+}
 
 #[cfg(test)]
 mod tests {
-    use super::super::*;
-    use crate::gameboy;
-    use crate::globals::*;
-    use crate::utils;
-    use test::Bencher;
+    use super::*;
+    use rubc::gameboy;
+    use rubc::globals::*;
+    use rubc::utils;
 
     fn set_initial_state(cp: &mut gameboy::Cpu, state: &CpuState) {
         cp.a = state.a;
@@ -118,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_opcodes() -> anyhow::Result<()> {
-        let test_dir = "assets/sm83/v1";
+        let test_dir = "../assets/sm83/v1";
         let mut files = std::fs::read_dir(test_dir)?
             .map(|res| res.map(|e| e.path()))
             .collect::<Result<Vec<_>, std::io::Error>>()?;
@@ -217,14 +287,5 @@ mod tests {
             log::debug!("{}", s);
         });
         Ok(())
-    }
-
-    pub fn add_two(a: i32) -> i32 {
-        a + 2
-    }
-
-    #[bench]
-    fn bench_add_two(b: &mut Bencher) {
-        b.iter(|| add_two(2));
     }
 }

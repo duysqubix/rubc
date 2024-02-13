@@ -1916,7 +1916,7 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // LDH (u8), A
         0xE0u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
-            let addr = 0xFF00 | (value as u16);
+            let addr = 0xFF00 | value;
             memory_write(addr, mb.cpu.a);
             mb.cpu.pc = mb.cpu.pc.wrapping_add(2);
             CYCLE_RETURN_12
@@ -2035,7 +2035,7 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // LDH A, (u8)
         0xF0u8 => |mb: &mut Motherboard, value: u16| -> OpCycles {
-            let addr = 0xFF00 | (value as u16);
+            let addr = 0xFF00 | value;
             mb.cpu.a = memory_read(addr);
             mb.cpu.pc = mb.cpu.pc.wrapping_add(2);
             CYCLE_RETURN_12

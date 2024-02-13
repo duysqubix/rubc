@@ -1,0 +1,8 @@
+[package]
+name = "rubc-cli"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rubc = { path = "../rubc" }
+

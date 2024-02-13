@@ -1,9 +1,11 @@
+#![allow(clippy::new_without_default)]
+
 use anyhow::Error;
 
 use crate::{
     globals::*,
     opcodes, opcodes_cb,
-    utils::{format_binary, memory_read, rom_read, rom_write, ROM},
+    utils::{format_binary, memory_read, rom_read, ROM},
 };
 use std::default::Default;
 use std::fmt;
@@ -39,7 +41,7 @@ impl MotherboardBuilder {
         }
     }
 
-    pub fn with_cart<'a>(mut self, filename: &'a str) -> MotherboardBuilder {
+    pub fn with_cart(mut self, filename: &str) -> MotherboardBuilder {
         self.cart = Some(Cartridge::new(filename).unwrap());
         self
     }
