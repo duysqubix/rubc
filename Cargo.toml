@@ -5,10 +5,10 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+
 [dependencies]
 anyhow = "1.0.79"
 chrono = "0.4.33"
-criterion = "0.5.1"
 fern = { version = "0.6.2", features = ["chrono", "colored"] }
 itertools = "0.12.1"
 lazy_static = "1.4.0"
@@ -23,3 +23,6 @@ serde_json = "1.0.113"
 serde = { version = "1.0.196", features = ["rc", "serde_derive"] }
 serde_json = "1.0.113"
 
+
+# [[bench]]
+# name = "opcode_benchmarks"

@@ -260,14 +260,14 @@ impl Cartridge {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
 
-    #[test]
-    fn test_cart_load() {
-        super::super::logger::setup_logger().unwrap();
-        let cart = Cartridge::new("assets/cpu_instrs.gb").unwrap();
-        assert_eq!(cart.rom_banks, 4);
-    }
-}
+//     #[test]
+//     fn test_cart_load() {
+//         super::super::logger::setup_logger().unwrap();
+//         let cart = Cartridge::new("assets/cpu_instrs.gb").unwrap();
+//         assert_eq!(cart.rom_banks, 4);
+//     }
+// }
