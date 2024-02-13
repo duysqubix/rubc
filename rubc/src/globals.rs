@@ -1,6 +1,6 @@
-use crate::gameboy::Motherboard;
+use crate::gameboy::Gameboy;
 
-pub type OpCodeFunc = fn(mb: &mut Motherboard, value: u16) -> OpCycles;
+pub type OpCodeFunc = fn(mb: &mut Gameboy, value: u16) -> OpCycles;
 
 pub type OpCycles = u64;
 pub type OpCodeMap = phf::Map<u8, OpCodeFunc>;

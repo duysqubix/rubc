@@ -200,7 +200,7 @@ mod tests {
             }
 
             let mut s = format!("Testing OpCode: {:?}.......", file.file_name().unwrap());
-            let mut mb = gameboy::MotherboardBuilder::new().build();
+            let mut mb = gameboy::GameboyBuilder::new().build();
 
             let tests = read_test_file(file.as_path());
 

@@ -10,7 +10,7 @@ use crate::{
 use std::default::Default;
 use std::fmt;
 
-pub struct MotherboardBuilder {
+pub struct GameboyBuilder {
     cpu: Cpu,
     cart: Option<Cartridge>,
     cgb_mode: Option<bool>,
@@ -18,9 +18,9 @@ pub struct MotherboardBuilder {
     opcode_map_cb: OpCodeMap,
 }
 
-impl MotherboardBuilder {
-    pub fn new() -> MotherboardBuilder {
-        MotherboardBuilder {
+impl GameboyBuilder {
+    pub fn new() -> GameboyBuilder {
+        GameboyBuilder {
             cpu: Cpu::default(),
             cart: None,
             cgb_mode: None,
@@ -29,8 +29,8 @@ impl MotherboardBuilder {
         }
     }
 
-    pub fn build(self) -> Motherboard {
-        Motherboard {
+    pub fn build(self) -> Gameboy {
+        Gameboy {
             cpu: self.cpu,
             cart: self.cart,
             double_speed: false,
@@ -41,18 +41,18 @@ impl MotherboardBuilder {
         }
     }
 
-    pub fn with_cart(mut self, filename: &str) -> MotherboardBuilder {
+    pub fn with_cart(mut self, filename: &str) -> GameboyBuilder {
         self.cart = Some(Cartridge::new(filename).unwrap());
         self
     }
 
-    pub fn enable_cgb_mode(mut self) -> MotherboardBuilder {
+    pub fn enable_cgb_mode(mut self) -> GameboyBuilder {
         self.cgb_mode = Some(true);
         self
     }
 }
 
-pub struct Motherboard {
+pub struct Gameboy {
     pub cpu: Cpu,
     pub cart: Option<Cartridge>,
     pub double_speed: bool,
@@ -62,9 +62,9 @@ pub struct Motherboard {
     opcode_map_cb: OpCodeMap,
 }
 
-impl Motherboard {
-    pub fn new() -> Motherboard {
-        let mut mb = MotherboardBuilder::new()
+impl Gameboy {
+    pub fn new() -> Gameboy {
+        let mut mb = GameboyBuilder::new()
             .with_cart("assests/cpu_instrs.gb")
             .build();
         mb.cpu.reset();
