@@ -1,4 +1,4 @@
-use rubc::utils::format_binary;
+use rubc_core::utils::format_binary;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -74,9 +74,9 @@ pub fn read_test_file(file: &std::path::Path) -> Vec<Object> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rubc::gameboy;
-    use rubc::globals::*;
-    use rubc::utils;
+    use rubc_core::gameboy;
+    use rubc_core::globals::*;
+    use rubc_core::utils;
 
     fn set_initial_state(cp: &mut gameboy::Cpu, state: &CpuState) {
         cp.a = state.a;
