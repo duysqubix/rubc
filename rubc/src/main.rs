@@ -6,12 +6,12 @@ use crate::gui::Framework;
 use clap::Parser;
 use pixels::{Error, Pixels, SurfaceTexture};
 use rubc_core::logger;
+use std::time;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, VirtualKeyCode};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
-
 mod gui;
 
 #[derive(Parser, Debug)]
@@ -19,17 +19,20 @@ struct Args {
     rom_file: String,
 }
 
+const WIDTH: u32 = 640;
+const HEIGHT: u32 = 320;
+const SCALE: f32 = 2.0;
+
 fn main() -> rubc_core::Result<()> {
     logger::setup_logger()?;
 
     let args = Args::parse();
-    println!("Executing file: {}", args.rom_file);
 
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
 
     let window = {
-        let size = LogicalSize::new(640.0, 320.0);
+        let size = LogicalSize::new(WIDTH as f64, HEIGHT as f64);
         WindowBuilder::new()
             .with_title("RuBC - Rust Boy Color Emulator")
             .with_inner_size(size)
@@ -39,25 +42,29 @@ fn main() -> rubc_core::Result<()> {
 
     let (mut pixels, mut framework) = {
         let window_size = window.inner_size();
-        let scale_factor = window.scale_factor() as f32;
         let surface_texture =
             pixels::SurfaceTexture::new(window_size.width, window_size.height, &window);
-        let pixels = Pixels::new(640, 320, surface_texture)?;
+        let pixels = Pixels::new(WIDTH, HEIGHT, surface_texture)?;
         let framework = Framework::new(
             &event_loop,
             window_size.width,
             window_size.height,
-            scale_factor,
+            window.scale_factor() as f32,
             &pixels,
         );
+
+        println!("Scale factor: {}", SCALE);
         (pixels, framework)
     };
 
     let mut emulator = Rubc::new(&args.rom_file);
 
+    let fps_target = time::Duration::from_micros(16740);
     event_loop.run(move |event, _, control_flow| {
         // Handle input events
         if input.update(&event) {
+            let now = time::Instant::now();
+
             // Close events
             if input.key_pressed(VirtualKeyCode::Escape) || input.close_requested() {
                 *control_flow = ControlFlow::Exit;
@@ -82,6 +89,12 @@ fn main() -> rubc_core::Result<()> {
             // Update internal state and request a redraw
             emulator.update();
             window.request_redraw();
+
+            let elapsed = now.elapsed();
+            if elapsed < fps_target {
+                std::thread::sleep(fps_target - elapsed);
+            }
+            window.set_title(&format!("FPS: {:.1}", 1.0 / now.elapsed().as_secs_f64()));
         }
 
         match event {
