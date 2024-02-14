@@ -1,6 +1,6 @@
 use crate::{globals::*, Error};
 
-type CartReadFunc = fn(&mut Cartridge, u16) -> u8;
+type CartReadFunc = fn(&Cartridge, u16) -> u8;
 type CartWriteFunc = fn(&mut Cartridge, u16, u8);
 
 #[derive(Debug)]
@@ -124,8 +124,8 @@ impl Cartridge {
                 cart.cart_write_func = mbc0_write;
             }
             0x01 => {
-                cart.cart_read_func = mbc1_read;
-                cart.cart_write_func = mbc1_write;
+                cart.cart_read_func = mbc0_read;
+                cart.cart_write_func = mbc0_write;
             }
             _ => panic!("Unsupported cartridge type"),
         }
@@ -134,7 +134,7 @@ impl Cartridge {
     }
 }
 
-fn mbc0_read(cart: &mut Cartridge, address: u16) -> u8 {
+fn mbc0_read(cart: &Cartridge, address: u16) -> u8 {
     log::trace!("mbc0_read: {:04X}", address);
     match address {
         0x0000..=0x7FFF => cart.rom[address as usize],
@@ -146,77 +146,77 @@ fn mbc0_write(_cart: &mut Cartridge, address: u16, value: u8) {
     log::warn!("attempted mbc0_write: {:04X} = {:02X}", address, value);
 }
 
-fn mbc1_read(cart: &mut Cartridge, address: u16) -> u8 {
-    log::trace!("mbc1_read: {:04X}", address);
-    match address {
-        0x0000..=0x3FFF => {
-            if cart.memory_model == 1 {
-                cart.rom_bank_select = (cart.ram_bank_select << 5) & cart.rom_banks;
-            } else {
-                cart.rom_bank_select = 0;
-            }
+// fn mbc1_read(cart: &Cartridge, address: u16) -> u8 {
+//     log::trace!("mbc1_read: {:04X}", address);
+//     match address {
+//         0x0000..=0x3FFF => {
+//             if cart.memory_model == 1 {
+//                 cart.rom_bank_select = (cart.ram_bank_select << 5) & cart.rom_banks;
+//             } else {
+//                 cart.rom_bank_select = 0;
+//             }
 
-            let addr_position = (cart.rom_bank_select * ROM_BANK_SIZE) + (address as usize);
-            cart.rom[addr_position]
-        }
-        0x4000..=0x7FFF => {
-            let bank = (cart.ram_bank_select << 5) & cart.rom_banks | cart.rom_bank_select;
-            let addr_position = (bank * ROM_BANK_SIZE) + (address as usize);
-            cart.rom[addr_position]
-        }
-        0xA000..=0xBFFF => {
-            if cart.ram_banks.is_none() || !cart.ram_enabled {
-                return 0xFF;
-            }
+//             let addr_position = (cart.rom_bank_select * ROM_BANK_SIZE) + (address as usize);
+//             cart.rom[addr_position]
+//         }
+//         0x4000..=0x7FFF => {
+//             let bank = (cart.ram_bank_select << 5) & cart.rom_banks | cart.rom_bank_select;
+//             let addr_position = (bank * ROM_BANK_SIZE) + (address as usize);
+//             cart.rom[addr_position]
+//         }
+//         0xA000..=0xBFFF => {
+//             if cart.ram_banks.is_none() || !cart.ram_enabled {
+//                 return 0xFF;
+//             }
 
-            if cart.memory_model == 1 {
-                // cart.ram_bank_select = cart.ram_bank_select;
-            } else {
-                cart.ram_bank_select = 0;
-            }
+//             if cart.memory_model == 1 {
+//                 // cart.ram_bank_select = cart.ram_bank_select;
+//             } else {
+//                 cart.ram_bank_select = 0;
+//             }
 
-            let bank = cart.ram_bank_select & cart.ram_banks.unwrap();
-            let addr_position = (bank * RAM_BANK_SIZE) + (address as usize);
-            cart.sram[addr_position]
-        }
-        _ => panic!("Invalid address: {:04X}", address),
-    }
-}
+//             let bank = cart.ram_bank_select & cart.ram_banks.unwrap();
+//             let addr_position = (bank * RAM_BANK_SIZE) + (address as usize);
+//             cart.sram[addr_position]
+//         }
+//         _ => panic!("Invalid address: {:04X}", address),
+//     }
+// }
 
-fn mbc1_write(cart: &mut Cartridge, address: u16, value: u8) {
-    log::trace!("mbc1_write: {:04X} = {:02X}", address, value);
-    match address {
-        0x0000..=0x1FFF => cart.ram_enabled = (value & 0x0F) == 0x0A,
-        0x2000..=0x3FFF => {
-            let mut bank = value & 0x1F;
-            if bank == 0 {
-                bank = 1;
-            }
-            cart.rom_bank_select = bank as usize;
-        }
-        0x4000..=0x5FFF => {
-            cart.ram_bank_select = (value as usize) & 0x3;
-        }
-        0x6000..=0x7FFF => {
-            cart.memory_model = value & 0x1;
-        }
-        0xA000..=0xBFFF => {
-            if cart.ram_banks.is_none() || !cart.ram_enabled {
-                log::error!("Attempted write to SRAM, but sram not enabled or not present");
-                return;
-            }
+// fn mbc1_write(cart: &mut Cartridge, address: u16, value: u8) {
+//     log::trace!("mbc1_write: {:04X} = {:02X}", address, value);
+//     match address {
+//         0x0000..=0x1FFF => cart.ram_enabled = (value & 0x0F) == 0x0A,
+//         0x2000..=0x3FFF => {
+//             let mut bank = value & 0x1F;
+//             if bank == 0 {
+//                 bank = 1;
+//             }
+//             cart.rom_bank_select = bank as usize;
+//         }
+//         0x4000..=0x5FFF => {
+//             cart.ram_bank_select = (value as usize) & 0x3;
+//         }
+//         0x6000..=0x7FFF => {
+//             cart.memory_model = value & 0x1;
+//         }
+//         0xA000..=0xBFFF => {
+//             if cart.ram_banks.is_none() || !cart.ram_enabled {
+//                 log::error!("Attempted write to SRAM, but sram not enabled or not present");
+//                 return;
+//             }
 
-            if cart.memory_model == 1 {
-                // cart.ram_bank_select = cart.ram_bank_select;
-            } else {
-                cart.ram_bank_select = 0;
-            }
+//             if cart.memory_model == 1 {
+//                 // cart.ram_bank_select = cart.ram_bank_select;
+//             } else {
+//                 cart.ram_bank_select = 0;
+//             }
 
-            let bank = cart.ram_bank_select & cart.ram_banks.unwrap();
-            let addr_position = (bank * RAM_BANK_SIZE) + (address as usize);
-            cart.sram[addr_position] = value;
-        }
+//             let bank = cart.ram_bank_select & cart.ram_banks.unwrap();
+//             let addr_position = (bank * RAM_BANK_SIZE) + (address as usize);
+//             cart.sram[addr_position] = value;
+//         }
 
-        _ => panic!("Writing to invalid address: {:04X}", address),
-    }
-}
+//         _ => panic!("Writing to invalid address: {:04X}", address),
+//     }
+// }

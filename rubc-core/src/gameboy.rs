@@ -101,9 +101,10 @@ impl Gameboy {
         }
     }
 
-    pub fn memory_read(&mut self, address: u16) -> u8 {
+    pub fn memory_read(&self, address: u16) -> u8 {
         if address <= ROM1_ADDRESS_END {
-            self.cart.as_mut().unwrap().rom_read(address)
+            self.cart.as_ref().unwrap().rom_read(address);
+            9
         } else {
             self.memory[address as usize]
         }
