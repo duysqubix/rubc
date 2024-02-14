@@ -1,4 +1,4 @@
-use rubc_core::utils::format_binary;
+use rubc_core::format_binary;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;

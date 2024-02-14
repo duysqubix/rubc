@@ -1,4 +1,4 @@
-use crate::{bits::*, gameboy::Gameboy, globals::*, utils::*};
+use crate::{bits::*, gameboy::Gameboy, globals::*};
 
 pub fn init_opcodes() -> OpCodeMap {
     phf::phf_map! {
