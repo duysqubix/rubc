@@ -2,11 +2,7 @@
 
 use anyhow::Error;
 
-use crate::{
-    globals::*,
-    opcodes, opcodes_cb,
-    utils::{format_binary, memory_read, rom_read, ROM},
-};
+use crate::{globals::*, opcodes, opcodes_cb, utils::format_binary};
 use std::default::Default;
 use std::fmt;
 
@@ -38,6 +34,7 @@ impl GameboyBuilder {
             cgb_mode: self.cgb_mode.unwrap_or(false),
             opcode_map: self.opcode_map,
             opcode_map_cb: self.opcode_map_cb,
+            memory: vec![0u8; u16::MAX as usize + 1],
         }
     }
 
@@ -92,10 +89,26 @@ impl Gameboy {
         }
     }
 
+    pub fn memory_write(&mut self, address: u16, value: u8) {
+        if address <= ROM1_ADDRESS_END {
+            self.cart.as_mut().unwrap().rom_write(address, value);
+        } else {
+            self.memory[address as usize] = value;
+        }
+    }
+
+    pub fn memory_read(&self, address: u16) -> u8 {
+        if address <= ROM1_ADDRESS_END {
+            self.cart.as_ref().unwrap().rom_read(address)
+        } else {
+            self.memory[address as usize]
+        }
+    }
+
     fn instruction_look_ahead(&self, number: u16) -> String {
         let mut result = Vec::new();
         for i in 0..number {
-            result.push(memory_read(self.cpu.pc + i));
+            result.push(self.memory_read(self.cpu.pc + i));
         }
         format!("{:x?}", result)
     }
@@ -109,19 +122,19 @@ impl Gameboy {
                 self.instruction_look_ahead(3)
             );
 
-            let op_code = memory_read(self.cpu.pc);
+            let op_code = self.memory_read(self.cpu.pc);
 
             let value = match OPCODE_LENGTHS[op_code as usize] {
                 1 => 0,
                 2 => {
                     self.cpu.pc += 1;
-                    memory_read(self.cpu.pc) as u16
+                    self.memory_read(self.cpu.pc) as u16
                 }
                 3 => {
                     self.cpu.pc += 1;
-                    let low = memory_read(self.cpu.pc) as u16;
+                    let low = self.memory_read(self.cpu.pc) as u16;
                     self.cpu.pc += 1;
-                    let high = memory_read(self.cpu.pc) as u16;
+                    let high = self.memory_read(self.cpu.pc) as u16;
                     (high << 8) | low
                 }
                 _ => {
@@ -195,9 +208,33 @@ pub struct Cartridge {
 }
 
 impl Cartridge {
+    pub fn rom_write(&mut self, address: u16, value: u8) {
+        self.rom[address as usize] = value;
+    }
+
+    pub fn rom_read(&self, address: u16) -> u8 {
+        self.rom[address as usize]
+    }
+
+    pub fn empty() -> Cartridge {
+        Cartridge {
+            filename: None,
+            rom: vec![0u8; (ROM_BANK_SIZE * ROM_MAX_BANKS) + 1],
+            sram: vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1],
+            rom_banks: 0,
+            ram_banks: None,
+        }
+    }
+
     pub fn new(filename: &str) -> anyhow::Result<Cartridge> {
-        let rom = std::fs::read(filename).expect("Unable to read file");
         log::debug!("Reading ROM: {}", filename);
+
+        let rom = std::fs::read(filename).expect("Unable to read file");
+        let mut cached_rom = vec![0u8; (ROM_BANK_SIZE * ROM_MAX_BANKS) + 1];
+        cached_rom[..rom.len()].copy_from_slice(&rom);
+
+        let mut cart = Cartridge::empty();
+        cart.rom = cached_rom;
 
         // Cache ROM contents into the global ROM heap
         log::debug!("ROM length: {} bytes", rom.len());
@@ -205,9 +242,9 @@ impl Cartridge {
         log::debug!("Calculated ROM banks: {}", calc_rom_banks);
 
         log::debug!("Cache ROM into global ROM heap");
-        ROM.lock().unwrap()[..rom.len()].copy_from_slice(&rom);
+        // ROM.lock().unwrap()[..rom.len()].copy_from_slice(&rom);
 
-        let ram_banks = match rom_read(CART_SRAM_SIZE) {
+        let ram_banks = match cart.rom_read(CART_SRAM_SIZE) {
             0x00 => None,
             0x01 => panic!("Invalid RAM bank size"),
             0x02 => Some(1),
@@ -222,7 +259,7 @@ impl Cartridge {
             None => log::debug!("No RAM banks detected"),
         }
 
-        let rom_banks = match rom_read(CART_ROM_SIZE) {
+        let rom_banks = match cart.rom_read(CART_ROM_SIZE) {
             0x00 => 2,
             0x01 => 4,
             0x02 => 8,
@@ -239,8 +276,7 @@ impl Cartridge {
         assert_eq!(rom_banks, calc_rom_banks);
 
         // validate checksum
-        let checksum = ROM.lock().unwrap()
-            [CART_TITLE_START as usize..CART_MASK_ROM_VERSION_NUMBER as usize]
+        let checksum = cart.rom[CART_TITLE_START as usize..CART_MASK_ROM_VERSION_NUMBER as usize]
             .iter()
             .fold(0, |acc: u8, x: &u8| {
                 // asdf
@@ -249,7 +285,7 @@ impl Cartridge {
             })
             - 1;
 
-        let header_checksum = rom_read(CART_HEADER_CHECKSUM);
+        let header_checksum = cart.rom_read(CART_HEADER_CHECKSUM);
 
         match header_checksum == checksum {
             true => log::debug!("Checksums match"),
@@ -259,15 +295,19 @@ impl Cartridge {
             }
         }
 
-        let empty_rom = vec![0u8; (ROM_BANK_SIZE * ROM_MAX_BANKS) + 1];
-        let ram = vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1];
-        Ok(Cartridge {
-            filename: Some(filename.to_string()),
-            rom_banks,
-            ram_banks,
-            rom: ,
-            sram: vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1],
-        })
+        let sram = vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1];
+
+        cart.rom_banks = rom_banks;
+        cart.ram_banks = ram_banks;
+        cart.sram = sram;
+        Ok(cart)
+        // Ok(Cartridge {
+        //     filename: Some(filename.to_string()),
+        //     rom_banks,
+        //     ram_banks,
+        //     rom: cached_rom,
+        //     sram: sram,
+        // })
     }
 }
 

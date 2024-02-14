@@ -73,37 +73,37 @@ pub fn read_test_file(file: &std::path::Path) -> Vec<Object> {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     use rubc_core::gameboy;
     use rubc_core::globals::*;
-    use rubc_core::utils;
 
-    fn set_initial_state(cp: &mut gameboy::Cpu, state: &CpuState) {
-        cp.a = state.a;
-        cp.b = state.b;
-        cp.c = state.c;
-        cp.d = state.d;
-        cp.e = state.e;
-        cp.f = state.f;
-        cp.h = state.h;
-        cp.l = state.l;
-        cp.sp = state.sp;
-        cp.pc = state.pc;
+    fn set_initial_state(cp: &mut gameboy::Gameboy, state: &CpuState) {
+        cp.cpu.a = state.a;
+        cp.cpu.b = state.b;
+        cp.cpu.c = state.c;
+        cp.cpu.d = state.d;
+        cp.cpu.e = state.e;
+        cp.cpu.f = state.f;
+        cp.cpu.h = state.h;
+        cp.cpu.l = state.l;
+        cp.cpu.sp = state.sp;
+        cp.cpu.pc = state.pc;
 
         for byte in state.ram.iter() {
             let addr = byte[0];
             let value = byte[1];
-            log::trace!("Writing to addr: ${:04X} value: ${:02X}", addr, value);
-            utils::memory_write(addr, value as u8);
+            // log::trace!("Writing to addr: ${:04X} value: ${:02X}", addr, value);
+            cp.memory_write(addr, value as u8);
         }
     }
 
-    fn compare_state(cp: &gameboy::Cpu, state: &CpuState) -> anyhow::Result<()> {
-        log::trace!("Comparing RAM state");
+    fn compare_state(gb: &gameboy::Gameboy, state: &CpuState) -> anyhow::Result<()> {
+        // log::trace!("Comparing RAM state");
         for byte in state.ram.iter() {
             let addr = byte[0];
             let value = byte[1];
-            let read_value = utils::memory_read(addr);
+            let read_value = gb.memory_read(addr);
             if read_value != value as u8 {
                 return Err(anyhow::anyhow!(
                     "RAM: Expected: ${:02X} Got: ${:02X}",
@@ -113,6 +113,7 @@ mod tests {
             }
         }
 
+        let cp = &gb.cpu;
         if cp.a != state.a {
             return Err(anyhow::anyhow!(
                 "A: Expected: {:#x} Got: {:#x}",
@@ -201,14 +202,14 @@ mod tests {
 
             let mut s = format!("Testing OpCode: {:?}.......", file.file_name().unwrap());
             let mut mb = gameboy::GameboyBuilder::new().build();
-
+            mb.cart = Some(gameboy::Cartridge::empty());
             let tests = read_test_file(file.as_path());
 
             for test in &tests {
-                set_initial_state(&mut mb.cpu, &test.initial);
+                set_initial_state(&mut mb, &test.initial);
 
                 //sanity check
-                assert!(compare_state(&mb.cpu, &test.initial).is_ok());
+                assert!(compare_state(&mb, &test.initial).is_ok());
 
                 let mut op_idx = 0;
                 for ram_state in test.initial.ram.iter().enumerate() {
@@ -220,13 +221,13 @@ mod tests {
 
                 let opcode = test.initial.ram[op_idx][1];
                 let opcode_length = OPCODE_LENGTHS[opcode as usize];
-                log::trace!(
-                    "test name: {}, op_idx: {}, opcode: {:02X}, opcode_length: {}",
-                    &test.name,
-                    op_idx,
-                    opcode,
-                    opcode_length
-                );
+                // log::trace!(
+                //     "test name: {}, op_idx: {}, opcode: {:02X}, opcode_length: {}",
+                //     &test.name,
+                //     op_idx,
+                //     opcode,
+                //     opcode_length
+                // );
 
                 let res = match opcode_length {
                     3 => {
@@ -234,57 +235,54 @@ mod tests {
                         let byte1 = test.initial.ram[op_idx + 1][1];
                         let byte2 = test.initial.ram[op_idx + 2][1];
                         let value = (byte2 << 8) | byte1;
-                        log::trace!(
-                            "Executing op code: {:02X} with value: {:04X}",
-                            opcode,
-                            value
-                        );
+                        // log::trace!(
+                        //     "Executing op code: {:02X} with value: {:04X}",
+                        //     opcode,
+                        //     value
+                        // );
                         mb.execute_op_code(opcode as u8, value)
                     }
                     2 => {
                         let opcode = test.initial.ram[op_idx][1];
                         let byte1 = test.initial.ram[op_idx + 1][1];
                         let value = byte1;
-                        log::trace!(
-                            "Executing op code: {:02X} with value: {:04X}",
-                            opcode,
-                            value
-                        );
+                        // log::trace!(
+                        //     "Executing op code: {:02X} with value: {:04X}",
+                        //     opcode,
+                        //     value
+                        // );
 
                         mb.execute_op_code(opcode as u8, value)
                     }
                     1 => {
                         let opcode = test.initial.ram[op_idx][1];
-                        log::trace!("Executing op code: {:02X}", opcode,);
+                        // log::trace!("Executing op code: {:02X}", opcode,);
 
                         mb.execute_op_code(opcode as u8, 0)
                     }
                     _ => panic!("Invalid op code length"),
                 };
                 if let Err(e) = res {
-                    log::error!("Error: {:?}", e);
+                    println!("Error: {:?}", e);
                     panic!();
                 }
 
-                log::trace!("Comparing state");
-                assert!(compare_state(&mb.cpu, &test.final_state)
+                // log::trace!("Comparing state");
+                assert!(compare_state(&mb, &test.final_state)
                     .map_err(|e| {
-                        log::debug!(
+                        println!(
                             "Test: {:?}, Opcode info: {:X?}, Opcode length: {}, E:  {:?}",
-                            test.name,
-                            opcode,
-                            opcode_length,
-                            e
+                            test.name, opcode, opcode_length, e
                         );
-                        log::debug!("I: {:?}", test.initial);
-                        log::debug!("G: {:?}", mb.cpu);
-                        log::debug!("E: {:?}", test.final_state);
+                        println!("I: {:?}", test.initial);
+                        println!("G: {:?}", mb.cpu);
+                        println!("E: {:?}", test.final_state);
                     })
                     .is_ok());
             }
 
             s.push_str(format!("{} tests passed", tests.len()).as_str());
-            log::debug!("{}", s);
+            println!("{}", s);
         });
         Ok(())
     }

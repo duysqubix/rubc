@@ -20,7 +20,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (BC), A
         0x02u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = (gb.cpu.b as u16) << 8 | gb.cpu.c as u16;
-            memory_write(addr, gb.cpu.a);
+            gb.memory_write(addr, gb.cpu.a);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_4
         },
@@ -75,8 +75,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // LD (u16), SP
         0x08u8 => |gb: &mut Gameboy, value: u16| -> OpCycles {
-            memory_write(value, (gb.cpu.sp & 0x00FF) as u8);
-            memory_write(value + 1, (gb.cpu.sp >> 8) as u8);
+            gb.memory_write(value, (gb.cpu.sp & 0x00FF) as u8);
+            gb.memory_write(value + 1, (gb.cpu.sp >> 8) as u8);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(3);
 
             CYCLE_RETURN_20
@@ -108,7 +108,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD A, (BC)
         0x0Au8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = (gb.cpu.b as u16) << 8 | gb.cpu.c as u16;
-            gb.cpu.a = memory_read(addr);
+            gb.cpu.a = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -165,12 +165,12 @@ pub fn init_opcodes() -> OpCodeMap {
         0x10u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             // handle CGB stuff here.
             if gb.cgb_mode {
-                let value = memory_read(IO_KEY1);
+                let value = gb.memory_read(IO_KEY1);
                 if is_bit_set(value, 0){
                     gb.double_speed = !gb.double_speed;
-                    memory_write(IO_KEY1, value^0x81);
+                    gb.memory_write(IO_KEY1, value^0x81);
                 }
-                memory_write(IO_DIV, 0); //reset timer
+                gb.memory_write(IO_DIV, 0); //reset timer
             }
 
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
@@ -188,7 +188,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (DE), A
         0x12u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = (gb.cpu.d as u16) << 8 | gb.cpu.e as u16;
-            memory_write(addr, gb.cpu.a);
+            gb.memory_write(addr, gb.cpu.a);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -275,7 +275,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD A, (DE)
         0x1Au8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = (gb.cpu.d as u16) << 8 | gb.cpu.e as u16;
-            gb.cpu.a = memory_read(addr);
+            gb.cpu.a = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -352,7 +352,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL+), A
         0x22u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.a);
+            gb.memory_write(addr, gb.cpu.a);
             let result = addr.wrapping_add(1);
             gb.cpu.h = (result >> 8) as u8;
             gb.cpu.l = result as u8;
@@ -467,7 +467,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD A, (HL+)
         0x2Au8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.a = memory_read(addr);
+            gb.cpu.a = gb.memory_read(addr);
             let result = addr.wrapping_add(1);
             gb.cpu.h = (result >> 8) as u8;
             gb.cpu.l = result as u8;
@@ -534,7 +534,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL-), A
         0x32u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.a);
+            gb.memory_write(addr, gb.cpu.a);
             let result = addr.wrapping_sub(1);
             gb.cpu.h = (result >> 8) as u8;
             gb.cpu.l = result as u8;
@@ -552,7 +552,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // INC (HL)
         0x34u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let hl = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(hl);
+            let value = gb.memory_read(hl);
             let result = value.wrapping_add(1);
 
             clear_bits!(gb.cpu.f, BIT_FLAGN, BIT_FLAGZ, BIT_FLAGH);
@@ -565,7 +565,7 @@ pub fn init_opcodes() -> OpCodeMap {
                 set_bit(&mut gb.cpu.f, BIT_FLAGH);
             }
 
-            memory_write(hl, result);
+            gb.memory_write(hl, result);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
 
             CYCLE_RETURN_12
@@ -574,7 +574,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // DEC (HL)
         0x35u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let hl = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(hl);
+            let value = gb.memory_read(hl);
             let result = value.wrapping_sub(1);
 
             set_bit(&mut gb.cpu.f, BIT_FLAGN);
@@ -588,7 +588,7 @@ pub fn init_opcodes() -> OpCodeMap {
                 set_bit(&mut gb.cpu.f, BIT_FLAGH);
             }
 
-            memory_write(hl, result);
+            gb.memory_write(hl, result);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
 
             CYCLE_RETURN_12
@@ -597,7 +597,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL), u8
         0x36u8 => |gb: &mut Gameboy, value: u16| -> OpCycles {
             let hl = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(hl, value as u8);
+            gb.memory_write(hl, value as u8);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(2);
             CYCLE_RETURN_12
         },
@@ -646,7 +646,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD A, (HL-)
         0x3Au8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.a = memory_read(addr);
+            gb.cpu.a = gb.memory_read(addr);
             let result = addr.wrapping_sub(1);
             gb.cpu.h = (result >> 8) as u8;
             gb.cpu.l = result as u8;
@@ -737,7 +737,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD B, (HL)
         0x46u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.b = memory_read(addr);
+            gb.cpu.b = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -793,7 +793,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD C, (HL)
         0x4Eu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.c = memory_read(addr);
+            gb.cpu.c = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -849,7 +849,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD D, (HL)
         0x56u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.d = memory_read(addr);
+            gb.cpu.d = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -905,7 +905,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD E, (HL)
         0x5Eu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.e = memory_read(addr);
+            gb.cpu.e = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -961,7 +961,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD H, (HL)
         0x66u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.h = memory_read(addr);
+            gb.cpu.h = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1017,7 +1017,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD L, (HL)
         0x6Eu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.l = memory_read(addr);
+            gb.cpu.l = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1032,7 +1032,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL), B
         0x70u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.b);
+            gb.memory_write(addr, gb.cpu.b);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1040,7 +1040,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL), C
         0x71u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.c);
+            gb.memory_write(addr, gb.cpu.c);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1048,7 +1048,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL), D
         0x72u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.d);
+            gb.memory_write(addr, gb.cpu.d);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1056,7 +1056,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL), E
         0x73u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.e);
+            gb.memory_write(addr, gb.cpu.e);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1064,7 +1064,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL), H
         0x74u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.h);
+            gb.memory_write(addr, gb.cpu.h);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1072,7 +1072,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL), L
         0x75u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.l);
+            gb.memory_write(addr, gb.cpu.l);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1087,7 +1087,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (HL), A
         0x77u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            memory_write(addr, gb.cpu.a);
+            gb.memory_write(addr, gb.cpu.a);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1137,7 +1137,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD A, (HL)
         0x7Eu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            gb.cpu.a = memory_read(addr);
+            gb.cpu.a = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1187,7 +1187,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // ADD A, (HL)
         0x86u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(addr);
+            let value = gb.memory_read(addr);
             add_register_from_value!(gb, a, value);
             CYCLE_RETURN_8
         },
@@ -1237,7 +1237,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // ADC A, (HL)
         0x8Eu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(addr);
+            let value = gb.memory_read(addr);
             add_carry_register_from_value!(gb, a, value);
             CYCLE_RETURN_8
         },
@@ -1287,7 +1287,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // SUB (HL)
         0x96u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(addr);
+            let value = gb.memory_read(addr);
             sub_register_from_value!(gb, a, value);
             CYCLE_RETURN_8
         },
@@ -1337,7 +1337,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // SBC A, (HL)
         0x9Eu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(addr);
+            let value = gb.memory_read(addr);
             sub_carry_register_from_value!(gb, a, value);
             CYCLE_RETURN_8
         },
@@ -1387,7 +1387,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // AND (HL)
         0xA6u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(addr);
+            let value = gb.memory_read(addr);
             and_register_with_value!(gb, a, value);
             CYCLE_RETURN_8
         },
@@ -1437,7 +1437,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // XOR (HL)
         0xAEu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(addr);
+            let value = gb.memory_read(addr);
             xor_register_with_value!(gb, a, value);
             CYCLE_RETURN_8
         },
@@ -1487,7 +1487,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // OR (HL)
         0xB6u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(addr);
+            let value = gb.memory_read(addr);
             or_register_with_value!(gb, a, value);
             CYCLE_RETURN_8
         },
@@ -1537,7 +1537,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // CP (HL)
         0xBEu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = ((gb.cpu.h as u16) << 8) | gb.cpu.l as u16;
-            let value = memory_read(addr);
+            let value = gb.memory_read(addr);
             compare_register_with_value!(gb, a, value);
             CYCLE_RETURN_8
         },
@@ -1551,9 +1551,9 @@ pub fn init_opcodes() -> OpCodeMap {
         // RET NZ
         0xC0u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             if !is_bit_set(gb.cpu.f, BIT_FLAGZ) {
-                let lo = memory_read(gb.cpu.sp);
+                let lo = gb.memory_read(gb.cpu.sp);
                 gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-                let hi = memory_read(gb.cpu.sp);
+                let hi = gb.memory_read(gb.cpu.sp);
                 gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
                 gb.cpu.pc = ((hi as u16) << 8) | lo as u16;
                 CYCLE_RETURN_20
@@ -1565,9 +1565,9 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // POP BC
         0xC1u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            let lo = memory_read(gb.cpu.sp);
+            let lo = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-            let hi = memory_read(gb.cpu.sp);
+            let hi = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
             gb.cpu.b = hi;
             gb.cpu.c = lo;
@@ -1602,8 +1602,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
                 let pch = ((gb.cpu.pc >> 8) & 0xFF) as u8;
                 let pcl = (gb.cpu.pc & 0xFF) as u8;
-                memory_write(sp1, pch);
-                memory_write(sp2, pcl);
+                gb.memory_write(sp1, pch);
+                gb.memory_write(sp2, pcl);
                 gb.cpu.sp = sp2;
                 gb.cpu.pc = value;
                 CYCLE_RETURN_24
@@ -1616,8 +1616,8 @@ pub fn init_opcodes() -> OpCodeMap {
         0xC5u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, gb.cpu.b);
-            memory_write(sp2, gb.cpu.c);
+            gb.memory_write(sp1, gb.cpu.b);
+            gb.memory_write(sp2, gb.cpu.c);
             gb.cpu.sp = sp2;
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_16
@@ -1637,8 +1637,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
-            memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
+            gb.memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
+            gb.memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
             gb.cpu.sp = sp2;
             gb.cpu.pc = 0x00;
             CYCLE_RETURN_16
@@ -1647,9 +1647,9 @@ pub fn init_opcodes() -> OpCodeMap {
         // RET Z
         0xC8u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             if is_bit_set(gb.cpu.f, BIT_FLAGZ) {
-                let lo = memory_read(gb.cpu.sp);
+                let lo = gb.memory_read(gb.cpu.sp);
                 gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-                let hi = memory_read(gb.cpu.sp);
+                let hi = gb.memory_read(gb.cpu.sp);
                 gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
                 gb.cpu.pc = ((hi as u16) << 8) | lo as u16;
                 CYCLE_RETURN_20
@@ -1661,9 +1661,9 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // RET
         0xC9u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            let lo = memory_read(gb.cpu.sp);
+            let lo = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-            let hi = memory_read(gb.cpu.sp);
+            let hi = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
             gb.cpu.pc = ((hi as u16) << 8) | lo as u16;
             CYCLE_RETURN_16
@@ -1682,9 +1682,9 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // PREFIX CB
         0xCBu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            // let opcode = memory_read(gb.cpu.pc);
+            // let opcode = gb.memory_read(gb.cpu.pc);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
-            let cb_opcode = memory_read(gb.cpu.pc);
+            let cb_opcode = gb.memory_read(gb.cpu.pc);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             gb.execute_op_code_cb(cb_opcode).expect("Failed to execute CB opcode")
         },
@@ -1699,8 +1699,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
                 let pch = ((gb.cpu.pc >> 8) & 0xFF) as u8;
                 let pcl = (gb.cpu.pc & 0xFF) as u8;
-                memory_write(sp1, pch);
-                memory_write(sp2, pcl);
+                gb.memory_write(sp1, pch);
+                gb.memory_write(sp2, pcl);
                 gb.cpu.sp = sp2;
                 gb.cpu.pc = value;
                 CYCLE_RETURN_24
@@ -1718,8 +1718,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let pch = ((gb.cpu.pc >> 8) & 0xFF) as u8;
             let pcl = (gb.cpu.pc & 0xFF) as u8;
-            memory_write(sp1, pch);
-            memory_write(sp2, pcl);
+            gb.memory_write(sp1, pch);
+            gb.memory_write(sp2, pcl);
             gb.cpu.sp = sp2;
             gb.cpu.pc = value;
             CYCLE_RETURN_24
@@ -1739,8 +1739,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
-            memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
+            gb.memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
+            gb.memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
             gb.cpu.sp = sp2;
             gb.cpu.pc = 0x08;
             CYCLE_RETURN_16
@@ -1749,9 +1749,9 @@ pub fn init_opcodes() -> OpCodeMap {
         // RET NC
         0xD0u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             if !is_bit_set(gb.cpu.f, BIT_FLAGC) {
-                let lo = memory_read(gb.cpu.sp);
+                let lo = gb.memory_read(gb.cpu.sp);
                 gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-                let hi = memory_read(gb.cpu.sp);
+                let hi = gb.memory_read(gb.cpu.sp);
                 gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
                 gb.cpu.pc = ((hi as u16) << 8) | lo as u16;
                 CYCLE_RETURN_20
@@ -1763,9 +1763,9 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // POP DE
         0xD1u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            let lo = memory_read(gb.cpu.sp);
+            let lo = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-            let hi = memory_read(gb.cpu.sp);
+            let hi = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
             gb.cpu.d = hi;
             gb.cpu.e = lo;
@@ -1794,8 +1794,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
                 let pch = ((gb.cpu.pc >> 8) & 0xFF) as u8;
                 let pcl = (gb.cpu.pc & 0xFF) as u8;
-                memory_write(sp1, pch);
-                memory_write(sp2, pcl);
+                gb.memory_write(sp1, pch);
+                gb.memory_write(sp2, pcl);
                 gb.cpu.sp = sp2;
                 gb.cpu.pc = value;
                 CYCLE_RETURN_24
@@ -1808,8 +1808,8 @@ pub fn init_opcodes() -> OpCodeMap {
         0xD5u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, gb.cpu.d);
-            memory_write(sp2, gb.cpu.e);
+            gb.memory_write(sp1, gb.cpu.d);
+            gb.memory_write(sp2, gb.cpu.e);
             gb.cpu.sp = sp2;
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_16
@@ -1829,8 +1829,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
-            memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
+            gb.memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
+            gb.memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
             gb.cpu.sp = sp2;
             gb.cpu.pc = 0x10;
             CYCLE_RETURN_16
@@ -1839,9 +1839,9 @@ pub fn init_opcodes() -> OpCodeMap {
         // RET C
         0xD8u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             if is_bit_set(gb.cpu.f, BIT_FLAGC) {
-                let lo = memory_read(gb.cpu.sp);
+                let lo = gb.memory_read(gb.cpu.sp);
                 gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-                let hi = memory_read(gb.cpu.sp);
+                let hi = gb.memory_read(gb.cpu.sp);
                 gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
                 gb.cpu.pc = ((hi as u16) << 8) | lo as u16;
                 CYCLE_RETURN_20
@@ -1853,9 +1853,9 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // RETI
         0xD9u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            let lo = memory_read(gb.cpu.sp);
+            let lo = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-            let hi = memory_read(gb.cpu.sp);
+            let hi = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
             gb.cpu.pc = ((hi as u16) << 8) | lo as u16;
             gb.ime = true;
@@ -1883,8 +1883,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
                 let pch = ((gb.cpu.pc >> 8) & 0xFF) as u8;
                 let pcl = (gb.cpu.pc & 0xFF) as u8;
-                memory_write(sp1, pch);
-                memory_write(sp2, pcl);
+                gb.memory_write(sp1, pch);
+                gb.memory_write(sp2, pcl);
                 gb.cpu.sp = sp2;
                 gb.cpu.pc = value;
                 CYCLE_RETURN_24
@@ -1907,8 +1907,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
-            memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
+            gb.memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
+            gb.memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
             gb.cpu.sp = sp2;
             gb.cpu.pc = 0x18;
             CYCLE_RETURN_16
@@ -1917,16 +1917,16 @@ pub fn init_opcodes() -> OpCodeMap {
         // LDH (u8), A
         0xE0u8 => |gb: &mut Gameboy, value: u16| -> OpCycles {
             let addr = 0xFF00 | value;
-            memory_write(addr, gb.cpu.a);
+            gb.memory_write(addr, gb.cpu.a);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(2);
             CYCLE_RETURN_12
         },
 
         // POP HL
         0xE1u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            let lo = memory_read(gb.cpu.sp);
+            let lo = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-            let hi = memory_read(gb.cpu.sp);
+            let hi = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
             gb.cpu.h = hi;
             gb.cpu.l = lo;
@@ -1937,7 +1937,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (C), A
         0xE2u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = 0xFF00 | (gb.cpu.c as u16);
-            memory_write(addr, gb.cpu.a);
+            gb.memory_write(addr, gb.cpu.a);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -1946,8 +1946,8 @@ pub fn init_opcodes() -> OpCodeMap {
         0xE5u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, gb.cpu.h);
-            memory_write(sp2, gb.cpu.l);
+            gb.memory_write(sp1, gb.cpu.h);
+            gb.memory_write(sp2, gb.cpu.l);
             gb.cpu.sp = sp2;
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_16
@@ -1967,8 +1967,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
-            memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
+            gb.memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
+            gb.memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
             gb.cpu.sp = sp2;
             gb.cpu.pc = 0x20;
             CYCLE_RETURN_16
@@ -2007,7 +2007,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD (u16), A
         0xEAu8 => |gb: &mut Gameboy, value: u16| -> OpCycles {
             let addr = value;
-            memory_write(addr, gb.cpu.a);
+            gb.memory_write(addr, gb.cpu.a);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(3);
             CYCLE_RETURN_16
         },
@@ -2026,8 +2026,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
-            memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
+            gb.memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
+            gb.memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
             gb.cpu.sp = sp2;
             gb.cpu.pc = 0x28;
             CYCLE_RETURN_16
@@ -2036,16 +2036,16 @@ pub fn init_opcodes() -> OpCodeMap {
         // LDH A, (u8)
         0xF0u8 => |gb: &mut Gameboy, value: u16| -> OpCycles {
             let addr = 0xFF00 | value;
-            gb.cpu.a = memory_read(addr);
+            gb.cpu.a = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(2);
             CYCLE_RETURN_12
         },
 
         // POP AF
         0xF1u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            gb.cpu.f = memory_read(gb.cpu.sp) & 0xF0 & 0xF0;
+            gb.cpu.f = gb.memory_read(gb.cpu.sp) & 0xF0 & 0xF0;
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
-            gb.cpu.a = memory_read(gb.cpu.sp) ;
+            gb.cpu.a = gb.memory_read(gb.cpu.sp) ;
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_12
@@ -2054,7 +2054,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD A, (C)
         0xF2u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let addr = 0xFF00 | (gb.cpu.c as u16);
-            gb.cpu.a = memory_read(addr);
+            gb.cpu.a = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_8
         },
@@ -2070,8 +2070,8 @@ pub fn init_opcodes() -> OpCodeMap {
         0xF5u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, gb.cpu.a);
-            memory_write(sp2, gb.cpu.f);
+            gb.memory_write(sp1, gb.cpu.a);
+            gb.memory_write(sp2, gb.cpu.f);
             gb.cpu.sp = sp2;
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_16
@@ -2091,8 +2091,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
-            memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
+            gb.memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
+            gb.memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
             gb.cpu.sp = sp2;
             gb.cpu.pc = 0x30;
             CYCLE_RETURN_16
@@ -2132,7 +2132,7 @@ pub fn init_opcodes() -> OpCodeMap {
         // LD A, (u16)
         0xFAu8 => |gb: &mut Gameboy, value: u16| -> OpCycles {
             let addr = value;
-            gb.cpu.a = memory_read(addr);
+            gb.cpu.a = gb.memory_read(addr);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(3);
             CYCLE_RETURN_16
         },
@@ -2158,8 +2158,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
             let sp1 = gb.cpu.sp.wrapping_sub(1);
             let sp2 = gb.cpu.sp.wrapping_sub(2);
-            memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
-            memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
+            gb.memory_write(sp1, ((gb.cpu.pc >> 8) & 0xFF) as u8);
+            gb.memory_write(sp2, (gb.cpu.pc & 0xFF) as u8);
             gb.cpu.sp = sp2;
             gb.cpu.pc = 0x38;
             CYCLE_RETURN_16
