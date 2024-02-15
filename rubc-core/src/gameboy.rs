@@ -29,7 +29,7 @@ impl GameboyBuilder {
     pub fn build(self) -> Gameboy {
         Gameboy {
             cpu: self.cpu,
-            cart: self.cart,
+            cart: self.cart.unwrap_or(Cartridge::empty()),
             double_speed: false,
             ime: false,
             cgb_mode: self.cgb_mode.unwrap_or(false),
@@ -39,9 +39,9 @@ impl GameboyBuilder {
         }
     }
 
-    pub fn with_cart(mut self, filename: &str) -> GameboyBuilder {
-        self.cart = Some(Cartridge::new(filename).unwrap());
-        self
+    pub fn with_cart(mut self, filename: &str) -> anyhow::Result<GameboyBuilder> {
+        self.cart = Some(Cartridge::new(filename)?);
+        Ok(self)
     }
 
     pub fn enable_cgb_mode(mut self) -> GameboyBuilder {
@@ -52,7 +52,7 @@ impl GameboyBuilder {
 
 pub struct Gameboy {
     pub cpu: Cpu,
-    pub cart: Option<Cartridge>,
+    pub cart: Cartridge,
     pub double_speed: bool,
     pub cgb_mode: bool,
     pub ime: bool,
@@ -64,7 +64,7 @@ pub struct Gameboy {
 impl Gameboy {
     pub fn new() -> Gameboy {
         let mut mb = GameboyBuilder::new()
-            .with_cart("assests/cpu_instrs.gb")
+            // .with_cart("assests/cpu_instrs.gb")
             .build();
         mb.cpu.reset();
         mb
@@ -91,7 +91,7 @@ impl Gameboy {
 
     pub fn memory_write(&mut self, address: u16, value: u8) {
         if address <= ROM1_ADDRESS_END {
-            self.cart.as_mut().unwrap().rom_write(address, value);
+            // self.cart.rom_write(address, value);]
         } else {
             if value == 0x81 && address == IO_SC {
                 print!("{}", self.memory[IO_SB as usize] as char);
@@ -103,7 +103,7 @@ impl Gameboy {
 
     pub fn memory_read(&self, address: u16) -> u8 {
         if address <= ROM1_ADDRESS_END {
-            self.cart.as_ref().unwrap().rom_read(address);
+            // self.cart.rom_read(address);
             9
         } else {
             self.memory[address as usize]

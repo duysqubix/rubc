@@ -61,7 +61,7 @@ fn main() -> rubc_core::Result<()> {
         (pixels, framework)
     };
 
-    let mut emulator = Rubc::new(&args.rom_file);
+    let mut emulator = Rubc::new(&args.rom_file)?;
     let fps_target = time::Duration::from_micros(FPS_US);
 
     event_loop.run(move |event, _, control_flow| {
@@ -144,18 +144,18 @@ struct Rubc {
 }
 
 impl Rubc {
-    fn new(rom_file: &str) -> Self {
+    fn new(rom_file: &str) -> anyhow::Result<Self> {
         let builder = rubc_core::gameboy::GameboyBuilder::new().with_cart(rom_file);
-        Rubc {
-            gameboy: builder.build(),
-        }
+        Ok(Rubc {
+            gameboy: builder?.build(),
+        })
     }
     fn update(&mut self) {
         let cycles = CPU_HZ as f64 * ((FPS_US as f64) / 1_000_000.0);
         for _ in 0..cycles as u64 {
             self.gameboy.tick().unwrap();
         }
-        println!("processed {} cycles", cycles as u64);
+        // println!("processed {} cycles", cycles as u64);
     }
     fn draw(&self, frame: &mut [u8]) {
         for (i, pixel) in frame.chunks_exact_mut(4).enumerate() {

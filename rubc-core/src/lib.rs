@@ -7,6 +7,7 @@ pub mod cartridge;
 pub mod gameboy;
 pub mod globals;
 pub mod logger;
+mod mbc;
 pub mod opcodes;
 pub mod opcodes_cb;
 

@@ -5,9 +5,10 @@ pub type OpCodeFunc = fn(mb: &mut Gameboy, value: u16) -> OpCycles;
 pub type OpCycles = u64;
 pub type OpCodeMap = phf::Map<u8, OpCodeFunc>;
 
-pub const ROM_MAX_BANKS: usize = 128;
-pub const RAM_MAX_BANKS: usize = 16;
+pub const ROM_MAX_BANKS_MBC1: usize = 128;
 pub const ROM_BANK_SIZE: usize = 0x4000;
+
+pub const RAM_MAX_BANKS_MBC1: usize = 4;
 pub const RAM_BANK_SIZE: usize = 0x2000;
 
 pub const CYCLE_RETURN_4: OpCycles = 4;
