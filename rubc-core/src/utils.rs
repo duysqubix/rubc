@@ -147,3 +147,15 @@ pub fn calculate_checksum(mem: &[u8]) -> u8 {
         acc.wrapping_sub(y)
     }) - 1
 }
+
+#[inline]
+pub const fn interrupt_address(val: u8) -> u16 {
+    match val {
+        0x40 => INTR_VBLANK,
+        0x48 => INTR_LCD_STAT,
+        0x50 => INTR_TIMER,
+        0x58 => INTR_SERIAL,
+        0x60 => INTR_HIGH_TO_LOW,
+        _ => panic!("Invalid interrupt address"),
+    }
+}

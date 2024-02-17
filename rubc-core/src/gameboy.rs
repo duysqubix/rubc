@@ -2,7 +2,7 @@
 
 use anyhow::Error;
 
-use crate::{cartridge::Cartridge, format_binary, globals::*, opcodes, opcodes_cb};
+use crate::{bits, cartridge::Cartridge, format_binary, globals::*, opcodes, opcodes_cb, utils};
 
 use std::default::Default;
 use std::fmt;
@@ -37,6 +37,8 @@ impl GameboyBuilder {
             opcode_map: self.opcode_map,
             opcode_map_cb: self.opcode_map_cb,
             memory: vec![0u8; u16::MAX as usize + 1],
+            interrupt_enabling: false,
+            interrupts_on: false,
         }
     }
 
@@ -64,6 +66,8 @@ pub struct Gameboy {
     memory: Vec<u8>,
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
+    interrupt_enabling: bool,
+    interrupts_on: bool,
 }
 
 impl Gameboy {
@@ -128,36 +132,93 @@ impl Gameboy {
         format!("{:x?}", result)
     }
 
+    fn handle_interrupts(&mut self) -> OpCycles {
+        if self.interrupt_enabling {
+            self.interrupt_enabling = true;
+            self.interrupt_enabling = false;
+            return 0;
+        }
+        if !self.interrupts_on {
+            return 0;
+        }
+
+        let req = self.memory_read(IO_IF) | 0xE0;
+        let enabled = self.memory_read(IO_IE);
+
+        if req > 0 {
+            for i in 0..5 {
+                if bits::is_bit_set(req, i as u8) && bits::is_bit_set(enabled, i as u8) {
+                    self.service_interrupt(i as u8);
+                    return 20;
+                }
+            }
+        }
+
+        0
+    }
+
     pub fn tick(&mut self) -> anyhow::Result<OpCycles> {
         let mut cycles: OpCycles = 0;
         if !self.cpu.halted {
-            let op_code = self.memory_read(self.cpu.pc);
-            log::trace!(
+            // Tick CPU
+            cycles = {
+                let op_code = self.memory_read(self.cpu.pc);
+                log::trace!(
                 "LEN: {} OPCODE: {:#x}, A: {:#x} F: {:#x} B: {:#x} C: {:#x} D: {:#x} E: {:#x} H: {:#x} L: {:#x} SP: {:0X} PC: {:0X} {}",
                 OPCODE_LENGTHS[op_code as usize], op_code, self.cpu.a, self.cpu.f, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, self.cpu.sp, self.cpu.pc, self.instruction_look_ahead(4)
             );
-            let value = match OPCODE_LENGTHS[op_code as usize] {
-                1 => 0,
-                2 => {
-                    // self.cpu.pc += 1;
-                    self.memory_read(self.cpu.pc + 1) as u16
-                }
-                3 => {
-                    // self.cpu.pc += 1;
-                    let low = self.memory_read(self.cpu.pc + 1) as u16;
-                    // self.cpu.pc += 1;
-                    let high = self.memory_read(self.cpu.pc + 2) as u16;
-                    (high << 8) | low
-                }
-                _ => {
-                    panic!("Invalid opcode length: {:#x}", op_code)
-                }
+                let value = match OPCODE_LENGTHS[op_code as usize] {
+                    1 => 0,
+                    2 => {
+                        // self.cpu.pc += 1;
+                        self.memory_read(self.cpu.pc + 1) as u16
+                    }
+                    3 => {
+                        // self.cpu.pc += 1;
+                        let low = self.memory_read(self.cpu.pc + 1) as u16;
+                        // self.cpu.pc += 1;
+                        let high = self.memory_read(self.cpu.pc + 2) as u16;
+                        (high << 8) | low
+                    }
+                    _ => {
+                        panic!("Invalid opcode length: {:#x}", op_code)
+                    }
+                };
+
+                // std::thread::sleep(std::time::Duration::from_millis(100));
+                self.execute_op_code(op_code, value)?
             };
 
-            // std::thread::sleep(std::time::Duration::from_millis(100));
-            cycles = self.execute_op_code(op_code, value)?;
+            // Tick Cart (RTC)
+            // Tick Timer
+            // Tick PPU
+            // Tick Interrupts
+            cycles += self.handle_interrupts();
         }
+
         Ok(cycles)
+    }
+
+    fn service_interrupt(&mut self, interrupt: u8) {
+        if self.cpu.halted {
+            self.cpu.halted = false;
+            self.cpu.pc += 1;
+            return;
+        }
+
+        if self.interrupts_on {
+            log::debug!("Servicing interrupt: {:#x}", interrupt);
+            self.interrupts_on = false;
+            self.cpu.halted = false;
+            bits::clear_bit(&mut self.memory[IO_IF as usize], interrupt);
+            let sp = self.cpu.sp;
+            let pc = self.cpu.pc;
+
+            self.memory_write(sp - 1, ((pc & 0xff00) >> 8) as u8);
+            self.memory_write(sp - 2, (pc & 0xff) as u8);
+            self.cpu.sp -= 2;
+            self.cpu.pc = utils::interrupt_address(interrupt);
+        }
     }
 }
 

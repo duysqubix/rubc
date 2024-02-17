@@ -5,6 +5,12 @@ pub type OpCodeFunc = fn(mb: &mut Gameboy, value: u16) -> OpCycles;
 pub type OpCycles = u64;
 pub type OpCodeMap = phf::Map<u8, OpCodeFunc>;
 
+pub const INTR_VBLANK: u16 = 0x0040;
+pub const INTR_LCD_STAT: u16 = 0x0048;
+pub const INTR_TIMER: u16 = 0x0050;
+pub const INTR_SERIAL: u16 = 0x0058;
+pub const INTR_HIGH_TO_LOW: u16 = 0x0060;
+
 pub const ROM_MAX_BANKS_MBC0: usize = 2;
 pub const ROM_MAX_BANKS_MBC1: usize = 128;
 pub const ROM_BANK_SIZE: usize = 0x4000;
@@ -186,6 +192,7 @@ pub const IO_OPRI: u16 = 0xFF6C; // CGB Mode Only - Object Priority
 pub const IO_SVBK: u16 = 0xFF70; // CGB Mode Only - WRAM Bank
 pub const IO_PCM12: u16 = 0xFF76; // CGB Mode Only - PCM Channel 1&2 Control
 pub const IO_PCM34: u16 = 0xFF77; // CGB Mode Only - PCM Channel 3&4 Control
+pub const IO_IE: u16 = 0xFFFF; // Interrupt Enable
 
 pub const fn cbg_flag_map(value: u8) -> &'static str {
     match value {
