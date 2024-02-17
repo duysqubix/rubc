@@ -5,6 +5,15 @@ pub type OpCodeFunc = fn(mb: &mut Gameboy, value: u16) -> OpCycles;
 pub type OpCycles = u64;
 pub type OpCodeMap = phf::Map<u8, OpCodeFunc>;
 
+pub const DMG_CLOCK_SPEED: u64 = 4194304;
+pub const GB_TIMER_FREQ: u64 = 16384;
+
+pub const INTR_VBLANK_POS: u8 = 0;
+pub const INTR_LCD_STAT_POS: u8 = 1;
+pub const INTR_TIMER_POS: u8 = 2;
+pub const INTR_SERIAL_POS: u8 = 3;
+pub const INTR_HIGH_TO_LOW_POS: u8 = 4;
+
 pub const INTR_VBLANK: u16 = 0x0040;
 pub const INTR_LCD_STAT: u16 = 0x0048;
 pub const INTR_TIMER: u16 = 0x0050;

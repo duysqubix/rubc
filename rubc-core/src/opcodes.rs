@@ -163,18 +163,45 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // STOP 0
         0x10u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            // handle CGB stuff here.
-            if gb.cgb_mode {
-                let value = gb.memory_read(IO_KEY1);
-                if is_bit_set(value, 0){
+            if gb.cgb_mode && is_bit_set(gb.memory_read(IO_KEY1), 0){
+                if gb.memory_read(IO_IE) & gb.memory_read(IO_IF) != 0{
+                    if gb.interrupt_enabling{
+                        gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
+                        gb.memory_write(IO_DIV, 0); // reset timer
+                        return CYCLE_RETURN_4
+                    }else{
+                        log::error!("CPU glitched non-deterministically on STOP, oops!");
+                    }
+                }else{
+                    gb.cpu.pc = gb.cpu.pc.wrapping_add(2);
+                    gb.cpu.halted = true;
+                    gb.memory_write(IO_DIV, 0); // reset timer
                     gb.double_speed = !gb.double_speed;
-                    gb.memory_write(IO_KEY1, value^0x81);
+                    return CYCLE_RETURN_8
                 }
-                gb.memory_write(IO_DIV, 0); //reset timer
             }
 
-            gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
-            CYCLE_RETURN_4
+            if gb.memory_read(IO_IE) & gb.memory_read(IO_IF) != 0{
+                gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
+                gb.memory_write(IO_DIV, 0); // reset timer
+                CYCLE_RETURN_4
+            }else{
+                gb.cpu.pc = gb.cpu.pc.wrapping_add(2);
+                gb.memory_write(IO_DIV, 0); // reset timer
+                CYCLE_RETURN_8
+            }
+
+            // if gb.cgb_mode {
+            //     let value = gb.memory_read(IO_KEY1);
+            //     if is_bit_set(value, 0){
+            //         gb.double_speed = !gb.double_speed;
+            //         gb.memory_write(IO_KEY1, value^0x81);
+            //     }
+            //     gb.memory_write(IO_DIV, 0); //reset timer
+            // }
+
+            // gb.cpu.pc = gb.cpu.pc.wrapping_add(2);
+            // CYCLE_RETURN_4
         },
 
         // LD DE, u16
@@ -1858,7 +1885,7 @@ pub fn init_opcodes() -> OpCodeMap {
             let hi = gb.memory_read(gb.cpu.sp);
             gb.cpu.sp = gb.cpu.sp.wrapping_add(1);
             gb.cpu.pc = ((hi as u16) << 8) | lo as u16;
-            gb.ime = true;
+            gb.interrupt_enabling = true;
             CYCLE_RETURN_16
         },
 
@@ -2061,7 +2088,8 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // DI
         0xF3u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            gb.ime = false;
+            // gb.ime = false;
+            gb.interrupts_on = false;
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_4
         },
@@ -2139,7 +2167,7 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // EI
         0xFBu8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            gb.ime = true;
+            gb.interrupt_enabling = true;
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
             CYCLE_RETURN_4
         },

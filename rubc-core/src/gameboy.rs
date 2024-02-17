@@ -5,7 +5,7 @@ use anyhow::Error;
 use crate::{bits, cartridge::Cartridge, format_binary, globals::*, opcodes, opcodes_cb, utils};
 
 use std::default::Default;
-use std::fmt;
+use std::{fmt, io, io::Write};
 
 pub struct GameboyBuilder {
     cpu: Cpu,
@@ -32,13 +32,14 @@ impl GameboyBuilder {
             cpu: self.cpu,
             cart: self.cart.unwrap_or(Cartridge::empty()),
             double_speed: false,
-            ime: false,
             cgb_mode: self.cgb_mode.unwrap_or(false),
             opcode_map: self.opcode_map,
             opcode_map_cb: self.opcode_map_cb,
             memory: vec![0u8; u16::MAX as usize + 1],
             interrupt_enabling: false,
             interrupts_on: false,
+            timer_div_counter: 0,
+            timer_tima_counter: 0,
         }
     }
 
@@ -62,15 +63,63 @@ pub struct Gameboy {
     pub cart: Cartridge,
     pub double_speed: bool,
     pub cgb_mode: bool,
-    pub ime: bool,
+    pub interrupt_enabling: bool,
+    pub interrupts_on: bool,
+    pub timer_div_counter: OpCycles,
+    pub timer_tima_counter: OpCycles,
     memory: Vec<u8>,
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
-    interrupt_enabling: bool,
-    interrupts_on: bool,
 }
 
 impl Gameboy {
+    #[inline]
+    fn timer_enabled(&self) -> bool {
+        bits::is_bit_set(self.memory[IO_TAC as usize], 2)
+    }
+
+    fn get_clock_freq_count(&self) -> OpCycles {
+        match self.memory[IO_TAC as usize] & 0x3 {
+            0 => 1024,
+            1 => 16,
+            2 => 64,
+            3 => 256,
+            _ => 0,
+        }
+    }
+
+    fn update_timer_divider(&mut self, cycles: OpCycles) {
+        let ds = if self.double_speed { 2 } else { 1 };
+
+        let max_div_cycles = DMG_CLOCK_SPEED / GB_TIMER_FREQ * ds;
+        self.timer_div_counter += cycles;
+
+        if self.timer_div_counter >= max_div_cycles {
+            self.timer_div_counter -= max_div_cycles;
+            self.memory[IO_DIV as usize] = self.memory[IO_DIV as usize].wrapping_add(1);
+        }
+    }
+
+    fn handle_timer(&mut self, cycles: OpCycles) {
+        self.update_timer_divider(cycles);
+
+        if self.timer_enabled() {
+            self.timer_tima_counter += cycles;
+            let freq = self.get_clock_freq_count();
+
+            while self.timer_tima_counter >= freq {
+                self.timer_tima_counter -= freq;
+                if self.memory[IO_TIMA as usize] == 0xFF {
+                    self.memory[IO_TIMA as usize] = self.memory[IO_TMA as usize];
+                    self.service_interrupt(INTR_TIMER_POS);
+                    break;
+                } else {
+                    self.memory[IO_TIMA as usize] = self.memory[IO_TIMA as usize].wrapping_add(1);
+                }
+            }
+        }
+    }
+
     pub fn new() -> Gameboy {
         let mut mb = GameboyBuilder::new()
             .with_cart("assests/cpu_instrs.gb")
@@ -100,14 +149,34 @@ impl Gameboy {
     }
 
     pub fn memory_write(&mut self, address: u16, value: u8) {
-        if address <= ROM1_ADDRESS_END {
-            self.cart.write(address, value);
-        } else {
-            self.memory[address as usize] = value;
+        match address {
+            ROM1_ADDRESS_START..=ROM1_ADDRESS_END => {
+                self.cart.write(address, value);
+            }
+            IO_DIV => {
+                log::debug!("Resetting DIV");
+                self.timer_tima_counter = 0;
+                self.timer_div_counter = 0;
+                self.memory[address as usize] = 0;
+            }
+            IO_TAC => {
+                // log::debug!("Setting TAC, value: {:#x}", value);
+                let current_freq = self.memory[address as usize] & 0x3;
+                self.memory[address as usize] = value | 0xF8;
+                let new_freq = self.memory[address as usize] & 0x3;
+
+                if current_freq != new_freq {
+                    self.timer_tima_counter = 0;
+                }
+            }
+            _ => {
+                self.memory[address as usize] = value;
+            }
         }
 
         if value == 0x81 && address == IO_SC {
             print!("{}", self.memory[IO_SB as usize] as char);
+            io::stdout().flush().unwrap();
         }
     }
 
@@ -132,35 +201,18 @@ impl Gameboy {
         format!("{:x?}", result)
     }
 
-    fn handle_interrupts(&mut self) -> OpCycles {
-        if self.interrupt_enabling {
-            self.interrupt_enabling = true;
-            self.interrupt_enabling = false;
-            return 0;
-        }
-        if !self.interrupts_on {
-            return 0;
-        }
-
-        let req = self.memory_read(IO_IF) | 0xE0;
-        let enabled = self.memory_read(IO_IE);
-
-        if req > 0 {
-            for i in 0..5 {
-                if bits::is_bit_set(req, i as u8) && bits::is_bit_set(enabled, i as u8) {
-                    self.service_interrupt(i as u8);
-                    return 20;
-                }
-            }
-        }
-
-        0
-    }
-
     pub fn tick(&mut self) -> anyhow::Result<OpCycles> {
-        let mut cycles: OpCycles = 0;
+        let mut cycles: OpCycles = 4;
+
+        if self.cpu.stopped || self.cpu.halted {
+            log::warn!("CPU is stopped or halted");
+            return Ok(cycles);
+        }
+
         if !self.cpu.halted {
             // Tick CPU
+            let old_pc = self.cpu.pc;
+            let old_sp = self.cpu.sp;
             cycles = {
                 let op_code = self.memory_read(self.cpu.pc);
                 log::trace!(
@@ -169,14 +221,9 @@ impl Gameboy {
             );
                 let value = match OPCODE_LENGTHS[op_code as usize] {
                     1 => 0,
-                    2 => {
-                        // self.cpu.pc += 1;
-                        self.memory_read(self.cpu.pc + 1) as u16
-                    }
+                    2 => self.memory_read(self.cpu.pc + 1) as u16,
                     3 => {
-                        // self.cpu.pc += 1;
                         let low = self.memory_read(self.cpu.pc + 1) as u16;
-                        // self.cpu.pc += 1;
                         let high = self.memory_read(self.cpu.pc + 2) as u16;
                         (high << 8) | low
                     }
@@ -189,14 +236,51 @@ impl Gameboy {
                 self.execute_op_code(op_code, value)?
             };
 
+            if !self.cpu.is_stuck
+                && (old_pc == self.cpu.pc)
+                && (old_sp == self.cpu.sp)
+                && !self.cpu.is_stuck
+            {
+                log::warn!("Stuck CPU: {:#x}", old_pc);
+                self.cpu.is_stuck = true;
+            }
+
             // Tick Cart (RTC)
             // Tick Timer
+            self.handle_timer(cycles);
             // Tick PPU
             // Tick Interrupts
             cycles += self.handle_interrupts();
         }
 
         Ok(cycles)
+    }
+
+    fn handle_interrupts(&mut self) -> OpCycles {
+        if self.interrupt_enabling {
+            self.interrupts_on = true;
+            self.interrupt_enabling = false;
+            log::trace!("Interrupts enabled");
+            return 0;
+        }
+        if !self.interrupts_on {
+            return 0;
+        }
+
+        let req = self.memory_read(IO_IF) | 0xE0;
+        let enabled = self.memory_read(IO_IE);
+
+        if req > 0 {
+            for i in 0..5 {
+                if bits::is_bit_set(req, i as u8) && bits::is_bit_set(enabled, i as u8) {
+                    log::trace!("Servicing interrupt: {:#x}", i);
+                    self.service_interrupt(i as u8);
+                    return 20;
+                }
+            }
+        }
+
+        0
     }
 
     fn service_interrupt(&mut self, interrupt: u8) {
@@ -236,6 +320,7 @@ pub struct Cpu {
     pub pc: u16,
     pub halted: bool,
     pub is_stuck: bool,
+    pub stopped: bool,
 }
 
 impl Cpu {

@@ -20,6 +20,9 @@ struct Args {
 
     #[clap(long, help = "Disassemble the ROM as <ROM_FILE>.txt and exit.")]
     disassemble: bool,
+
+    #[clap(long, help = "Print CPU state between PC addresses.", num_args=1.., value_terminator=";", value_delimiter=',',value_name="PC1,PC2,...PC3;")]
+    log_cpu: Vec<u16>,
 }
 
 const WIDTH: u32 = 160;
@@ -34,7 +37,7 @@ fn main() -> rubc_core::Result<()> {
 
     let args = Args::parse();
     let mut emulator = Rubc::new(&args.rom_file)?;
-
+    println!("{:?}", args.log_cpu);
     if args.disassemble {
         log::info!("Dumping instruction set");
         let x = rubc_core::utils::disassemble(&emulator.gameboy.cart);
