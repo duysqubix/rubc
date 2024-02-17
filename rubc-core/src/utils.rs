@@ -21,11 +21,14 @@ pub fn disassemble(cart: &Cartridge) -> String {
     let mut notes: &str = "";
 
     for bank in 0..(rom.len() / ROM_BANK_SIZE) {
-        for mut i in 0..ROM_BANK_SIZE {
+        let mut i = 0;
+        while i < ROM_BANK_SIZE {
+            // for mut i in 0..ROM_BANK_SIZE {
             let mut cb_mode = false;
             let address = rel_addr(bank, i);
             let oplen = OPCODE_LENGTHS[rom[address] as usize] as usize;
             if rom[address] == 0x00 {
+                i += 1;
                 continue;
             }
 
@@ -48,13 +51,13 @@ pub fn disassemble(cart: &Cartridge) -> String {
 
                     table.add_row(row![
                         format!("{:02X}:{:02X}", bank, orig_addr),
-                        format!("{:02X}", opcode),
-                        format!("{:02X}", value),
+                        format!("${:02X}", opcode),
+                        format!("${:04X}", value),
                         opcode_name,
                         notes,
                         oplen
                     ]);
-                    continue;
+                    i += 1;
                 }
                 3 => {
                     let orig_addr = address;
@@ -68,28 +71,26 @@ pub fn disassemble(cart: &Cartridge) -> String {
                     let opcode_name = op_code_names(opcode, cb_mode);
                     table.add_row(row![
                         format!("{:02X}:{:02X}", bank, orig_addr),
-                        format!("{:02X}", opcode),
-                        format!("{:04X}", value),
+                        format!("${:02X}", opcode),
+                        format!("${:04X}", value),
                         opcode_name,
                         notes,
                         oplen
                     ]);
-                    continue;
+                    i += 1;
                 }
                 _ => {
                     let orig_addr = address;
                     let opcode_name = op_code_names(opcode, cb_mode);
                     table.add_row(row![
                         format!("{:02X}:{:02X}", bank, orig_addr),
-                        format!("{:02X}", opcode),
+                        format!("${:02X}", opcode),
                         "",
                         opcode_name,
                         notes,
                         oplen
                     ]);
                     i += 1;
-
-                    continue;
                 }
             }
         }

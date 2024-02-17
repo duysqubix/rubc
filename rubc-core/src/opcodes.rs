@@ -5,9 +5,7 @@ pub fn init_opcodes() -> OpCodeMap {
 
         // NOP
         0x00u8 => |gb: &mut Gameboy, _value: u16| -> OpCycles {
-            log::trace!("PC Before NOP: {:#06X}", gb.cpu.pc);
             gb.cpu.pc = gb.cpu.pc.wrapping_add(1);
-            log::trace!("PC After NOP: {:#06X}", gb.cpu.pc);
             CYCLE_RETURN_4
         },
 

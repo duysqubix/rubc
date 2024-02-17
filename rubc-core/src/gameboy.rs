@@ -99,10 +99,6 @@ impl Gameboy {
         if address <= ROM1_ADDRESS_END {
             self.cart.write(address, value);
         } else {
-            if value == 0x81 && address == IO_SC {
-                print!("{}", self.memory[IO_SB as usize] as char);
-            }
-
             self.memory[address as usize] = value;
         }
 
@@ -136,18 +132,21 @@ impl Gameboy {
         let mut cycles: OpCycles = 0;
         if !self.cpu.halted {
             let op_code = self.memory_read(self.cpu.pc);
-
+            log::trace!(
+                "LEN: {} OPCODE: {:#x}, A: {:#x} F: {:#x} B: {:#x} C: {:#x} D: {:#x} E: {:#x} H: {:#x} L: {:#x} SP: {:0X} PC: {:0X} {}",
+                OPCODE_LENGTHS[op_code as usize], op_code, self.cpu.a, self.cpu.f, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, self.cpu.sp, self.cpu.pc, self.instruction_look_ahead(4)
+            );
             let value = match OPCODE_LENGTHS[op_code as usize] {
                 1 => 0,
                 2 => {
-                    self.cpu.pc += 1;
-                    self.memory_read(self.cpu.pc) as u16
+                    // self.cpu.pc += 1;
+                    self.memory_read(self.cpu.pc + 1) as u16
                 }
                 3 => {
-                    self.cpu.pc += 1;
-                    let low = self.memory_read(self.cpu.pc) as u16;
-                    self.cpu.pc += 1;
-                    let high = self.memory_read(self.cpu.pc) as u16;
+                    // self.cpu.pc += 1;
+                    let low = self.memory_read(self.cpu.pc + 1) as u16;
+                    // self.cpu.pc += 1;
+                    let high = self.memory_read(self.cpu.pc + 2) as u16;
                     (high << 8) | low
                 }
                 _ => {
@@ -155,11 +154,7 @@ impl Gameboy {
                 }
             };
 
-            log::trace!(
-                "LEN: {} OPCODE: {:#x}, A: {:#x} F: {:#x} B: {:#x} C: {:#x} D: {:#x} E: {:#x} H: {:#x} L: {:#x} SP: {:0X} PC: {:0X} {}",
-                OPCODE_LENGTHS[op_code as usize], op_code, self.cpu.a, self.cpu.f, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, self.cpu.sp, self.cpu.pc, self.instruction_look_ahead(4)
-            );
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            // std::thread::sleep(std::time::Duration::from_millis(100));
             cycles = self.execute_op_code(op_code, value)?;
         }
         Ok(cycles)
