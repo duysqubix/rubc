@@ -1,17 +1,28 @@
-use crate::mbc::*;
-use crate::{globals::*, Error};
-use std::fmt::Debug;
-
-pub enum CartType {
+use crate::{globals::*, mbc::*, utils, Error};
+pub enum Cartridge {
     Empty,
+    DummyMBC(DummyMBC), // used for testing only
     MBC0(MBC0),
+    MBC1(MBC1),
 }
 
-impl CartType {
-    pub fn from(value: u8) -> Self {
-        match value {
-            0x00 => CartType::MBC0(MBC0::default()),
-            _ => CartType::Empty,
+impl Cartridge {
+    pub fn rom(&self) -> &[u8] {
+        match self {
+            Self::MBC0(mbc) => &mbc.rom,
+            Self::MBC1(mbc) => &mbc.rom,
+            _ => panic!("Invalid cart type"),
+        }
+    }
+
+    pub fn load_rom(&mut self, rom: &Vec<u8>) {
+        log::trace!("Loading ROM into cartridge");
+        log::trace!("ROM length: {} bytes", rom.len());
+
+        match self {
+            Self::MBC0(mbc) => mbc.rom[..rom.len()].copy_from_slice(&rom),
+            Self::MBC1(mbc) => mbc.rom[..rom.len()].copy_from_slice(&rom),
+            _ => log::error!("Invalid cart type"),
         }
     }
 
@@ -22,20 +33,22 @@ impl CartType {
             0x0000..=0x7FFF => {
                 // ROM bank select
                 match self {
-                    CartType::MBC0(mbc0) => mbc0.read(address as usize),
+                    Self::DummyMBC(mbc) => mbc.read(address as usize),
+                    Self::MBC0(mbc) => mbc.read(address as usize),
+                    Self::MBC1(mbc) => mbc.read(address as usize),
                     _ => {
-                        log::error!("Invalid cart type");
-                        0
+                        panic!("Cart type not supported for reading ROM bank")
                     }
                 }
             }
             0xA000..=0xBFFF => {
                 // SRAM bank select
                 match self {
-                    CartType::MBC0(mbc0) => mbc0.read_sram(address as usize - 0xA000),
+                    Self::DummyMBC(mbc) => mbc.read_sram(address as usize - 0xA000),
+                    Self::MBC0(mbc) => mbc.read_sram(address as usize - 0xA000),
+                    Self::MBC1(mbc) => mbc.read_sram(address as usize - 0xA000),
                     _ => {
-                        log::error!("Invalid cart type");
-                        0
+                        panic!("Cart type not supported for reading SRAM bank")
                     }
                 }
             }
@@ -44,132 +57,121 @@ impl CartType {
     }
 
     #[inline]
-    fn write(&mut self, address: u16, value: u8) {
+    pub fn write(&mut self, address: u16, value: u8) {
         // check if writing to ROM vs SRAM
         match address {
             0x0000..=0x7FFF => {
                 // ROM bank select
                 match self {
-                    CartType::MBC0(mbc0) => mbc0.write(address as usize, value),
-                    _ => log::error!("Invalid cart type"),
+                    Self::DummyMBC(mbc) => mbc.write(address as usize, value),
+                    Self::MBC0(mbc) => mbc.write(address as usize, value),
+                    Self::MBC1(mbc) => mbc.write(address as usize, value),
+                    _ => panic!("Cart type not supported for writing ROM bank"),
                 }
             }
             0xA000..=0xBFFF => {
                 // SRAM bank select
                 match self {
-                    CartType::MBC0(mbc0) => mbc0.write_sram(address as usize - 0xA000, value),
-                    _ => log::error!("Invalid cart type"),
+                    Self::DummyMBC(mbc) => mbc.write_sram(address as usize - 0xA000, value),
+                    Self::MBC0(mbc) => mbc.write_sram(address as usize - 0xA000, value),
+                    Self::MBC1(mbc) => mbc.write_sram(address as usize - 0xA000, value),
+                    _ => panic!("Cart type not supported for writing SRAM bank"),
                 }
             }
             _ => log::error!("Invalid cart type"),
         }
     }
-}
-
-pub struct Cartridge {
-    pub filename: Option<String>,
-    pub cart: CartType,
-}
-
-impl Cartridge {
     pub fn empty() -> Self {
-        Cartridge {
-            filename: None,
-            cart: CartType::Empty,
-        }
+        Self::Empty
     }
 
-    pub fn new(filename: &str) -> anyhow::Result<Self> {
+    pub fn new(filename: &str) -> anyhow::Result<Cartridge> {
         log::debug!("Reading ROM: {}", filename);
 
         let rom = std::fs::read(filename).expect("Unable to read file");
-        // let mut cached_rom = Vec::new();
-        // cached_rom[..rom.len()].copy_from_slice(&rom);
 
-        //     // let mut cart = Cartridge::empty();
-        //     cart.rom = cached_rom;
+        // Cache ROM contents into the global ROM heap
+        log::debug!("ROM length: {} bytes", rom.len());
+        let calc_rom_banks = rom.len() / ROM_BANK_SIZE;
+        log::debug!("Calculated ROM banks: {}", calc_rom_banks);
 
-        //     // Cache ROM contents into the global ROM heap
-        //     log::debug!("ROM length: {} bytes", rom.len());
-        //     let calc_rom_banks = rom.len() / ROM_BANK_SIZE;
-        //     log::debug!("Calculated ROM banks: {}", calc_rom_banks);
+        log::debug!("Cache ROM into global ROM heap");
+        // ROM.lock().unwrap()[..rom.len()].copy_from_slice(&rom);
 
-        //     log::debug!("Cache ROM into global ROM heap");
-        //     // ROM.lock().unwrap()[..rom.len()].copy_from_slice(&rom);
+        let ram_banks = match rom[CART_SRAM_SIZE as usize] {
+            0x00 => None,
+            0x01 => panic!("Invalid RAM bank size"),
+            0x02 => Some(1),
+            0x03 => Some(4),
+            0x04 => Some(16),
+            0x05 => Some(8),
+            _ => panic!("Invalid RAM bank size"),
+        };
 
-        //     let ram_banks = match cart.rom_read(CART_SRAM_SIZE) {
-        //         0x00 => None,
-        //         0x01 => panic!("Invalid RAM bank size"),
-        //         0x02 => Some(1),
-        //         0x03 => Some(4),
-        //         0x04 => Some(16),
-        //         0x05 => Some(8),
-        //         _ => panic!("Invalid RAM bank size"),
-        //     };
+        match ram_banks {
+            Some(ram_banks) => log::debug!("Detected {} RAM banks", ram_banks),
+            None => log::debug!("No RAM banks detected"),
+        }
 
-        //     match ram_banks {
-        //         Some(ram_banks) => log::debug!("Detected {} RAM banks", ram_banks),
-        //         None => log::debug!("No RAM banks detected"),
-        //     }
+        let rom_banks = match rom[CART_ROM_SIZE as usize] {
+            0x00 => 2,
+            0x01 => 4,
+            0x02 => 8,
+            0x03 => 16,
+            0x04 => 32,
+            0x05 => 64,
+            0x06 => 128,
+            0x07 => 256,
+            0x08 => 512,
+            _ => panic!("Invalid ROM bank size"),
+        };
+        log::debug!("Detected {} ROM banks", rom_banks);
 
-        //     let rom_banks = match cart.rom_read(CART_ROM_SIZE) {
-        //         0x00 => 2,
-        //         0x01 => 4,
-        //         0x02 => 8,
-        //         0x03 => 16,
-        //         0x04 => 32,
-        //         0x05 => 64,
-        //         0x06 => 128,
-        //         0x07 => 256,
-        //         0x08 => 512,
-        //         _ => panic!("Invalid ROM bank size"),
-        //     };
-        //     log::debug!("Detected {} ROM banks", rom_banks);
+        assert_eq!(rom_banks, calc_rom_banks);
 
-        //     assert_eq!(rom_banks, calc_rom_banks);
+        // validate checksum
+        // let checksum = rom[CART_TITLE_START as usize..CART_MASK_ROM_VERSION_NUMBER as usize]
+        //     .iter()
+        //     .fold(0, |acc: u8, x: &u8| {
+        //         // asdf
+        //         let y = x + 1;
+        //         acc.wrapping_sub(y)
+        //     })
+        //     - 1;
+        let checksum = utils::calculate_checksum(
+            &rom[CART_TITLE_START as usize..CART_MASK_ROM_VERSION_NUMBER as usize],
+        );
 
-        //     // validate checksum
-        //     let checksum = cart.rom[CART_TITLE_START as usize..CART_MASK_ROM_VERSION_NUMBER as usize]
-        //         .iter()
-        //         .fold(0, |acc: u8, x: &u8| {
-        //             // asdf
-        //             let y = x + 1;
-        //             acc.wrapping_sub(y)
-        //         })
-        //         - 1;
+        let header_checksum = rom[CART_HEADER_CHECKSUM as usize];
 
-        //     let header_checksum = cart.rom_read(CART_HEADER_CHECKSUM);
+        match header_checksum == checksum {
+            true => log::debug!("Checksums match"),
+            false => {
+                log::error!("Checksums do not match");
+                return Err(Error::msg("Checksums do not match"));
+            }
+        }
 
-        //     match header_checksum == checksum {
-        //         true => log::debug!("Checksums match"),
-        //         false => {
-        //             log::error!("Checksums do not match");
-        //             return Err(Error::msg("Checksums do not match"));
-        //         }
-        //     }
+        // let sram = vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1];
+        let mut cart = Cartridge::Empty;
 
-        //     let sram = vec![0u8; (RAM_BANK_SIZE * RAM_MAX_BANKS) + 1];
+        let cart_type_id = rom[CART_TYPE as usize];
+        log::debug!("Cart type: {:#x}", cart_type_id);
+        match cart_type_id {
+            0x00 => {
+                cart = Cartridge::MBC0(MBC0::new());
+            }
+            0x01 => cart = Cartridge::MBC1(MBC1::new(rom_banks, ram_banks.unwrap_or(0))),
 
-        //     cart.rom_banks = rom_banks;
-        //     cart.ram_banks = ram_banks;
-        //     cart.sram = sram;
+            _ => {
+                log::error!("Unsupported cartridge type");
+                return Err(Error::msg("Unsupported cartridge type"));
+            }
+        }
 
-        //     match cart.rom_read(CART_TYPE) {
-        //         0x00 => {
-        //             cart.cart_read_func = mbc0_read;
-        //             cart.cart_write_func = mbc0_write;
-        //         }
-        //         0x01 => {
-        //             cart.cart_read_func = mbc0_read;
-        //             cart.cart_write_func = mbc0_write;
-        //         }
-        //         _ => panic!("Unsupported cartridge type"),
-        //     }
-        //     log::debug!("Cart: {:?}", cart);
-        //     Ok(cart)
-        Ok(Cartridge {
-            filename: Some(filename.to_string()),
-            cart: CartType::Empty,
-        })
+        let metadata = utils::get_metadata(&cart);
+        log::debug!("Cartridge metadata:\n{}", metadata);
+        cart.load_rom(&rom);
+        Ok(cart)
     }
 }

@@ -17,6 +17,9 @@ mod gui;
 #[derive(Parser, Debug)]
 struct Args {
     rom_file: String,
+
+    #[clap(long, help = "Disassemble the ROM as <ROM_FILE>.txt and exit.")]
+    disassemble: bool,
 }
 
 const WIDTH: u32 = 160;
@@ -30,6 +33,17 @@ fn main() -> rubc_core::Result<()> {
     logger::setup_logger()?;
 
     let args = Args::parse();
+    let mut emulator = Rubc::new(&args.rom_file)?;
+
+    if args.disassemble {
+        log::info!("Dumping instruction set");
+        let x = rubc_core::utils::disassemble(&emulator.gameboy.cart);
+        // print to file
+        std::fs::write(format!("{}.txt", args.rom_file), x)?;
+        log::debug!("Dumped instruction set to {}.txt", args.rom_file);
+        println!("Dumped instruction set to {}.txt", args.rom_file);
+        return Ok(());
+    }
 
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
@@ -61,7 +75,7 @@ fn main() -> rubc_core::Result<()> {
         (pixels, framework)
     };
 
-    let mut emulator = Rubc::new(&args.rom_file)?;
+    // panic!();
     let fps_target = time::Duration::from_micros(FPS_US);
 
     event_loop.run(move |event, _, control_flow| {
@@ -155,12 +169,12 @@ impl Rubc {
         for _ in 0..cycles as u64 {
             self.gameboy.tick().unwrap();
         }
-        // println!("processed {} cycles", cycles as u64);
+        log::trace!("processed {} cycles", cycles as u64);
     }
     fn draw(&self, frame: &mut [u8]) {
         for (i, pixel) in frame.chunks_exact_mut(4).enumerate() {
-            let color = if i % 2 == 0 { 0 } else { 255 };
-            pixel.copy_from_slice(&[color, color, color, 255]);
+            let color = if i % 2 == 0 { 0 } else { i & 0xFF };
+            pixel.copy_from_slice(&[color as u8, color as u8, color as u8, 255]);
         }
     }
 }

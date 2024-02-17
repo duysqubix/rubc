@@ -26,7 +26,8 @@ impl GameboyBuilder {
         }
     }
 
-    pub fn build(self) -> Gameboy {
+    pub fn build(mut self) -> Gameboy {
+        self.cpu.reset();
         Gameboy {
             cpu: self.cpu,
             cart: self.cart.unwrap_or(Cartridge::empty()),
@@ -42,6 +43,10 @@ impl GameboyBuilder {
     pub fn with_cart(mut self, filename: &str) -> anyhow::Result<GameboyBuilder> {
         self.cart = Some(Cartridge::new(filename)?);
         Ok(self)
+    }
+
+    pub fn set_cart(&mut self, cart: Cartridge) {
+        self.cart = Some(cart);
     }
 
     pub fn enable_cgb_mode(mut self) -> GameboyBuilder {
@@ -64,7 +69,8 @@ pub struct Gameboy {
 impl Gameboy {
     pub fn new() -> Gameboy {
         let mut mb = GameboyBuilder::new()
-            // .with_cart("assests/cpu_instrs.gb")
+            .with_cart("assests/cpu_instrs.gb")
+            .expect("Failed to load cart")
             .build();
         mb.cpu.reset();
         mb
@@ -91,7 +97,7 @@ impl Gameboy {
 
     pub fn memory_write(&mut self, address: u16, value: u8) {
         if address <= ROM1_ADDRESS_END {
-            // self.cart.rom_write(address, value);]
+            self.cart.write(address, value);
         } else {
             if value == 0x81 && address == IO_SC {
                 print!("{}", self.memory[IO_SB as usize] as char);
@@ -99,18 +105,26 @@ impl Gameboy {
 
             self.memory[address as usize] = value;
         }
+
+        if value == 0x81 && address == IO_SC {
+            print!("{}", self.memory[IO_SB as usize] as char);
+        }
     }
 
     pub fn memory_read(&self, address: u16) -> u8 {
+        if address == IO_LY {
+            return 0x90;
+        }
+
         if address <= ROM1_ADDRESS_END {
             // self.cart.rom_read(address);
-            9
+            self.cart.read(address)
         } else {
             self.memory[address as usize]
         }
     }
 
-    fn instruction_look_ahead(&mut self, number: u16) -> String {
+    fn instruction_look_ahead(&self, number: u16) -> String {
         let mut result = Vec::new();
         for i in 0..number {
             result.push(self.memory_read(self.cpu.pc + i));
@@ -121,12 +135,6 @@ impl Gameboy {
     pub fn tick(&mut self) -> anyhow::Result<OpCycles> {
         let mut cycles: OpCycles = 0;
         if !self.cpu.halted {
-            // log::debug!(
-            //     "PC: {:04X} - {}",
-            //     self.cpu.pc,
-            //     // self.instruction_look_ahead(3)
-            // );
-
             let op_code = self.memory_read(self.cpu.pc);
 
             let value = match OPCODE_LENGTHS[op_code as usize] {
@@ -147,6 +155,11 @@ impl Gameboy {
                 }
             };
 
+            log::trace!(
+                "LEN: {} OPCODE: {:#x}, A: {:#x} F: {:#x} B: {:#x} C: {:#x} D: {:#x} E: {:#x} H: {:#x} L: {:#x} SP: {:0X} PC: {:0X} {}",
+                OPCODE_LENGTHS[op_code as usize], op_code, self.cpu.a, self.cpu.f, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, self.cpu.sp, self.cpu.pc, self.instruction_look_ahead(4)
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
             cycles = self.execute_op_code(op_code, value)?;
         }
         Ok(cycles)
@@ -172,14 +185,14 @@ pub struct Cpu {
 impl Cpu {
     pub fn reset(&mut self) {
         // DMG
-        self.a = 0x11;
-        self.f = 0b1000_0000;
+        self.a = 0x01;
+        self.f = 0xB0;
         self.b = 0x00;
-        self.c = 0x00;
-        self.d = 0xFF;
-        self.e = 0x56;
-        self.h = 0x00;
-        self.l = 0x0D;
+        self.c = 0x13;
+        self.d = 0x00;
+        self.e = 0xD8;
+        self.h = 0x01;
+        self.l = 0x4D;
         self.sp = 0xFFFE;
         self.pc = 0x0100;
         self.halted = false;

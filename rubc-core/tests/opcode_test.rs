@@ -75,26 +75,27 @@ pub fn read_test_file(file: &std::path::Path) -> Vec<Object> {
 mod tests {
 
     use super::*;
-    use rubc_core::gameboy;
     use rubc_core::globals::*;
+    use rubc_core::mbc::DummyMBC;
+    use rubc_core::{cartridge, gameboy, mbc};
 
-    fn set_initial_state(cp: &mut gameboy::Gameboy, state: &CpuState) {
-        cp.cpu.a = state.a;
-        cp.cpu.b = state.b;
-        cp.cpu.c = state.c;
-        cp.cpu.d = state.d;
-        cp.cpu.e = state.e;
-        cp.cpu.f = state.f;
-        cp.cpu.h = state.h;
-        cp.cpu.l = state.l;
-        cp.cpu.sp = state.sp;
-        cp.cpu.pc = state.pc;
+    fn set_initial_state(gb: &mut gameboy::Gameboy, state: &CpuState) {
+        gb.cpu.a = state.a;
+        gb.cpu.b = state.b;
+        gb.cpu.c = state.c;
+        gb.cpu.d = state.d;
+        gb.cpu.e = state.e;
+        gb.cpu.f = state.f;
+        gb.cpu.h = state.h;
+        gb.cpu.l = state.l;
+        gb.cpu.sp = state.sp;
+        gb.cpu.pc = state.pc;
 
         for byte in state.ram.iter() {
             let addr = byte[0];
             let value = byte[1];
-            // log::trace!("Writing to addr: ${:04X} value: ${:02X}", addr, value);
-            cp.memory_write(addr, value as u8);
+            // println!("Writing to addr: ${:04X} value: ${:02X}", addr, value);
+            gb.memory_write(addr as u16, value as u8);
         }
     }
 
@@ -106,7 +107,8 @@ mod tests {
             let read_value = gb.memory_read(addr);
             if read_value != value as u8 {
                 return Err(anyhow::anyhow!(
-                    "RAM: Expected: ${:02X} Got: ${:02X}",
+                    "RAM: Addr: {:04X} Expected: ${:02X} Got: ${:02X}",
+                    addr,
                     value,
                     read_value
                 ));
@@ -202,14 +204,20 @@ mod tests {
 
             let mut s = format!("Testing OpCode: {:?}.......", file.file_name().unwrap());
             let mut mb = gameboy::GameboyBuilder::new().build();
-            mb.cart = Some(gameboy::Cartridge::empty());
+            mb.cart = cartridge::Cartridge::DummyMBC(DummyMBC::new());
             let tests = read_test_file(file.as_path());
 
             for test in &tests {
                 set_initial_state(&mut mb, &test.initial);
 
                 //sanity check
-                assert!(compare_state(&mb, &test.initial).is_ok());
+                assert!(compare_state(&mb, &test.initial)
+                    .map_err(|e| {
+                        println!("Test: {:?}, E:  {:?}", test.name, e);
+                        println!("I: {:?}", test.initial);
+                        println!("G: {:?}", mb.cpu);
+                    })
+                    .is_ok());
 
                 let mut op_idx = 0;
                 for ram_state in test.initial.ram.iter().enumerate() {

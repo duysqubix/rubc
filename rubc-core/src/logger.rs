@@ -4,11 +4,12 @@ use std::{env, fs, time::SystemTime};
 pub fn setup_logger() -> Result<(), fern::InitError> {
     let now = SystemTime::now();
     let now = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
-    let now = now.as_secs();
-    let now = now.to_string();
+    // convert to mm-dd-yyyy
+    let now = chrono::NaiveDateTime::from_timestamp_opt(now.as_secs() as i64, 0).unwrap();
+    let now = now.format("%m-%d-%Y:%H").to_string();
     let now = now.as_str();
 
-    let log_dir = std::env::temp_dir().join("logs/dm_scraper");
+    let log_dir = std::env::temp_dir().join("logs/rubc");
     fs::create_dir_all(&log_dir)?;
 
     let mut log_level = log::LevelFilter::Warn;
@@ -45,7 +46,8 @@ pub fn setup_logger() -> Result<(), fern::InitError> {
                 message
             ))
         })
-        .level(log_level)
+        .level(log::LevelFilter::Error)
+        .level_for("rubc_core", log_level)
         .chain(std::io::stdout())
         .chain(fern::log_file(log_file)?)
         .apply()?;

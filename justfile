@@ -9,3 +9,6 @@ make-commitmsg:
 
 push: 
   git push origin {{branch}}
+
+test-opcodes:
+  cargo test --package rubc-core -- --show-output
