@@ -11,6 +11,7 @@ pub struct GameboyBuilder {
     cpu: Cpu,
     cart: Option<Cartridge>,
     cgb_mode: Option<bool>,
+    breakpoints: Option<Vec<usize>>,
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
 }
@@ -23,6 +24,7 @@ impl GameboyBuilder {
             cgb_mode: None,
             opcode_map: opcodes::init_opcodes(),
             opcode_map_cb: opcodes_cb::init_opcodes_cb(),
+            breakpoints: None,
         }
     }
 
@@ -40,6 +42,7 @@ impl GameboyBuilder {
             interrupts_on: false,
             timer_div_counter: 0,
             timer_tima_counter: 0,
+            breakpoints: self.breakpoints.unwrap_or_default(),
         }
     }
 
@@ -48,12 +51,18 @@ impl GameboyBuilder {
         Ok(self)
     }
 
-    pub fn set_cart(&mut self, cart: Cartridge) {
+    pub fn set_cart(mut self, cart: Cartridge) -> GameboyBuilder {
         self.cart = Some(cart);
+        self
     }
 
     pub fn enable_cgb_mode(mut self) -> GameboyBuilder {
         self.cgb_mode = Some(true);
+        self
+    }
+
+    pub fn with_cpu_breakpoints(mut self, breakpoints: Vec<usize>) -> GameboyBuilder {
+        self.breakpoints = Some(breakpoints);
         self
     }
 }
@@ -70,6 +79,7 @@ pub struct Gameboy {
     memory: Vec<u8>,
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
+    breakpoints: Vec<usize>,
 }
 
 impl Gameboy {
@@ -198,7 +208,31 @@ impl Gameboy {
         for i in 0..number {
             result.push(self.memory_read(self.cpu.pc + i));
         }
-        format!("{:x?}", result)
+        format!("{:X?}", result)
+    }
+
+    fn cpu_state_snapshot(&self) -> String {
+        format!(
+            "A: {:#x} F: {:#x} B: {:#x} C: {:#x} D: {:#x} E: {:#x} H: {:#x} L: {:#x} SP: {:0X} PC: {:0X} {}",
+            self.cpu.a,
+            self.cpu.f,
+            self.cpu.b,
+            self.cpu.c,
+            self.cpu.d,
+            self.cpu.e,
+            self.cpu.h,
+            self.cpu.l,
+            self.cpu.sp,
+            self.cpu.pc,
+            self.instruction_look_ahead(4)
+        )
+    }
+
+    #[inline]
+    fn log_state(&self) {
+        if !self.breakpoints.is_empty() && self.breakpoints.contains(&(self.cpu.pc as usize)) {
+            log::debug!("{}", self.cpu_state_snapshot());
+        }
     }
 
     pub fn tick(&mut self) -> anyhow::Result<OpCycles> {
@@ -215,10 +249,9 @@ impl Gameboy {
             let old_sp = self.cpu.sp;
             cycles = {
                 let op_code = self.memory_read(self.cpu.pc);
-                log::trace!(
-                "LEN: {} OPCODE: {:#x}, A: {:#x} F: {:#x} B: {:#x} C: {:#x} D: {:#x} E: {:#x} H: {:#x} L: {:#x} SP: {:0X} PC: {:0X} {}",
-                OPCODE_LENGTHS[op_code as usize], op_code, self.cpu.a, self.cpu.f, self.cpu.b, self.cpu.c, self.cpu.d, self.cpu.e, self.cpu.h, self.cpu.l, self.cpu.sp, self.cpu.pc, self.instruction_look_ahead(4)
-            );
+
+                self.log_state();
+
                 let value = match OPCODE_LENGTHS[op_code as usize] {
                     1 => 0,
                     2 => self.memory_read(self.cpu.pc + 1) as u16,

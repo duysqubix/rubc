@@ -12,6 +12,7 @@ egui-winit = { version = "0.23", default-features = false, features = ["links"] 
 log = "0.4.20"
 # pixels = "0.13.0"
 pixels = {git = "https://github.com/parasyte/pixels/", branch = "main"}
+rayon = "1.8.1"
 rubc-core = { path = "../rubc-core" }
 winit = "0.28"
 winit_input_helper = "0.14"

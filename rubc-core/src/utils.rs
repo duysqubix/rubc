@@ -22,6 +22,7 @@ pub fn disassemble(cart: &Cartridge) -> String {
 
     for bank in 0..(rom.len() / ROM_BANK_SIZE) {
         let mut i = 0;
+
         while i < ROM_BANK_SIZE {
             let mut cb_mode = false;
             let address = rel_addr(bank, i);
@@ -32,6 +33,20 @@ pub fn disassemble(cart: &Cartridge) -> String {
             }
 
             opcode = rom[address];
+            if 0x104 <= address && address <= 0x014F {
+                i += 1;
+
+                table.add_row(row![
+                    format!("{:02X}:{:04X}", 0, address),
+                    format!("${:02X}", opcode),
+                    "",
+                    "CART HEADER",
+                    "",
+                    ""
+                ]);
+                continue;
+            }
+
             if opcode == 0xCB {
                 i += 1;
                 opcode = rom[rel_addr(bank, i)];
@@ -42,14 +57,22 @@ pub fn disassemble(cart: &Cartridge) -> String {
             match oplen {
                 2 => {
                     let orig_addr = address;
-                    notes = "8bit Immediate";
+                    notes = "8bit";
                     opcode = rom[address];
                     i += 1;
                     let value = rom[rel_addr(bank, i)];
                     let opcode_name = op_code_names(opcode, cb_mode);
 
                     table.add_row(row![
-                        format!("{:02X}:{:02X}", bank, orig_addr),
+                        format!(
+                            "{:02X}:{:04X}",
+                            bank,
+                            if bank == 0 {
+                                orig_addr
+                            } else {
+                                orig_addr - (bank * ROM_BANK_SIZE)
+                            }
+                        ),
                         format!("${:02X}", opcode),
                         format!("${:04X}", value),
                         opcode_name,
@@ -60,7 +83,7 @@ pub fn disassemble(cart: &Cartridge) -> String {
                 }
                 3 => {
                     let orig_addr = address;
-                    notes = "16bit Immediate";
+                    notes = "16bit";
                     opcode = rom[address];
                     i += 1;
                     let h = rom[rel_addr(bank, i)] as u16;
@@ -69,7 +92,15 @@ pub fn disassemble(cart: &Cartridge) -> String {
                     let value = (l << 8) | h;
                     let opcode_name = op_code_names(opcode, cb_mode);
                     table.add_row(row![
-                        format!("{:02X}:{:02X}", bank, orig_addr),
+                        format!(
+                            "{:02X}:{:04X}",
+                            bank,
+                            if bank == 0 {
+                                orig_addr
+                            } else {
+                                orig_addr - (bank * ROM_BANK_SIZE)
+                            }
+                        ),
                         format!("${:02X}", opcode),
                         format!("${:04X}", value),
                         opcode_name,
@@ -80,9 +111,19 @@ pub fn disassemble(cart: &Cartridge) -> String {
                 }
                 _ => {
                     let orig_addr = address;
+                    notes = "";
+
                     let opcode_name = op_code_names(opcode, cb_mode);
                     table.add_row(row![
-                        format!("{:02X}:{:02X}", bank, orig_addr),
+                        format!(
+                            "{:02X}:{:04X}",
+                            bank,
+                            if bank == 0 {
+                                orig_addr
+                            } else {
+                                orig_addr - (bank * ROM_BANK_SIZE)
+                            }
+                        ),
                         format!("${:02X}", opcode),
                         "",
                         opcode_name,

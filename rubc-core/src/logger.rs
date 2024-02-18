@@ -48,6 +48,7 @@ pub fn setup_logger() -> Result<(), fern::InitError> {
         })
         .level(log::LevelFilter::Error)
         .level_for("rubc_core", log_level)
+        .level_for("rubc", log_level)
         .chain(std::io::stdout())
         .chain(fern::log_file(log_file)?)
         .apply()?;

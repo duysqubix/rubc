@@ -5,7 +5,10 @@ use crate::gui::Framework;
 
 use clap::Parser;
 use pixels::Pixels;
+use rayon::prelude::*;
+use rubc_core::globals::ROM_BANK_SIZE;
 use rubc_core::logger;
+use std::sync::{Arc, Mutex};
 use std::time;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, VirtualKeyCode};
@@ -21,8 +24,8 @@ struct Args {
     #[clap(long, help = "Disassemble the ROM as <ROM_FILE>.txt and exit.")]
     disassemble: bool,
 
-    #[clap(long, help = "Print CPU state between PC addresses.", num_args=1.., value_terminator=";", value_delimiter=',',value_name="PC1,PC2,...PC3;")]
-    log_cpu: Vec<u16>,
+    #[clap(long, help = "Print CPU state between PC addresses. i.e. --breakpoints=0x100,0x150,0x170-0x180", num_args=1.., value_terminator=";", value_delimiter=',',value_name="PCn")]
+    breakpoints: Vec<String>,
 }
 
 const WIDTH: u32 = 160;
@@ -32,12 +35,80 @@ const TITLE: &str = "RuBC";
 const FPS_US: u64 = 16_740;
 const CPU_HZ: u64 = 4_194_304;
 
+fn parse_cpu_log_arg<'a>(addresses: &'a Vec<String>) -> Vec<usize> {
+    let result = Mutex::new(Vec::<usize>::new());
+
+    let remove_prefixes = |s: &'a str| -> &'a str {
+        if s.starts_with("0x") {
+            &s[2..]
+        } else if s.starts_with("$") {
+            &s[1..]
+        } else {
+            &s
+        }
+    };
+
+    let flatten_expr = |addr: u16, bank: usize| -> usize { (bank * ROM_BANK_SIZE) + addr as usize };
+    let str_to_usize = |s: &'a str| -> usize {
+        usize::from_str_radix(s, 16).expect(&format!("Invalid format: {:?}", s))
+    };
+
+    addresses.par_iter().for_each(|address| {
+        if address.contains('-') {
+            // let range: Vec<&'a str> = address.split('-').map(|a| remove_prefixes(a)).collect();
+            let range: Vec<&'a str> = address.split('-').collect();
+            if range.len() != 2 {
+                panic!("Invalid address range: {:?}", address);
+            }
+
+            let range1 = range[0];
+            let range2 = range[1];
+
+            let pair1 = range1.split(':').collect::<Vec<&str>>();
+            let pair2 = range2.split(':').collect::<Vec<&str>>();
+
+            if pair1.len() != 2 || pair2.len() != 2 {
+                panic!("Invalid address range: {:?}", address);
+            }
+
+            let bank1 = str_to_usize(remove_prefixes(pair1[0]));
+            let addr1 = str_to_usize(remove_prefixes(pair1[1]));
+            let addr1 = flatten_expr(addr1 as u16, bank1);
+
+            let bank2 = str_to_usize(remove_prefixes(pair2[0]));
+            let addr2 = str_to_usize(remove_prefixes(pair2[1]));
+            let addr2 = flatten_expr(addr2 as u16, bank2);
+
+            for continugous_address in addr1..addr2 {
+                result.lock().unwrap().push(continugous_address);
+            }
+        } else {
+            let pair = address.split(':').collect::<Vec<&str>>();
+            if pair.len() == 2 {
+                let bank = u16::from_str_radix(remove_prefixes(pair[0]), 16)
+                    .expect(&format!("Invalid address: {:?}", address));
+
+                let addr = u16::from_str_radix(remove_prefixes(pair[1]), 16)
+                    .expect(&format!("Invalid address: {:?}", address));
+
+                let continugous_address = (bank as usize * ROM_BANK_SIZE) + addr as usize;
+                result.lock().unwrap().push(continugous_address);
+            } else {
+                // atempt to parse as a single address without bank
+                let addr = u16::from_str_radix(remove_prefixes(address), 16)
+                    .expect(&format!("Invalid address: {:?}", address));
+                result.lock().unwrap().push(addr as usize);
+            }
+        }
+    });
+    result.into_inner().unwrap()
+}
+
 fn main() -> rubc_core::Result<()> {
     logger::setup_logger()?;
 
     let args = Args::parse();
-    let mut emulator = Rubc::new(&args.rom_file)?;
-    println!("{:?}", args.log_cpu);
+    let mut emulator = Rubc::new(&args)?;
     if args.disassemble {
         log::info!("Dumping instruction set");
         let x = rubc_core::utils::disassemble(&emulator.gameboy.cart);
@@ -161,12 +232,23 @@ struct Rubc {
 }
 
 impl Rubc {
-    fn new(rom_file: &str) -> anyhow::Result<Self> {
-        let builder = rubc_core::gameboy::GameboyBuilder::new().with_cart(rom_file);
+    fn new(args: &Args) -> anyhow::Result<Self> {
+        let mut builder = rubc_core::gameboy::GameboyBuilder::new().with_cart(&args.rom_file)?;
+
+        if args.breakpoints.len() > 0 {
+            log::info!("Logging CPU state at PC addresses: {:?}", args.breakpoints);
+            let mut breakpoints = parse_cpu_log_arg(&args.breakpoints);
+            breakpoints.sort();
+            breakpoints.dedup();
+            log::debug!("Parsed breakpoints: {:x?}", breakpoints);
+            builder = builder.with_cpu_breakpoints(breakpoints);
+        }
+
         Ok(Rubc {
-            gameboy: builder?.build(),
+            gameboy: builder.build(),
         })
     }
+
     fn update(&mut self) {
         let cycles = CPU_HZ as f64 * ((FPS_US as f64) / 1_000_000.0);
         for _ in 0..cycles as u64 {
