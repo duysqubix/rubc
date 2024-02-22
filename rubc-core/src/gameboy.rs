@@ -227,16 +227,24 @@ impl Gameboy {
         }
     }
 
+    fn instruction_look_behind(&self, number: u16) -> String {
+        let mut result = Vec::new();
+        for i in 0..number {
+            result.push(self.memory_read(self.cpu.pc - i));
+        }
+        format!("{:02X?}", result)
+    }
+
     fn instruction_look_ahead(&self, number: u16) -> String {
         let mut result = Vec::new();
         for i in 0..number {
-            result.push(self.memory_read(self.cpu.pc + i));
+            let pc = self.cpu.pc.wrapping_add(i);
+            result.push(self.memory_read(pc));
         }
         format!("{:02X?}", result)
     }
 
     fn cpu_state_snapshot(&self) -> String {
-        let get_bank = |addr: u16| -> usize { addr as usize / ROM_BANK_SIZE };
         format!(
             "A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: {:02X}:{:04X} {}",
             self.cpu.a,
@@ -248,7 +256,7 @@ impl Gameboy {
             self.cpu.h,
             self.cpu.l,
             self.cpu.sp,
-            get_bank(self.cpu.pc),
+            utils::rom_bank_from_address(self.cpu.pc.into(), self.cart.rom_banks()),
             self.cpu.pc,
             self.instruction_look_ahead(4)
         )
@@ -261,7 +269,7 @@ impl Gameboy {
         }
         // let flatten_expr = |addr: u16, bank: usize| -> usize { (bank * ROM_BANK_SIZE) + addr as usize };
 
-        // utils::write_to_file(&self.cpu_state_snapshot());
+        utils::write_to_file(&self.cpu_state_snapshot());
     }
 
     pub fn tick(&mut self) -> anyhow::Result<OpCycles> {
@@ -289,7 +297,8 @@ impl Gameboy {
                         (high << 8) | low
                     }
                     _ => {
-                        panic!("Invalid opcode length: {:#x}", op_code)
+                        log::error!("Current State: {}", self.cpu_state_snapshot());
+                        panic!("Invalid opcode length: {:#x}", op_code);
                     }
                 };
 

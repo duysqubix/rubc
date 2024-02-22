@@ -26,6 +26,22 @@ impl Cartridge {
         }
     }
 
+    pub fn rom_banks(&self) -> usize {
+        match self {
+            Self::MBC0(mbc) => mbc.rom_banks(),
+            Self::MBC1(mbc) => mbc.rom_banks(),
+            _ => panic!("Invalid cart type"),
+        }
+    }
+
+    pub fn ram_banks(&self) -> usize {
+        match self {
+            Self::MBC0(mbc) => mbc.ram_banks(),
+            Self::MBC1(mbc) => mbc.ram_banks(),
+            _ => panic!("Invalid cart type"),
+        }
+    }
+
     #[inline]
     pub fn read(&self, address: u16) -> u8 {
         // check if reading from ROM vs SRAM

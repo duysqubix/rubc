@@ -219,6 +219,17 @@ pub fn rom_absolute_address(bank: usize, address: usize) -> usize {
     bank * ROM_BANK_SIZE + address
 }
 
+#[inline(always)]
 pub fn ram_absolute_address(bank: usize, address: usize) -> usize {
     bank * RAM_BANK_SIZE + address
+}
+
+#[inline(always)]
+pub fn rom_bank_from_address(address: usize, num_banks: usize) -> usize {
+    (address / ROM_BANK_SIZE) % num_banks
+}
+
+#[inline(always)]
+pub fn ram_bank_from_address(address: usize, num_banks: usize) -> usize {
+    (address / RAM_BANK_SIZE) % num_banks
 }

@@ -14,7 +14,8 @@ pub trait IntoMBC {
     // address gaurenteed to be in range 0xA000..=0xBFFF
     fn write_sram(&mut self, address: usize, value: u8);
 
-    // calculate the absolute address from bank and address
+    fn rom_banks(&self) -> usize;
+    fn ram_banks(&self) -> usize;
 }
 
 pub struct DummyMBC {
@@ -47,6 +48,14 @@ impl IntoMBC for DummyMBC {
     fn write_sram(&mut self, address: usize, value: u8) {
         self.sram[address] = value;
     }
+
+    fn rom_banks(&self) -> usize {
+        1
+    }
+
+    fn ram_banks(&self) -> usize {
+        1
+    }
 }
 
 pub struct MBC0 {
@@ -75,6 +84,14 @@ impl IntoMBC for MBC0 {
 
     fn write_sram(&mut self, _address: usize, _value: u8) {
         log::warn!("Attempted to write to SRAM on MBC0, ignoring");
+    }
+
+    fn rom_banks(&self) -> usize {
+        1
+    }
+
+    fn ram_banks(&self) -> usize {
+        0
     }
 }
 
@@ -118,6 +135,14 @@ impl MBC1 {
 }
 
 impl IntoMBC for MBC1 {
+    fn rom_banks(&self) -> usize {
+        self.rom_banks
+    }
+
+    fn ram_banks(&self) -> usize {
+        self.ram_banks
+    }
+
     fn read(&self, address: usize) -> u8 {
         match address {
             0x0000..=0x3FFF => {
