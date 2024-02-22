@@ -14,6 +14,7 @@ pub struct GameboyBuilder {
     breakpoints: Option<Vec<usize>>,
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
+    test_mode: bool,
 }
 
 impl GameboyBuilder {
@@ -25,6 +26,7 @@ impl GameboyBuilder {
             opcode_map: opcodes::init_opcodes(),
             opcode_map_cb: opcodes_cb::init_opcodes_cb(),
             breakpoints: None,
+            test_mode: false,
         }
     }
 
@@ -43,6 +45,7 @@ impl GameboyBuilder {
             timer_div_counter: 0,
             timer_tima_counter: 0,
             breakpoints: self.breakpoints.unwrap_or_default(),
+            test_mode: self.test_mode,
         }
     }
 
@@ -65,6 +68,11 @@ impl GameboyBuilder {
         self.breakpoints = Some(breakpoints);
         self
     }
+
+    pub fn enable_test_mode(mut self) -> GameboyBuilder {
+        self.test_mode = true;
+        self
+    }
 }
 
 pub struct Gameboy {
@@ -80,6 +88,7 @@ pub struct Gameboy {
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
     breakpoints: Vec<usize>,
+    test_mode: bool,
 }
 
 impl Gameboy {
@@ -121,7 +130,9 @@ impl Gameboy {
                 self.timer_tima_counter -= freq;
                 if self.memory[IO_TIMA as usize] == 0xFF {
                     self.memory[IO_TIMA as usize] = self.memory[IO_TMA as usize];
-                    self.service_interrupt(INTR_TIMER_POS);
+                    // self.service_interrupt(INTR_TIMER_POS);
+                    // let req = self.memory_read(IO_IF) | 0xE0;
+                    bits::set_bit(&mut self.memory[IO_IF as usize], INTR_TIMER_POS);
                     break;
                 } else {
                     self.memory[IO_TIMA as usize] = self.memory[IO_TIMA as usize].wrapping_add(1);
@@ -159,12 +170,23 @@ impl Gameboy {
     }
 
     pub fn memory_write(&mut self, address: u16, value: u8) {
+        if self.test_mode {
+            match address {
+                ROM_ADDRESS_START..=ROM1_ADDRESS_END => {
+                    self.cart.write(address, value);
+                }
+                _ => {
+                    self.memory[address as usize] = value;
+                }
+            }
+            return;
+        }
+
         match address {
-            ROM1_ADDRESS_START..=ROM1_ADDRESS_END => {
+            ROM_ADDRESS_START..=ROM1_ADDRESS_END => {
                 self.cart.write(address, value);
             }
             IO_DIV => {
-                log::debug!("Resetting DIV");
                 self.timer_tima_counter = 0;
                 self.timer_div_counter = 0;
                 self.memory[address as usize] = 0;
@@ -191,15 +213,17 @@ impl Gameboy {
     }
 
     pub fn memory_read(&self, address: u16) -> u8 {
-        if address == IO_LY {
-            return 0x90;
+        if self.test_mode {
+            return match address {
+                ROM_ADDRESS_START..=ROM1_ADDRESS_END => self.cart.read(address),
+                _ => self.memory[address as usize],
+            };
         }
 
-        if address <= ROM1_ADDRESS_END {
-            // self.cart.rom_read(address);
-            self.cart.read(address)
-        } else {
-            self.memory[address as usize]
+        match address {
+            ROM_ADDRESS_START..=ROM1_ADDRESS_END => self.cart.read(address),
+            IO_LY => 0x90,
+            _ => self.memory[address as usize],
         }
     }
 
@@ -208,12 +232,13 @@ impl Gameboy {
         for i in 0..number {
             result.push(self.memory_read(self.cpu.pc + i));
         }
-        format!("{:X?}", result)
+        format!("{:02X?}", result)
     }
 
     fn cpu_state_snapshot(&self) -> String {
+        let get_bank = |addr: u16| -> usize { addr as usize / ROM_BANK_SIZE };
         format!(
-            "A: {:#x} F: {:#x} B: {:#x} C: {:#x} D: {:#x} E: {:#x} H: {:#x} L: {:#x} SP: {:0X} PC: {:0X} {}",
+            "A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: {:02X}:{:04X} {}",
             self.cpu.a,
             self.cpu.f,
             self.cpu.b,
@@ -223,6 +248,7 @@ impl Gameboy {
             self.cpu.h,
             self.cpu.l,
             self.cpu.sp,
+            get_bank(self.cpu.pc),
             self.cpu.pc,
             self.instruction_look_ahead(4)
         )
@@ -233,13 +259,15 @@ impl Gameboy {
         if !self.breakpoints.is_empty() && self.breakpoints.contains(&(self.cpu.pc as usize)) {
             log::debug!("{}", self.cpu_state_snapshot());
         }
+        // let flatten_expr = |addr: u16, bank: usize| -> usize { (bank * ROM_BANK_SIZE) + addr as usize };
+
+        // utils::write_to_file(&self.cpu_state_snapshot());
     }
 
     pub fn tick(&mut self) -> anyhow::Result<OpCycles> {
         let mut cycles: OpCycles = 4;
 
-        if self.cpu.stopped || self.cpu.halted {
-            log::warn!("CPU is stopped or halted");
+        if self.cpu.stopped || self.cpu.is_stuck {
             return Ok(cycles);
         }
 
@@ -277,15 +305,13 @@ impl Gameboy {
                 log::warn!("Stuck CPU: {:#x}", old_pc);
                 self.cpu.is_stuck = true;
             }
-
-            // Tick Cart (RTC)
-            // Tick Timer
-            self.handle_timer(cycles);
-            // Tick PPU
-            // Tick Interrupts
-            cycles += self.handle_interrupts();
         }
-
+        // Tick Cart (RTC)
+        // Tick Timer
+        self.handle_timer(cycles);
+        // Tick PPU
+        // Tick Interrupts
+        cycles += self.handle_interrupts();
         Ok(cycles)
     }
 
@@ -296,7 +322,7 @@ impl Gameboy {
             log::trace!("Interrupts enabled");
             return 0;
         }
-        if !self.interrupts_on {
+        if !self.interrupts_on && !self.cpu.halted {
             return 0;
         }
 
@@ -306,7 +332,6 @@ impl Gameboy {
         if req > 0 {
             for i in 0..5 {
                 if bits::is_bit_set(req, i as u8) && bits::is_bit_set(enabled, i as u8) {
-                    log::trace!("Servicing interrupt: {:#x}", i);
                     self.service_interrupt(i as u8);
                     return 20;
                 }
@@ -324,7 +349,7 @@ impl Gameboy {
         }
 
         if self.interrupts_on {
-            log::debug!("Servicing interrupt: {:#x}", interrupt);
+            log::trace!("Servicing interrupt: {:#x}", interrupt);
             self.interrupts_on = false;
             self.cpu.halted = false;
             bits::clear_bit(&mut self.memory[IO_IF as usize], interrupt);

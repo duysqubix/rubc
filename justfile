@@ -12,3 +12,12 @@ push:
 
 test-opcodes:
   cargo test --package rubc-core -- --show-output
+
+run args:
+  LOG_LEVEL=warn cargo run {{args}}
+
+trun args:
+  LOG_LEVEL=debug cargo run {{args}}
+
+trace-run args:
+  LOG_LEVEL=debug cargo run {{args}}

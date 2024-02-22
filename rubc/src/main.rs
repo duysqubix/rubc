@@ -8,7 +8,7 @@ use pixels::Pixels;
 use rayon::prelude::*;
 use rubc_core::globals::ROM_BANK_SIZE;
 use rubc_core::logger;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, VirtualKeyCode};
@@ -254,7 +254,7 @@ impl Rubc {
         for _ in 0..cycles as u64 {
             self.gameboy.tick().unwrap();
         }
-        log::trace!("processed {} cycles", cycles as u64);
+        // log::trace!("processed {} cycles", cycles as u64);
     }
     fn draw(&self, frame: &mut [u8]) {
         for (i, pixel) in frame.chunks_exact_mut(4).enumerate() {

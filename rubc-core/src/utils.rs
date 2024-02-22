@@ -201,3 +201,20 @@ pub const fn interrupt_address(val: u8) -> u16 {
         }
     }
 }
+
+use std::fs::File;
+use std::io::Write;
+
+#[inline]
+pub fn write_to_file<'a>(contents: &'a str) {
+    let mut f = File::options()
+        .append(true)
+        .open("/tmp/example.log")
+        .unwrap();
+    writeln!(&mut f, "{}", contents).unwrap();
+}
+
+#[inline(always)]
+pub fn absolute_address(bank: usize, address: usize) -> usize {
+    bank * ROM_BANK_SIZE + address
+}

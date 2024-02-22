@@ -15,7 +15,7 @@ impl Cartridge {
         }
     }
 
-    pub fn load_rom(&mut self, rom: &Vec<u8>) {
+    pub fn load_rom(&mut self, rom: &[u8]) {
         log::trace!("Loading ROM into cartridge");
         log::trace!("ROM length: {} bytes", rom.len());
 
@@ -156,22 +156,26 @@ impl Cartridge {
         let mut cart = Cartridge::Empty;
 
         let cart_type_id = rom[CART_TYPE as usize];
-        log::debug!("Cart type: {:#x}", cart_type_id);
+        log::debug!("Cart type: {}", cart_type_map(cart_type_id));
         match cart_type_id {
             0x00 => {
+                log::debug!("Initializing MBC0 cartridge type");
                 cart = Cartridge::MBC0(MBC0::new());
             }
-            0x01 => cart = Cartridge::MBC1(MBC1::new(rom_banks, ram_banks.unwrap_or(0))),
+            0x01 => {
+                log::debug!("Initializing MBC1 cartridge type");
+                cart = Cartridge::MBC1(MBC1::new(rom_banks, ram_banks.unwrap_or(0)))
+            }
 
             _ => {
                 log::error!("Unsupported cartridge type");
                 return Err(Error::msg("Unsupported cartridge type"));
             }
         }
+        cart.load_rom(&rom);
 
         let metadata = utils::get_metadata(&cart);
         log::debug!("Cartridge metadata:\n{}", metadata);
-        cart.load_rom(&rom);
         Ok(cart)
     }
 }

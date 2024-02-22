@@ -77,7 +77,7 @@ mod tests {
     use super::*;
     use rubc_core::globals::*;
     use rubc_core::mbc::DummyMBC;
-    use rubc_core::{cartridge, gameboy, mbc};
+    use rubc_core::{cartridge, gameboy};
 
     fn set_initial_state(gb: &mut gameboy::Gameboy, state: &CpuState) {
         gb.cpu.a = state.a;
@@ -203,7 +203,7 @@ mod tests {
             }
 
             let mut s = format!("Testing OpCode: {:?}.......", file.file_name().unwrap());
-            let mut mb = gameboy::GameboyBuilder::new().build();
+            let mut mb = gameboy::GameboyBuilder::new().enable_test_mode().build();
             mb.cart = cartridge::Cartridge::DummyMBC(DummyMBC::new());
             let tests = read_test_file(file.as_path());
 
