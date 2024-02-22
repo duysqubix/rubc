@@ -125,11 +125,11 @@ impl IntoMBC for MBC1 {
                 if self.mode == 1 {
                     bank = (self.ram_bank_select << 5) & self.rom_banks
                 }
-                self.rom[utils::absolute_address(bank, address)]
+                self.rom[utils::rom_absolute_address(bank, address)]
             }
             0x4000..=0x7FFF => {
                 let bank = (self.ram_bank_select << 5) % self.rom_banks | self.rom_bank_select;
-                self.rom[utils::absolute_address(bank, address)]
+                self.rom[utils::rom_absolute_address(bank, address)]
             }
             _ => panic!("Invalid ROM address for MBC1 read: {:04X}", address),
         }
@@ -141,8 +141,11 @@ impl IntoMBC for MBC1 {
         }
 
         match self.mode {
-            0 => self.sram[utils::absolute_address(0 % self.ram_banks, address)],
-            1 => self.sram[utils::absolute_address(self.ram_bank_select % self.ram_banks, address)],
+            0 => self.sram[utils::ram_absolute_address(0 % self.ram_banks, address)],
+            1 => {
+                self.sram
+                    [utils::ram_absolute_address(self.ram_bank_select % self.ram_banks, address)]
+            }
             _ => panic!("Memory bank controller mode not supported: {}", self.mode),
         }
     }
@@ -184,7 +187,8 @@ impl IntoMBC for MBC1 {
                     bank = self.ram_bank_select;
                 }
                 log::trace!("Writing to SRAM: {:04X}={:02X}", address, value);
-                self.sram[utils::absolute_address(bank, address - 0xA000) % self.ram_banks] = value;
+                self.sram[utils::ram_absolute_address(bank, address - 0xA000) % self.ram_banks] =
+                    value;
             }
             _ => panic!(
                 "Invalid SRAM address for MBC1 write: {:04X}={:02X}",

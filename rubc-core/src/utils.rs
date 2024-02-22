@@ -215,6 +215,10 @@ pub fn write_to_file<'a>(contents: &'a str) {
 }
 
 #[inline(always)]
-pub fn absolute_address(bank: usize, address: usize) -> usize {
+pub fn rom_absolute_address(bank: usize, address: usize) -> usize {
     bank * ROM_BANK_SIZE + address
+}
+
+pub fn ram_absolute_address(bank: usize, address: usize) -> usize {
+    bank * RAM_BANK_SIZE + address
 }

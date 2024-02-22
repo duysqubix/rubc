@@ -162,7 +162,7 @@ impl Cartridge {
                 log::debug!("Initializing MBC0 cartridge type");
                 cart = Cartridge::MBC0(MBC0::new());
             }
-            0x01 => {
+            0x01 | 0x02 | 0x03 => {
                 log::debug!("Initializing MBC1 cartridge type");
                 cart = Cartridge::MBC1(MBC1::new(rom_banks, ram_banks.unwrap_or(0)))
             }
