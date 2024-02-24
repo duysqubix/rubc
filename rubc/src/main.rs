@@ -26,6 +26,12 @@ struct Args {
 
     #[clap(long, help = "Print CPU state between PC addresses. i.e. --breakpoints=0x100,0x150,0x170-0x180", num_args=1.., value_terminator=";", value_delimiter=',',value_name="PCn")]
     breakpoints: Vec<String>,
+
+    #[clap(
+        long,
+        help = "Panic if the emulator gets stuck processing instructions."
+    )]
+    panic_on_stuck: bool,
 }
 
 const WIDTH: u32 = 160;
@@ -234,7 +240,6 @@ struct Rubc {
 impl Rubc {
     fn new(args: &Args) -> anyhow::Result<Self> {
         let mut builder = rubc_core::gameboy::GameboyBuilder::new().with_cart(&args.rom_file)?;
-
         if args.breakpoints.len() > 0 {
             log::info!("Logging CPU state at PC addresses: {:?}", args.breakpoints);
             let mut breakpoints = parse_cpu_log_arg(&args.breakpoints);
@@ -244,6 +249,9 @@ impl Rubc {
             builder = builder.with_cpu_breakpoints(breakpoints);
         }
 
+        if args.panic_on_stuck {
+            builder = builder.panic_on_stuck();
+        }
         Ok(Rubc {
             gameboy: builder.build(),
         })

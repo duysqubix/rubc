@@ -15,6 +15,7 @@ pub struct GameboyBuilder {
     opcode_map: OpCodeMap,
     opcode_map_cb: OpCodeMap,
     test_mode: bool,
+    panic_on_stuck: bool,
 }
 
 impl GameboyBuilder {
@@ -27,11 +28,13 @@ impl GameboyBuilder {
             opcode_map_cb: opcodes_cb::init_opcodes_cb(),
             breakpoints: None,
             test_mode: false,
+            panic_on_stuck: false,
         }
     }
 
     pub fn build(mut self) -> Gameboy {
         self.cpu.reset();
+        println!("Panic on stuck: {}", self.panic_on_stuck);
         Gameboy {
             cpu: self.cpu,
             cart: self.cart.unwrap_or(Cartridge::empty()),
@@ -46,6 +49,7 @@ impl GameboyBuilder {
             timer_tima_counter: 0,
             breakpoints: self.breakpoints.unwrap_or_default(),
             test_mode: self.test_mode,
+            panic_on_stuck: self.panic_on_stuck,
         }
     }
 
@@ -73,6 +77,11 @@ impl GameboyBuilder {
         self.test_mode = true;
         self
     }
+
+    pub fn panic_on_stuck(mut self) -> GameboyBuilder {
+        self.panic_on_stuck = true;
+        self
+    }
 }
 
 pub struct Gameboy {
@@ -89,6 +98,7 @@ pub struct Gameboy {
     opcode_map_cb: OpCodeMap,
     breakpoints: Vec<usize>,
     test_mode: bool,
+    panic_on_stuck: bool,
 }
 
 impl Gameboy {
@@ -321,6 +331,9 @@ impl Gameboy {
             {
                 log::warn!("Stuck CPU: {:#x}", old_pc);
                 self.cpu.is_stuck = true;
+                if self.panic_on_stuck {
+                    std::process::exit(0);
+                }
             }
         }
         // Tick Cart (RTC)

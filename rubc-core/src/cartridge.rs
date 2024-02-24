@@ -145,15 +145,6 @@ impl Cartridge {
 
         assert_eq!(rom_banks, calc_rom_banks);
 
-        // validate checksum
-        // let checksum = rom[CART_TITLE_START as usize..CART_MASK_ROM_VERSION_NUMBER as usize]
-        //     .iter()
-        //     .fold(0, |acc: u8, x: &u8| {
-        //         // asdf
-        //         let y = x + 1;
-        //         acc.wrapping_sub(y)
-        //     })
-        //     - 1;
         let checksum = utils::calculate_checksum(
             &rom[CART_TITLE_START as usize..CART_MASK_ROM_VERSION_NUMBER as usize],
         );
