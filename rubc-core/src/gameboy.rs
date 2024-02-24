@@ -186,6 +186,10 @@ impl Gameboy {
             ROM_ADDRESS_START..=ROM1_ADDRESS_END => {
                 self.cart.write(address, value);
             }
+            EXTERNAL_RAM_ADDRESS_END..=EXTERNAL_RAM_ADDRESS_END => {
+                self.cart.write(address, value);
+            }
+
             IO_DIV => {
                 self.timer_tima_counter = 0;
                 self.timer_div_counter = 0;
@@ -216,12 +220,14 @@ impl Gameboy {
         if self.test_mode {
             return match address {
                 ROM_ADDRESS_START..=ROM1_ADDRESS_END => self.cart.read(address),
+                EXTERNAL_RAM_ADDRESS_END..=EXTERNAL_RAM_ADDRESS_END => self.cart.read(address),
                 _ => self.memory[address as usize],
             };
         }
 
         match address {
             ROM_ADDRESS_START..=ROM1_ADDRESS_END => self.cart.read(address),
+            EXTERNAL_RAM_ADDRESS_END..=EXTERNAL_RAM_ADDRESS_END => self.cart.read(address),
             IO_LY => 0x90,
             _ => self.memory[address as usize],
         }
@@ -230,7 +236,8 @@ impl Gameboy {
     fn instruction_look_behind(&self, number: u16) -> String {
         let mut result = Vec::new();
         for i in 0..number {
-            result.push(self.memory_read(self.cpu.pc - i));
+            let pc = self.cpu.pc.wrapping_sub(i);
+            result.push(self.memory_read(pc));
         }
         format!("{:02X?}", result)
     }
@@ -246,7 +253,7 @@ impl Gameboy {
 
     fn cpu_state_snapshot(&self) -> String {
         format!(
-            "A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: {:02X}:{:04X} {}",
+            "A: {:02X} F: {:02X} B: {:02X} C: {:02X} D: {:02X} E: {:02X} H: {:02X} L: {:02X} SP: {:04X} PC: {:02X}:{:04X} {}|{}",
             self.cpu.a,
             self.cpu.f,
             self.cpu.b,
@@ -258,6 +265,7 @@ impl Gameboy {
             self.cpu.sp,
             utils::rom_bank_from_address(self.cpu.pc.into(), self.cart.rom_banks()),
             self.cpu.pc,
+            self.instruction_look_behind(4),
             self.instruction_look_ahead(4)
         )
     }
@@ -269,7 +277,7 @@ impl Gameboy {
         }
         // let flatten_expr = |addr: u16, bank: usize| -> usize { (bank * ROM_BANK_SIZE) + addr as usize };
 
-        utils::write_to_file(&self.cpu_state_snapshot());
+        // utils::write_to_file(&self.cpu_state_snapshot());
     }
 
     pub fn tick(&mut self) -> anyhow::Result<OpCycles> {

@@ -145,7 +145,7 @@ pub fn get_metadata(cart: &Cartridge) -> String {
 
     let header_checksum = rom[CART_HEADER_CHECKSUM as usize];
     let checksum =
-        calculate_checksum(&rom[CART_TITLE_START as usize..CART_GLOBAL_CHECKSUM_END as usize]);
+        calculate_checksum(&rom[CART_TITLE_START as usize..CART_MASK_ROM_VERSION_NUMBER as usize]);
 
     let mut table = Table::new();
     table.set_titles(row!["Attribute", "Value"]);
