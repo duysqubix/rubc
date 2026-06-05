@@ -78,10 +78,10 @@ impl Machine {
         m.cpu.r.f = 0x80;
         m.cpu.r.b = 0x00;
         m.cpu.r.c = 0x00;
-        m.cpu.r.d = 0xFF;
-        m.cpu.r.e = 0x56;
+        m.cpu.r.d = 0x00;
+        m.cpu.r.e = 0x08;
         m.cpu.r.h = 0x00;
-        m.cpu.r.l = 0x0D;
+        m.cpu.r.l = 0x7C;
         m.cpu.r.sp = 0xFFFE;
         m.cpu.r.pc = 0x0100;
         m
