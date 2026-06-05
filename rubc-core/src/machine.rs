@@ -344,13 +344,13 @@ mod tests {
         );
     }
 
-    /// instr_timing.gb exercises the timer for its self-checks. It currently
-    /// reports "Failed": the cycle-accurate Timer is wired and drives the ROM to
-    /// completion, but per-instruction cycle accounting measured through DIV is
-    /// not yet exact. This is the gate for the mem/instr-timing verify wave
-    /// (rubc-3ud), NOT the timer wave -- ignored here until that wave.
+    /// instr_timing.gb exercises per-instruction cycle accounting (measured via
+    /// DIV). STATUS: it PASSES when booted in CGB mode (the ROM is CGB-flagged,
+    /// $0143=0x80) but still FAILS under DMG boot, which is what this harness
+    /// uses -- a real DMG instruction-timing gap owned by the mem/instr-timing
+    /// verify wave (rubc-3ud). Ignored until DMG timing is exact.
     #[test]
-    #[ignore = "instr_timing cycle-exactness is the rubc-3ud verify wave; timer wave only owns DIV/TIMA edge behavior"]
+    #[ignore = "instr_timing passes in CGB boot but fails DMG boot; DMG cycle-exactness is rubc-3ud"]
     fn blargg_instr_timing() {
         let (stop, text) = run_blargg_at("instr_timing/instr_timing.gb");
         let text = text.unwrap_or_default();
