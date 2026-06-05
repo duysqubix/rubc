@@ -432,8 +432,22 @@ fn step_ccf(cpu: &mut Cpu) {
 fn step_stop<B: CpuBus>(cpu: &mut Cpu, bus: &mut B, phase: u8) {
     match phase {
         0 => {
+            // STOP is a 2-byte opcode (0x10 0x00); consume the second byte.
             let _ = read_pc(cpu, bus);
-            cpu.enter_stop();
+            if bus.speed_switch_armed() {
+                // CGB KEY1 speed switch: toggle the clock and RESUME execution
+                // (real hardware does not halt here). This is the sequence the
+                // combined cpu_instrs runner uses to enter double-speed.
+                //
+                // TIMING TODO (rubc-te2 CGB core): hardware stalls ~2050 M-cycles
+                // during the switch (Pan Docs CGB_Registers KEY1). We resume
+                // immediately for now; this is NOT yet cycle-accurate for the
+                // switch latency. Tracked by the CGB-core wave, not this fix.
+                bus.finish_speed_switch();
+                cpu.finish();
+            } else {
+                cpu.enter_stop();
+            }
         }
         _ => cpu.finish(),
     }

@@ -66,6 +66,27 @@ impl Machine {
         m
     }
 
+    /// Boot directly into the cartridge in **CGB mode** (no boot ROM): post-boot
+    /// CGB register state (A=0x11 is the CGB hardware signature the ROM reads to
+    /// detect color hardware) and the bus in CGB mode so KEY1/double-speed work.
+    pub fn boot_cgb(rom: &[u8]) -> Self {
+        let mut m = Self::new();
+        m.load_rom(rom);
+        m.bus.cgb.cgb_mode = true;
+        // Post-boot CGB state (A=0x11 signals CGB to CGB-aware ROMs).
+        m.cpu.r.a = 0x11;
+        m.cpu.r.f = 0x80;
+        m.cpu.r.b = 0x00;
+        m.cpu.r.c = 0x00;
+        m.cpu.r.d = 0xFF;
+        m.cpu.r.e = 0x56;
+        m.cpu.r.h = 0x00;
+        m.cpu.r.l = 0x0D;
+        m.cpu.r.sp = 0xFFFE;
+        m.cpu.r.pc = 0x0100;
+        m
+    }
+
     /// Load a ROM image into the cartridge. The controller (MBC0/MBC1) is
     /// selected from the header byte at 0x0147, so >32 KiB ROMs bank-switch.
     pub fn load_rom(&mut self, rom: &[u8]) {
@@ -260,6 +281,20 @@ mod tests {
         (stop, m.serial_text())
     }
 
+    /// Run a blargg ROM from an arbitrary path booted in **CGB mode**. Used for
+    /// CGB-aware ROMs (header CGB flag bit 7 set) that exercise the KEY1 speed
+    /// switch.
+    fn run_blargg_at_cgb(rel: &str) -> (RunStop, Option<String>) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../reference/test-suites/gb-test-roms")
+            .join(rel);
+        let rom =
+            std::fs::read(&path).unwrap_or_else(|_| panic!("blargg ROM must exist at {path:?}"));
+        let mut m = Machine::boot_cgb(&rom);
+        let stop = m.run_blargg(100_000_000);
+        (stop, m.serial_text())
+    }
+
     /// Run a mooneye ROM from the WLA-DX-built suite output (`<suite>/build/`).
     /// Returns (stop reason, Fibonacci-signature pass). The build is produced by
     /// `just mooneye-build` (WLA-DX); the test is skipped if the ROM is absent.
@@ -322,22 +357,19 @@ mod tests {
         );
     }
 
-    /// The COMBINED 64 KiB cpu_instrs.gb is an MBC1 cart. MBC1 ROM banking is
-    /// verified working (the runner maps bank 0 + bank 1 and executes banked
-    /// code: serial reaches `01:ok  02:ok  03`). It currently STOPs partway
-    /// through test 03 at a WRAM-resident routine (PC=0xC302, opcode 0x10),
-    /// which the combined runner copies to RAM and executes -- a path the 32 KiB
-    /// individual ROMs (all passing, incl. standalone `03-op sp,hl`) never take.
-    /// That WRAM-execution divergence is a separate CPU/timing edge tracked by
-    /// `rubc-aa2`, NOT a banking bug. Ignored until that ticket.
+    /// The COMBINED 64 KiB cpu_instrs.gb is a CGB-aware MBC1 cart (header CGB
+    /// flag $0143 = 0x80). It runs all 11 sub-tests across multiple ROM banks, so
+    /// passing it proves MBC1 ROM banking AND the CGB KEY1 speed switch: booted
+    /// in CGB mode, the runner does `LD A,1 ; LDH (KEY1),A ; STOP` to enter
+    /// double-speed, and STOP must perform the switch and resume rather than halt
+    /// (see `step_stop`). It is booted via `boot_cgb` for exactly this reason.
     #[test]
-    #[ignore = "combined cpu_instrs STOPs in WRAM-resident test 03 (rubc-aa2); MBC1 banking verified via 01/02/start-of-03 executing from banked ROM"]
     fn blargg_cpu_instrs_combined_mbc1() {
-        let (stop, text) = run_blargg_at("cpu_instrs/cpu_instrs.gb");
+        let (stop, text) = run_blargg_at_cgb("cpu_instrs/cpu_instrs.gb");
         let text = text.unwrap_or_default();
         assert!(
             text.contains("Passed"),
-            "combined cpu_instrs (MBC1 banking) should pass. stop={stop:?} serial={text:?}"
+            "combined cpu_instrs (MBC1 banking, CGB) should pass. stop={stop:?} serial={text:?}"
         );
     }
 

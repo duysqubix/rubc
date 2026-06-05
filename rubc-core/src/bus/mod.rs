@@ -44,7 +44,12 @@ pub trait CpuBus {
     fn ie(&self) -> u8;
     /// Clear one IF bit (during interrupt dispatch).
     fn clear_if_bit(&mut self, bit: u8);
-    /// Settle the CGB double-speed switch after a STOP.
+    /// True if a CGB double-speed switch is armed (KEY1 $FF4D bit 0 set). STOP
+    /// consults this: when armed, STOP performs the switch and resumes instead
+    /// of halting the CPU.
+    fn speed_switch_armed(&self) -> bool;
+    /// Settle the CGB double-speed switch after a STOP: toggle the speed and
+    /// clear the armed bit.
     fn finish_speed_switch(&mut self);
     /// Settle queued interrupts into IF at an instruction boundary. The CPU
     /// (which may be generic over `CpuBus`) calls this before polling
@@ -297,6 +302,13 @@ impl Bus {
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupts.if_ | 0xE0, // IF lives in interrupts, not io[]
+            0xFF4D if self.cgb.cgb_mode => {
+                // KEY1 (CGB only): bit 7 = current speed (1 = double), bit 0 =
+                // armed switch, remaining bits read as 1.
+                let speed = if self.cgb.double_speed { 0x80 } else { 0x00 };
+                speed | (self.io[0x4D] & 0x01) | 0x7E
+            }
+            0xFF4D => 0xFF, // KEY1 in DMG mode: open-bus (no speed switch)
             0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize],
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupts.ie,
@@ -315,6 +327,13 @@ impl Bus {
             0xFF04..=0xFF07 => self.timer.write(addr, value, &mut self.interrupts),
             0xFF46 => self.start_oam_dma(value),
             0xFF0F => self.interrupts.if_ = value | 0xE0, // IF lives in interrupts
+            0xFF4D => {
+                // KEY1: only the "prepare speed switch" bit (0) is writable, and
+                // only in CGB mode. DMG ignores KEY1 entirely (no speed switch).
+                if self.cgb.cgb_mode {
+                    self.io[0x4D] = (self.io[0x4D] & !0x01) | (value & 0x01);
+                }
+            }
             0xFF02 => {
                 // Serial control: writing bit 7 starts a transfer. With no link
                 // partner, capture the SB byte (the blargg result channel) and
@@ -364,9 +383,16 @@ impl CpuBus for Bus {
         self.interrupts.clear_bit(bit);
     }
 
+    fn speed_switch_armed(&self) -> bool {
+        // KEY1 ($FF4D) bit 0 = "prepare speed switch". DMG has no speed switch.
+        self.cgb.cgb_mode && self.io[0x4D] & 0x01 != 0
+    }
+
     fn finish_speed_switch(&mut self) {
         self.cgb.double_speed = !self.cgb.double_speed;
         self.cgb.t_phase = false;
+        // Clear the armed bit; bit 7 now reflects the (toggled) current speed.
+        self.io[0x4D] = if self.cgb.double_speed { 0x80 } else { 0x00 };
     }
 
     fn boundary(&mut self) {
@@ -481,6 +507,33 @@ mod tests {
         assert!(bus.cgb.double_speed, "KEY1 switch enables double-speed");
         bus.finish_speed_switch();
         assert!(!bus.cgb.double_speed, "second switch returns to normal");
+    }
+
+    #[test]
+    fn key1_arm_then_switch_resumes_and_reads_back_speed() {
+        // The CGB speed-switch idiom: write KEY1 bit 0 to arm, then STOP.
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        assert!(!bus.speed_switch_armed(), "not armed at power-on");
+        // Arm via a KEY1 write ($FF4D bit 0).
+        bus.poke(0xFF4D, 0x01);
+        assert!(bus.speed_switch_armed(), "KEY1 bit 0 arms the switch");
+        // STOP performs the switch: toggle speed + clear the armed bit.
+        bus.finish_speed_switch();
+        assert!(bus.cgb.double_speed, "switch enabled double-speed");
+        assert!(!bus.speed_switch_armed(), "armed bit cleared after switch");
+        // KEY1 now reads bit 7 = 1 (double speed), bit 0 = 0 (not armed).
+        assert_eq!(bus.peek(0xFF4D) & 0x81, 0x80, "KEY1 reflects double speed");
+    }
+
+    #[test]
+    fn key1_is_inert_in_dmg_mode() {
+        // DMG has no speed switch: KEY1 writes are ignored, never armed, and the
+        // register reads as open-bus 0xFF.
+        let mut bus = Bus::new(); // cgb_mode defaults to false
+        bus.poke(0xFF4D, 0x01);
+        assert!(!bus.speed_switch_armed(), "DMG: KEY1 cannot arm a switch");
+        assert_eq!(bus.peek(0xFF4D), 0xFF, "DMG: KEY1 reads open-bus 0xFF");
     }
 
     /// S6: the bus diag seam feeds `diag_record_mcycle!` end-to-end. The CPU

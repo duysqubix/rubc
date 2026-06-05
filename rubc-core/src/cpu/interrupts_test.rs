@@ -243,3 +243,48 @@ fn dispatch_priority_services_lowest_pending_bit_first() {
         "Timer is still pending for the next service"
     );
 }
+
+#[test]
+fn stop_with_armed_key1_in_cgb_switches_speed_and_resumes() {
+    // CGB speed-switch idiom: LD A,1 ; LDH (KEY1),A ; STOP ; NOP.
+    // STOP must perform the switch and RESUME (not halt).
+    let mut cpu = Cpu::new();
+    let mut bus = Bus::new();
+    bus.cgb.cgb_mode = true;
+    load_rom(&mut bus, &[0x3E, 0x01, 0xE0, 0x4D, 0x10, 0x00, 0x00]);
+    cpu.r.sp = 0xFFFE;
+    assert!(!bus.cgb.double_speed, "starts at normal speed");
+
+    run_one_instr(&mut cpu, &mut bus); // LD A,1
+    run_one_instr(&mut cpu, &mut bus); // LDH (KEY1),A  -> arms the switch
+    run_one_instr(&mut cpu, &mut bus); // STOP -> switch + resume
+
+    assert!(
+        matches!(cpu.mode, CpuMode::Running),
+        "armed STOP resumes (does not halt) in CGB mode, mode={:?}",
+        cpu.mode
+    );
+    assert!(bus.cgb.double_speed, "STOP performed the speed switch");
+}
+
+#[test]
+fn stop_in_dmg_halts_even_after_key1_write() {
+    // In DMG mode KEY1 is inert, so the same byte sequence must HALT at STOP.
+    let mut cpu = Cpu::new();
+    let mut bus = Bus::new(); // cgb_mode defaults to false (DMG)
+    load_rom(&mut bus, &[0x3E, 0x01, 0xE0, 0x4D, 0x10, 0x00, 0x00]);
+    cpu.r.sp = 0xFFFE;
+
+    run_one_instr(&mut cpu, &mut bus); // LD A,1
+    run_one_instr(&mut cpu, &mut bus); // LDH (KEY1),A  -> ignored in DMG
+    // STOP: drive a few M-cycles; the CPU must enter Stopped, not resume.
+    for _ in 0..4 {
+        cpu.step_m(&mut bus);
+    }
+    assert!(
+        matches!(cpu.mode, CpuMode::Stopped),
+        "DMG STOP halts the CPU, mode={:?}",
+        cpu.mode
+    );
+    assert!(!bus.cgb.double_speed, "DMG never switches speed");
+}

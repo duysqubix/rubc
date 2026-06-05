@@ -70,6 +70,9 @@ impl ApuStub {
 /// CGB clock/speed state.
 #[derive(Default)]
 pub struct CgbState {
+    /// True when running as a Game Boy Color. DMG has no speed switch, so KEY1
+    /// writes are inert and STOP always halts. Set by `Machine::boot_cgb`.
+    pub cgb_mode: bool,
     pub double_speed: bool,
     /// Toggles each T so PPU/APU advance every 2nd T in double-speed mode.
     pub t_phase: bool,

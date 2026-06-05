@@ -84,6 +84,11 @@ impl CpuBus for FlatBus {
         self.if_ &= !(1 << bit);
     }
 
+    fn speed_switch_armed(&self) -> bool {
+        // The flat vector model has no CGB speed switch.
+        false
+    }
+
     fn finish_speed_switch(&mut self) {
         // No-op: the flat vector model has no clock domains.
     }
