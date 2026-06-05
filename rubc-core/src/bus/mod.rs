@@ -92,7 +92,11 @@ struct OamDma {
 pub struct Bus {
     // Memory regions (flat placeholders; banking lands in MBC/CGB waves).
     pub cart: Cartridge,
-    pub wram: [u8; 0x2000],
+    /// WRAM: 8 banks of 4 KiB. DMG uses banks 0-1 flat; CGB fixes bank 0 at
+    /// C000-CFFF and selects banks 1-7 at D000-DFFF via SVBK ($FF70).
+    pub wram: [[u8; 0x1000]; 8],
+    /// Active high WRAM bank (SVBK $FF70 bits 0-2; 0 remaps to 1). DMG: always 1.
+    pub svbk: u8,
     pub hram: [u8; 0x7F],
     /// VRAM: 2 banks of 8 KiB. DMG uses only bank 0; CGB selects via VBK ($FF4F).
     pub vram: [[u8; 0x2000]; 2],
@@ -123,7 +127,8 @@ impl Default for Bus {
     fn default() -> Self {
         Self {
             cart: Cartridge::default(),
-            wram: [0; 0x2000],
+            wram: [[0; 0x1000]; 8],
+            svbk: 1,
             hram: [0; 0x7F],
             vram: [[0; 0x2000]; 2],
             vbk: 0,
@@ -264,6 +269,21 @@ impl Bus {
         self.peek(addr)
     }
 
+    /// Map a WRAM address (0xC000-0xDFFF or its 0xE000-0xFDFF echo) to a
+    /// (bank, offset) pair. C000-CFFF (echo E000-EFFF) is always bank 0; D000-
+    /// DFFF (echo F000-FDFF) selects `svbk` (banks 1-7). DMG keeps svbk=1 so the
+    /// low 8 KiB behave as a flat bank0+bank1 pair, exactly as before.
+    #[inline]
+    fn wram_index(&self, addr: u16) -> (usize, usize) {
+        // Fold the echo region (E000-FDFF) down onto C000-DDFF.
+        let a = if addr >= 0xE000 { addr - 0x2000 } else { addr };
+        if a < 0xD000 {
+            (0, (a - 0xC000) as usize)
+        } else {
+            (self.svbk as usize, (a - 0xD000) as usize)
+        }
+    }
+
     // ---- latched access (sample at END of M) -------------------------------
 
     fn cpu_read_latched(&mut self, addr: u16) -> u8 {
@@ -318,8 +338,10 @@ impl Bus {
         match addr {
             0x0000..=0x7FFF => self.cart.read(addr),
             0x8000..=0x9FFF => self.vram[self.vbk as usize][(addr - 0x8000) as usize],
-            0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize],
-            0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize], // echo
+            0xC000..=0xFDFF => {
+                let (bank, off) = self.wram_index(addr);
+                self.wram[bank][off]
+            }
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupts.if_ | 0xE0, // IF lives in interrupts, not io[]
@@ -336,6 +358,10 @@ impl Bus {
             }
             0xFF4D => 0xFF, // KEY1 in DMG mode: open-bus (no speed switch)
             0xFF4F => 0xFF, // VBK in DMG mode: open-bus (no VRAM banking)
+            0xFF70 if self.cgb.cgb_mode => self.svbk | 0xF8, // SVBK: 3 bits valid
+            0xFF70 => 0xFF, // SVBK in DMG mode: open-bus (no WRAM banking)
+            0xFF6C if self.cgb.cgb_mode => (self.io[0x6C] & 0x01) | 0xFE, // OPRI bit0
+            0xFF6C => 0xFF, // OPRI in DMG mode: open-bus
             0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize],
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupts.ie,
@@ -348,8 +374,10 @@ impl Bus {
     pub fn poke(&mut self, addr: u16, value: u8) {
         match addr {
             0x8000..=0x9FFF => self.vram[self.vbk as usize][(addr - 0x8000) as usize] = value,
-            0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize] = value,
-            0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize] = value,
+            0xC000..=0xFDFF => {
+                let (bank, off) = self.wram_index(addr);
+                self.wram[bank][off] = value;
+            }
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
             0xFF04..=0xFF07 => self.timer.write(addr, value, &mut self.interrupts),
             0xFF46 => self.start_oam_dma(value),
@@ -362,6 +390,20 @@ impl Bus {
                 // VBK (CGB only): bit 0 selects the active 8 KiB VRAM bank.
                 if self.cgb.cgb_mode {
                     self.vbk = value & 0x01;
+                }
+            }
+            0xFF70 => {
+                // SVBK (CGB only): bits 0-2 select the D000-DFFF WRAM bank;
+                // a written 0 maps to bank 1.
+                if self.cgb.cgb_mode {
+                    let b = value & 0x07;
+                    self.svbk = if b == 0 { 1 } else { b };
+                }
+            }
+            0xFF6C => {
+                // OPRI (CGB only): object priority mode flag (bit 0).
+                if self.cgb.cgb_mode {
+                    self.io[0x6C] = value & 0x01;
                 }
             }
             0xFF4D => {
@@ -605,6 +647,81 @@ mod tests {
         assert_eq!(bus.vbk, 0, "DMG: VBK write ignored, bank stays 0");
         assert_eq!(bus.peek(0x8000), 0xAA, "DMG: still reading bank 0");
         assert_eq!(bus.peek(0xFF4F), 0xFF, "DMG: VBK reads open-bus 0xFF");
+    }
+
+    #[test]
+    fn svbk_selects_high_wram_bank_in_cgb() {
+        // CGB: SVBK ($FF70) bits 0-2 select the D000-DFFF WRAM bank (0->1). C000-
+        // CFFF is always bank 0; the high banks are independent storage.
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        // Bank 1 (default) at D000: write a byte.
+        bus.poke(0xFF70, 0x01);
+        bus.poke(0xD000, 0xAA);
+        // Switch to bank 2: D000 is a distinct page.
+        bus.poke(0xFF70, 0x02);
+        assert_eq!(bus.peek(0xD000), 0x00, "bank 2 is a distinct WRAM page");
+        bus.poke(0xD000, 0xBB);
+        assert_eq!(bus.peek(0xD000), 0xBB);
+        // Back to bank 1: original byte survives.
+        bus.poke(0xFF70, 0x01);
+        assert_eq!(bus.peek(0xD000), 0xAA, "bank 1 retained its byte");
+        // C000-CFFF is always bank 0, unaffected by SVBK.
+        bus.poke(0xC000, 0xCC);
+        bus.poke(0xFF70, 0x05);
+        assert_eq!(bus.peek(0xC000), 0xCC, "C000 is fixed bank 0");
+        // SVBK 0 remaps to 1.
+        bus.poke(0xFF70, 0x00);
+        assert_eq!(bus.svbk, 1, "SVBK 0 remaps to bank 1");
+        // Read-back: 3 bits valid, upper bits set.
+        bus.poke(0xFF70, 0x03);
+        assert_eq!(bus.peek(0xFF70), 0xFB, "SVBK reads bits0-2 | 0xF8");
+    }
+
+    #[test]
+    fn svbk_is_inert_in_dmg_mode() {
+        // DMG has no WRAM banking: SVBK writes ignored (stays 1), reads open-bus.
+        let mut bus = Bus::new();
+        bus.poke(0xD000, 0xAA);
+        bus.poke(0xFF70, 0x03); // ignored in DMG
+        assert_eq!(bus.svbk, 1, "DMG: SVBK write ignored, stays bank 1");
+        assert_eq!(bus.peek(0xD000), 0xAA, "DMG: still reading bank 1");
+        assert_eq!(bus.peek(0xFF70), 0xFF, "DMG: SVBK reads open-bus 0xFF");
+    }
+
+    #[test]
+    fn wram_echo_region_mirrors_banks() {
+        // The echo region E000-FDFF mirrors C000-FDFF (-0x2000): E000-EFFF maps
+        // bank 0 (= C000-CFFF), F000-FDFF maps the svbk bank (= D000-DDFF).
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        bus.poke(0xFF70, 0x02); // svbk = bank 2 at D000
+        // Bank 0 via C000, read back via the E000 echo.
+        bus.poke(0xC000, 0xC0);
+        assert_eq!(bus.peek(0xE000), 0xC0, "E000 echoes C000 (bank 0)");
+        // svbk bank via D000, read back via the F000 echo.
+        bus.poke(0xD000, 0xD2);
+        assert_eq!(bus.peek(0xF000), 0xD2, "F000 echoes D000 (svbk bank)");
+        // Writing through the echo updates the underlying bank.
+        bus.poke(0xE001, 0x11);
+        assert_eq!(bus.peek(0xC001), 0x11, "echo write reaches bank 0");
+        // The echo tail FDFF maps D000+0xDFF in the svbk bank.
+        bus.poke(0xFDFF, 0x22);
+        assert_eq!(bus.peek(0xDDFF), 0x22, "FDFF echoes DDFF (svbk bank)");
+    }
+
+    #[test]
+    fn opri_is_cgb_only() {
+        // OPRI ($FF6C) bit 0 is read/write in CGB, open-bus in DMG.
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        bus.poke(0xFF6C, 0x01);
+        assert_eq!(bus.peek(0xFF6C) & 0x01, 0x01, "CGB: OPRI bit 0 stored");
+        bus.poke(0xFF6C, 0x00);
+        assert_eq!(bus.peek(0xFF6C) & 0x01, 0x00);
+        let mut dmg = Bus::new();
+        dmg.poke(0xFF6C, 0x01); // ignored
+        assert_eq!(dmg.peek(0xFF6C), 0xFF, "DMG: OPRI reads open-bus 0xFF");
     }
 
     /// S6: the bus diag seam feeds `diag_record_mcycle!` end-to-end. The CPU
