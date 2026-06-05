@@ -151,16 +151,51 @@ impl Machine {
                 return RunStop::Stuck;
             }
             self.step_instruction();
+            // Channel 1: serial transcript ("Passed"/"Failed").
             if let Some(text) = self.serial_text() {
-                if text.contains("Passed") {
-                    return RunStop::BlarggDone;
-                }
-                if text.contains("Failed") {
+                if text.contains("Passed") || text.contains("Failed") {
                     return RunStop::BlarggDone;
                 }
             }
+            // Channel 2: cart-RAM protocol. Some blargg ROMs (e.g. mem_timing-2,
+            // dmg_sound) report to $A000-$A003 instead of serial: once the
+            // signature $A001-3 == DE B0 61 is present, $A000 holds the status
+            // (0x80 = still running; any other value = final result code).
+            if self.blargg_cart_ram_done().is_some() {
+                return RunStop::BlarggDone;
+            }
         }
         RunStop::Timeout
+    }
+
+    /// If a blargg cart-RAM result is finalized, return Some(status_code)
+    /// (0x00 = pass). Returns None while the signature is absent or status is
+    /// still 0x80 (running).
+    fn blargg_cart_ram_done(&self) -> Option<u8> {
+        let sig = [
+            self.bus.peek(0xA001),
+            self.bus.peek(0xA002),
+            self.bus.peek(0xA003),
+        ];
+        if sig != [0xDE, 0xB0, 0x61] {
+            return None;
+        }
+        let status = self.bus.peek(0xA000);
+        if status == 0x80 {
+            None
+        } else {
+            Some(status)
+        }
+    }
+
+    /// True if a finalized blargg result (serial or cart-RAM) indicates PASS.
+    pub fn blargg_passed(&self) -> bool {
+        if let Some(status) = self.blargg_cart_ram_done() {
+            return status == 0x00;
+        }
+        self.serial_text()
+            .map(|t| t.contains("Passed"))
+            .unwrap_or(false)
     }
 
     /// Run a mooneye ROM: it ends at the `LD B,B` (0x40) magic breakpoint, after
@@ -295,6 +330,33 @@ mod tests {
         let mut m = Machine::boot_dmg(&rom);
         let stop = m.run_blargg(100_000_000);
         (stop, m.serial_text())
+    }
+
+    /// Run a blargg ROM and report PASS via either channel (serial or the
+    /// cart-RAM $A000 protocol). Used for ROMs like mem_timing-2 that report to
+    /// cart RAM instead of serial.
+    fn blargg_passes_at(rel: &str) -> bool {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../reference/test-suites/gb-test-roms")
+            .join(rel);
+        let Ok(rom) = std::fs::read(&path) else {
+            return true; // ROM absent on this checkout -> skip (don't fail CI)
+        };
+        let mut m = Machine::boot_dmg(&rom);
+        m.run_blargg(100_000_000);
+        m.blargg_passed()
+    }
+
+    #[test]
+    fn blargg_mem_timing_passes() {
+        // mem_timing reports via serial.
+        assert!(blargg_passes_at("mem_timing/mem_timing.gb"), "mem_timing should pass");
+    }
+
+    #[test]
+    fn blargg_mem_timing_2_passes() {
+        // mem_timing-2 reports via the cart-RAM $A000 protocol, not serial.
+        assert!(blargg_passes_at("mem_timing-2/mem_timing.gb"), "mem_timing-2 should pass");
     }
 
     /// Run a blargg ROM from an arbitrary path booted in **CGB mode**. Used for

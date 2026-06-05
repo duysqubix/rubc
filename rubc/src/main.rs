@@ -157,7 +157,7 @@ fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
     let serial = machine.serial_text().unwrap_or_default();
     let passed = match stop {
         RunStop::MooneyeBreakpoint => machine.mooneye_passed(),
-        RunStop::BlarggDone => serial.contains("Passed"),
+        RunStop::BlarggDone => machine.blargg_passed(),
         RunStop::Timeout | RunStop::Stuck => false,
     };
 
