@@ -93,9 +93,8 @@ impl Machine {
         self.bus.cart = crate::bus::Cartridge::from_rom(rom);
     }
 
-    /// Run one full instruction (fetch through the next boundary). Returns the
-    /// opcode byte that was about to execute at the start, for breakpoint checks.
-    fn step_instruction(&mut self) {
+    /// Run one full instruction (fetch through the next boundary).
+    pub fn step_instruction(&mut self) {
         let mut guard = 0;
         loop {
             self.cpu.step_m(&mut self.bus);
@@ -106,6 +105,23 @@ impl Machine {
             if guard > 64 {
                 break;
             }
+        }
+    }
+
+    /// Run the machine until the PPU enters VBlank (one full frame), so the
+    /// `Ppu::framebuffer` holds a freshly-rendered image. Bounded by a generous
+    /// instruction guard so a stuck ROM cannot hang the GUI loop.
+    pub fn step_frame(&mut self) {
+        // Step out of any in-progress VBlank first so we stop on the NEXT entry.
+        let mut guard: u32 = 0;
+        while self.bus.ppu.mode == crate::bus::ppu::mode::VBLANK && guard < 200_000 {
+            self.step_instruction();
+            guard += 1;
+        }
+        guard = 0;
+        while self.bus.ppu.mode != crate::bus::ppu::mode::VBLANK && guard < 200_000 {
+            self.step_instruction();
+            guard += 1;
         }
     }
 

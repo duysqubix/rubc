@@ -1,145 +1,192 @@
 #![deny(clippy::all)]
 #![forbid(unsafe_code)]
 
+//! rubc command-line interface.
+//!
+//! Subcommands (clap):
+//! - `run ROM [opts]` boots a ROM on the M-cycle `Machine` core; windowed by
+//!   default, `--no-gui` for headless test ROMs.
+//! - `cartdump ROM [opts]` prints the cartridge header + a few derived facts.
+//! - bare `ROM [opts]` is shorthand for `run ROM`.
+
 use crate::gui::Framework;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use pixels::Pixels;
-use rayon::prelude::*;
-use rubc_core::globals::ROM_BANK_SIZE;
+use rubc_core::bus::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use rubc_core::logger;
-use std::sync::Mutex;
+use rubc_core::machine::{Machine, RunStop};
 use std::time;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, VirtualKeyCode};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
+
 mod gui;
 
-#[derive(Parser, Debug)]
-struct Args {
-    rom_file: String,
-
-    #[clap(long, help = "Disassemble the ROM as <ROM_FILE>.txt and exit.")]
-    disassemble: bool,
-
-    #[clap(long, help = "Print CPU state between PC addresses. i.e. --breakpoints=0x100,0x150,0x170-0x180", num_args=1.., value_terminator=";", value_delimiter=',',value_name="PCn")]
-    breakpoints: Vec<String>,
-
-    #[clap(
-        long,
-        help = "Panic if the emulator gets stuck processing instructions."
-    )]
-    panic_on_stuck: bool,
-
-    #[clap(long, help = "Run the emulator in test mode.")]
-    test_mode: bool,
-}
-
-const WIDTH: u32 = 160;
-const HEIGHT: u32 = 144;
-const SCALE: f32 = 2.0;
-const TITLE: &str = "RuBC";
+const WIDTH: u32 = SCREEN_WIDTH as u32;
+const HEIGHT: u32 = SCREEN_HEIGHT as u32;
+const SCALE: f32 = 3.0;
+const TITLE: &str = "rubc";
 const FPS_US: u64 = 16_740;
-const CPU_HZ: u64 = 4_194_304;
+/// Generous instruction budget for headless test-ROM runs.
+const HEADLESS_MAX_INSTRUCTIONS: u64 = 250_000_000;
 
-fn parse_cpu_log_arg<'a>(addresses: &'a Vec<String>) -> Vec<usize> {
-    let result = Mutex::new(Vec::<usize>::new());
+#[derive(Parser, Debug)]
+#[command(name = "rubc", version, about = "A cycle-accurate Game Boy (DMG/CGB) emulator")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
 
-    let remove_prefixes = |s: &'a str| -> &'a str {
-        if s.starts_with("0x") {
-            &s[2..]
-        } else if s.starts_with("$") {
-            &s[1..]
-        } else {
-            &s
-        }
-    };
+    /// Shorthand: a bare ROM path behaves like `rubc run ROM` (when no
+    /// subcommand is given).
+    #[arg(value_name = "ROM")]
+    rom: Option<String>,
 
-    let flatten_expr = |addr: u16, bank: usize| -> usize { (bank * ROM_BANK_SIZE) + addr as usize };
-    let str_to_usize = |s: &'a str| -> usize {
-        usize::from_str_radix(s, 16).expect(&format!("Invalid format: {:?}", s))
-    };
-
-    addresses.par_iter().for_each(|address| {
-        if address.contains('-') {
-            // let range: Vec<&'a str> = address.split('-').map(|a| remove_prefixes(a)).collect();
-            let range: Vec<&'a str> = address.split('-').collect();
-            if range.len() != 2 {
-                panic!("Invalid address range: {:?}", address);
-            }
-
-            let range1 = range[0];
-            let range2 = range[1];
-
-            let pair1 = range1.split(':').collect::<Vec<&str>>();
-            let pair2 = range2.split(':').collect::<Vec<&str>>();
-
-            if pair1.len() != 2 || pair2.len() != 2 {
-                panic!("Invalid address range: {:?}", address);
-            }
-
-            let bank1 = str_to_usize(remove_prefixes(pair1[0]));
-            let addr1 = str_to_usize(remove_prefixes(pair1[1]));
-            let addr1 = flatten_expr(addr1 as u16, bank1);
-
-            let bank2 = str_to_usize(remove_prefixes(pair2[0]));
-            let addr2 = str_to_usize(remove_prefixes(pair2[1]));
-            let addr2 = flatten_expr(addr2 as u16, bank2);
-
-            for continugous_address in addr1..addr2 {
-                result.lock().unwrap().push(continugous_address);
-            }
-        } else {
-            let pair = address.split(':').collect::<Vec<&str>>();
-            if pair.len() == 2 {
-                let bank = u16::from_str_radix(remove_prefixes(pair[0]), 16)
-                    .expect(&format!("Invalid address: {:?}", address));
-
-                let addr = u16::from_str_radix(remove_prefixes(pair[1]), 16)
-                    .expect(&format!("Invalid address: {:?}", address));
-
-                let continugous_address = (bank as usize * ROM_BANK_SIZE) + addr as usize;
-                result.lock().unwrap().push(continugous_address);
-            } else {
-                // atempt to parse as a single address without bank
-                let addr = u16::from_str_radix(remove_prefixes(address), 16)
-                    .expect(&format!("Invalid address: {:?}", address));
-                result.lock().unwrap().push(addr as usize);
-            }
-        }
-    });
-    result.into_inner().unwrap()
+    #[command(flatten)]
+    run_opts: RunOpts,
 }
 
-fn main() -> rubc_core::Result<()> {
-    logger::setup_logger()?;
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Boot a ROM and run it (windowed unless `--no-gui`).
+    Run {
+        /// Path to the `.gb` / `.gbc` ROM image.
+        rom: String,
+        #[command(flatten)]
+        opts: RunOpts,
+    },
+    /// Print the cartridge header (title, MBC, ROM/RAM size, CGB flag).
+    Cartdump {
+        /// Path to the ROM image.
+        rom: String,
+        /// Print raw header bytes alongside the decoded fields.
+        #[arg(long)]
+        raw: bool,
+        /// Write the dump to a file instead of stdout.
+        #[arg(short, long, value_name = "FILE")]
+        output: Option<String>,
+    },
+}
 
-    let args = Args::parse();
-    let mut emulator = Rubc::new(&args)?;
-    if args.disassemble {
-        log::info!("Dumping instruction set");
-        let x = rubc_core::utils::disassemble(&emulator.gameboy.cart);
-        // print to file
-        std::fs::write(format!("{}.txt", args.rom_file), x)?;
-        log::debug!("Dumped instruction set to {}.txt", args.rom_file);
-        println!("Dumped instruction set to {}.txt", args.rom_file);
-        return Ok(());
+/// Options shared by `run` and the bare-ROM shorthand.
+#[derive(clap::Args, Debug, Default)]
+struct RunOpts {
+    /// Run headless (no window) and report the test-ROM result. For Blargg /
+    /// Mooneye acceptance ROMs in CI.
+    #[arg(long)]
+    no_gui: bool,
+
+    /// Force DMG mode regardless of the cartridge CGB flag.
+    #[arg(long, conflicts_with = "force_cgb")]
+    force_dmg: bool,
+
+    /// Force CGB mode regardless of the cartridge CGB flag.
+    #[arg(long)]
+    force_cgb: bool,
+
+    /// Headless pass-detection mode for test ROMs.
+    #[arg(long, value_enum, default_value_t = TestKind::Auto)]
+    test: TestKind,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum TestKind {
+    /// Pick blargg (serial) or mooneye (register signature) from the result.
+    #[default]
+    Auto,
+    /// Blargg ROMs: pass/fail reported on the serial port.
+    Blargg,
+    /// Mooneye ROMs: pass = Fibonacci register signature at `LD B,B`.
+    Mooneye,
+}
+
+fn main() -> anyhow::Result<()> {
+    logger::setup_logger().ok();
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Command::Run { rom, opts }) => run(&rom, &opts),
+        Some(Command::Cartdump { rom, raw, output }) => cartdump(&rom, raw, output.as_deref()),
+        None => match cli.rom {
+            Some(rom) => run(&rom, &cli.run_opts), // bare-ROM shorthand
+            None => {
+                eprintln!("error: no ROM given. Try `rubc run <ROM>` or `rubc --help`.");
+                std::process::exit(2);
+            }
+        },
     }
+}
 
+/// Build a `Machine` from a ROM file, honoring the DMG/CGB boot override.
+fn boot(rom_path: &str, opts: &RunOpts) -> anyhow::Result<Machine> {
+    let rom = std::fs::read(rom_path)
+        .map_err(|e| anyhow::anyhow!("failed to read ROM {rom_path:?}: {e}"))?;
+    let cgb_flag = rom.get(0x0143).is_some_and(|f| f & 0x80 != 0);
+    let cgb = if opts.force_dmg {
+        false
+    } else if opts.force_cgb {
+        true
+    } else {
+        cgb_flag
+    };
+    Ok(if cgb {
+        Machine::boot_cgb(&rom)
+    } else {
+        Machine::boot_dmg(&rom)
+    })
+}
+
+fn run(rom_path: &str, opts: &RunOpts) -> anyhow::Result<()> {
+    let mut machine = boot(rom_path, opts)?;
+    if opts.no_gui {
+        return run_headless(&mut machine, opts);
+    }
+    run_windowed(machine)
+}
+
+/// Headless: run a test ROM to its terminal condition and report pass/fail.
+fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
+    let kind = opts.test;
+    let stop = match kind {
+        TestKind::Mooneye => machine.run_mooneye(HEADLESS_MAX_INSTRUCTIONS),
+        TestKind::Blargg | TestKind::Auto => machine.run_blargg(HEADLESS_MAX_INSTRUCTIONS),
+    };
+
+    let serial = machine.serial_text().unwrap_or_default();
+    let passed = match stop {
+        RunStop::MooneyeBreakpoint => machine.mooneye_passed(),
+        RunStop::BlarggDone => serial.contains("Passed"),
+        RunStop::Timeout | RunStop::Stuck => false,
+    };
+
+    if !serial.is_empty() {
+        println!("{}", serial.trim_end());
+    }
+    println!(
+        "result: {} (stop={stop:?})",
+        if passed { "PASS" } else { "FAIL" }
+    );
+    if passed {
+        Ok(())
+    } else {
+        std::process::exit(1);
+    }
+}
+
+/// Windowed: run the emulator and render the PPU framebuffer to the window.
+fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
 
     let window = {
-        let width = WIDTH as f64 * SCALE as f64;
-        let height = HEIGHT as f64 * SCALE as f64;
-        let size = LogicalSize::new(width, height);
+        let size = LogicalSize::new(WIDTH as f64 * SCALE as f64, HEIGHT as f64 * SCALE as f64);
         WindowBuilder::new()
             .with_title(TITLE)
             .with_inner_size(size)
-            .build(&event_loop)
-            .unwrap()
+            .with_min_inner_size(LogicalSize::new(WIDTH as f64, HEIGHT as f64))
+            .build(&event_loop)?
     };
 
     let (mut pixels, mut framework) = {
@@ -154,129 +201,164 @@ fn main() -> rubc_core::Result<()> {
             window.scale_factor() as f32,
             &pixels,
         );
-
         (pixels, framework)
     };
 
-    // panic!();
     let fps_target = time::Duration::from_micros(FPS_US);
 
     event_loop.run(move |event, _, control_flow| {
-        // Handle input events
         if input.update(&event) {
             let now = time::Instant::now();
 
-            // Close events
             if input.key_pressed(VirtualKeyCode::Escape) || input.close_requested() {
                 *control_flow = ControlFlow::Exit;
                 return;
             }
-
-            // Update the scale factor
             if let Some(scale_factor) = input.scale_factor() {
                 framework.scale_factor(scale_factor);
             }
-
-            // Resize the window
             if let Some(size) = input.window_resized() {
                 if let Err(err) = pixels.resize_surface(size.width, size.height) {
-                    log::error!("Error resizing pixels: {}", err);
+                    log::error!("pixels.resize_surface: {err}");
                     *control_flow = ControlFlow::Exit;
                     return;
                 }
                 framework.resize(size.width, size.height);
             }
 
-            // Update internal state and request a redraw
-            emulator.update();
+            // Advance one full frame of emulation, then present it.
+            machine.step_frame();
             window.request_redraw();
 
             let elapsed = now.elapsed();
             if elapsed < fps_target {
                 std::thread::sleep(fps_target - elapsed);
             }
-            window.set_title(&format!(
-                "{} FPS:{:.1}",
-                TITLE,
-                1.0 / now.elapsed().as_secs_f64()
-            ));
+            window.set_title(&format!("{TITLE}  {:.0} FPS", 1.0 / now.elapsed().as_secs_f64()));
         }
 
         match event {
-            Event::WindowEvent { event, .. } => {
-                framework.handle_event(&event);
-            }
+            Event::WindowEvent { event, .. } => framework.handle_event(&event),
             Event::RedrawRequested(_) => {
-                // Draw the world
-                emulator.draw(pixels.frame_mut());
-
-                // Prepare egui
+                draw_framebuffer(&machine, pixels.frame_mut());
                 framework.prepare(&window);
-
-                // Render everything together
                 let render_result = pixels.render_with(|encoder, render_target, context| {
-                    // Render the world texture
                     context.scaling_renderer.render(encoder, render_target);
-
-                    // Render egui
                     framework.render(encoder, render_target, context);
-
                     Ok(())
                 });
-
-                // Basic error handling
                 if let Err(err) = render_result {
-                    // log_error("pixels.render", err);
-                    log::error!("Error rendering pixels: {}", err);
+                    log::error!("pixels.render: {err}");
                     *control_flow = ControlFlow::Exit;
                 }
             }
             _ => {}
         }
     });
-} // Add a closing parenthesis here
-
-struct Rubc {
-    gameboy: rubc_core::gameboy::Gameboy,
 }
 
-impl Rubc {
-    fn new(args: &Args) -> anyhow::Result<Self> {
-        let mut builder = rubc_core::gameboy::GameboyBuilder::new().with_cart(&args.rom_file)?;
-        if args.breakpoints.len() > 0 {
-            log::info!("Logging CPU state at PC addresses: {:?}", args.breakpoints);
-            let mut breakpoints = parse_cpu_log_arg(&args.breakpoints);
-            breakpoints.sort();
-            breakpoints.dedup();
-            log::debug!("Parsed breakpoints: {:x?}", breakpoints);
-            builder = builder.with_cpu_breakpoints(breakpoints);
-        }
+/// The 4 DMG shades (lightest -> darkest) as RGBA, applied through BGP ($FF47).
+const DMG_SHADES: [[u8; 4]; 4] = [
+    [0xE0, 0xF8, 0xD0, 0xFF], // 0: lightest
+    [0x88, 0xC0, 0x70, 0xFF], // 1
+    [0x34, 0x68, 0x56, 0xFF], // 2
+    [0x08, 0x18, 0x20, 0xFF], // 3: darkest
+];
 
-        if args.panic_on_stuck {
-            log::warn!("Panic on stuck mode enabled");
-            builder = builder.panic_on_stuck();
-        }
+/// Map the PPU's raw 2-bit framebuffer through the BG palette (BGP, $FF47) into
+/// the RGBA `pixels` buffer.
+fn draw_framebuffer(machine: &Machine, frame: &mut [u8]) {
+    let bgp = machine.bus.peek(0xFF47);
+    let fb = &machine.bus.ppu.framebuffer;
+    for (px, &raw) in frame.chunks_exact_mut(4).zip(fb.iter()) {
+        // BGP maps each 2-bit color index to a shade: bits [1:0]=idx0, [3:2]=idx1...
+        let shade = (bgp >> (raw * 2)) & 0x03;
+        px.copy_from_slice(&DMG_SHADES[shade as usize]);
+    }
+}
 
-        if args.test_mode {
-            log::info!("Running in test mode");
-            builder = builder.enable_test_mode();
+/// `cartdump`: decode and print the cartridge header.
+fn cartdump(rom_path: &str, raw: bool, output: Option<&str>) -> anyhow::Result<()> {
+    let rom = std::fs::read(rom_path)
+        .map_err(|e| anyhow::anyhow!("failed to read ROM {rom_path:?}: {e}"))?;
+
+    let mut out = String::new();
+    let title: String = rom
+        .get(0x0134..=0x0143)
+        .unwrap_or(&[])
+        .iter()
+        .take_while(|&&b| b != 0)
+        .filter(|&&b| (0x20..0x7F).contains(&b))
+        .map(|&b| b as char)
+        .collect();
+    let cgb = rom.get(0x0143).copied().unwrap_or(0);
+    let cart_type = rom.get(0x0147).copied().unwrap_or(0);
+    let rom_code = rom.get(0x0148).copied().unwrap_or(0);
+    let ram_code = rom.get(0x0149).copied().unwrap_or(0);
+
+    out.push_str(&format!("file:      {rom_path}\n"));
+    out.push_str(&format!("size:      {} bytes ({} KiB)\n", rom.len(), rom.len() / 1024));
+    out.push_str(&format!("title:     {title}\n"));
+    out.push_str(&format!(
+        "cgb flag:  {cgb:#04X} ({})\n",
+        match cgb & 0xC0 {
+            0x80 => "CGB-enhanced",
+            0xC0 => "CGB-only",
+            _ => "DMG",
         }
-        Ok(Rubc {
-            gameboy: builder.build(),
-        })
+    ));
+    out.push_str(&format!("cart type: {cart_type:#04X} ({})\n", cart_type_name(cart_type)));
+    out.push_str(&format!("rom size:  {rom_code:#04X} ({})\n", rom_size_str(rom_code)));
+    out.push_str(&format!("ram size:  {ram_code:#04X} ({})\n", ram_size_str(ram_code)));
+
+    if raw {
+        out.push_str("\nheader bytes 0x0100-0x014F:\n");
+        for (i, chunk) in rom.get(0x0100..=0x014F).unwrap_or(&[]).chunks(16).enumerate() {
+            let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02X}")).collect();
+            out.push_str(&format!("  {:04X}: {}\n", 0x0100 + i * 16, hex.join(" ")));
+        }
     }
 
-    fn update(&mut self) {
-        let cycles = CPU_HZ as f64 * ((FPS_US as f64) / 1_000_000.0);
-        for _ in 0..cycles as u64 {
-            self.gameboy.tick().unwrap();
+    match output {
+        Some(path) => {
+            std::fs::write(path, &out)?;
+            println!("wrote cartridge dump to {path}");
         }
-        // log::trace!("processed {} cycles", cycles as u64);
+        None => print!("{out}"),
     }
-    fn draw(&self, frame: &mut [u8]) {
-        for (i, pixel) in frame.chunks_exact_mut(4).enumerate() {
-            let color = if i % 2 == 0 { 0 } else { i & 0xFF };
-            pixel.copy_from_slice(&[color as u8, color as u8, color as u8, 255]);
-        }
+    Ok(())
+}
+
+fn cart_type_name(t: u8) -> &'static str {
+    match t {
+        0x00 => "ROM ONLY",
+        0x01 => "MBC1",
+        0x02 => "MBC1+RAM",
+        0x03 => "MBC1+RAM+BATTERY",
+        0x05 => "MBC2",
+        0x06 => "MBC2+BATTERY",
+        0x08 => "ROM+RAM",
+        0x09 => "ROM+RAM+BATTERY",
+        0x0F..=0x13 => "MBC3",
+        0x19..=0x1E => "MBC5",
+        _ => "unknown / unsupported",
+    }
+}
+
+fn rom_size_str(code: u8) -> String {
+    match code {
+        0x00..=0x08 => format!("{} KiB, {} banks", 32 << code, 2usize << code),
+        _ => "unknown".to_string(),
+    }
+}
+
+fn ram_size_str(code: u8) -> &'static str {
+    match code {
+        0x00 => "none",
+        0x02 => "8 KiB (1 bank)",
+        0x03 => "32 KiB (4 banks)",
+        0x04 => "128 KiB (16 banks)",
+        0x05 => "64 KiB (8 banks)",
+        _ => "unknown",
     }
 }

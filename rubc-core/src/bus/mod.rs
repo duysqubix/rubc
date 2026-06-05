@@ -214,11 +214,13 @@ impl Bus {
             // dot-accurate tests before the CGB timing wave.
             self.cgb.t_phase = !self.cgb.t_phase;
             if self.cgb.t_phase {
-                self.ppu.tick_dot(&mut self.interrupts);
+                self.ppu
+                    .tick_dot(&mut self.interrupts, &self.vram[0], &self.oam);
                 self.apu.tick_t();
             }
         } else {
-            self.ppu.tick_dot(&mut self.interrupts);
+            self.ppu
+                .tick_dot(&mut self.interrupts, &self.vram[0], &self.oam);
             self.apu.tick_t();
         }
     }
@@ -347,8 +349,12 @@ impl Bus {
             0xFF0F => self.interrupts.if_ | 0xE0, // IF lives in interrupts, not io[]
             0xFF40 => self.ppu.read_lcdc(),
             0xFF41 => self.ppu.read_stat(),
+            0xFF42 => self.ppu.read_scy(),
+            0xFF43 => self.ppu.read_scx(),
             0xFF44 => self.ppu.read_ly(),
             0xFF45 => self.ppu.read_lyc(),
+            0xFF4A => self.ppu.read_wy(),
+            0xFF4B => self.ppu.read_wx(),
             0xFF4F if self.cgb.cgb_mode => self.vbk | 0xFE, // VBK: only bit 0 valid
             0xFF4D if self.cgb.cgb_mode => {
                 // KEY1 (CGB only): bit 7 = current speed (1 = double), bit 0 =
@@ -384,8 +390,12 @@ impl Bus {
             0xFF0F => self.interrupts.if_ = value | 0xE0, // IF lives in interrupts
             0xFF40 => self.ppu.write_lcdc(value, &mut self.interrupts),
             0xFF41 => self.ppu.write_stat(value, &mut self.interrupts),
+            0xFF42 => self.ppu.write_scy(value),
+            0xFF43 => self.ppu.write_scx(value),
             0xFF44 => {} // LY is read-only
             0xFF45 => self.ppu.write_lyc(value, &mut self.interrupts),
+            0xFF4A => self.ppu.write_wy(value),
+            0xFF4B => self.ppu.write_wx(value),
             0xFF4F => {
                 // VBK (CGB only): bit 0 selects the active 8 KiB VRAM bank.
                 if self.cgb.cgb_mode {
