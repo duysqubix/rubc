@@ -189,27 +189,18 @@ mem-timing:
 # Mooneye tests ship as WLA-DX assembly (NOT RGBDS), built via the suite's own
 # Makefile (`wla-gb`/`wlalink`). Install once: `brew install wla-dx`. The build
 # lands in `<suite>/build/**/*.gb` (git-ignored). This recipe builds on demand,
-# then runs each matching ROM, detecting pass via the Fibonacci register
-# signature after `LD B,B`.
-# Usage: just mooneye 'acceptance/timer/*'   (glob is relative to build/)
+# then runs the matching ROMs HEADLESSLY through the rubc-core integration
+# harness (Machine::run_mooneye), detecting pass via the Fibonacci register
+# signature after `LD B,B`. A filtered run is a hard gate: every matched ROM
+# must pass.
+# Usage: just mooneye 'acceptance/timer'   (substring of the path under build/)
 mooneye glob: mooneye-build
-    #!/usr/bin/env bash
-    set -euo pipefail
-    shopt -s globstar nullglob
-    found=0; pass=0; fail=0
-    for rom in "{{mooneye}}"/build/{{glob}}.gb; do
-      [ -f "$rom" ] || continue
-      found=$((found+1))
-      name="${rom#*/build/}"; name="${name%.gb}"
-      if LOG_LEVEL=error cargo run -q -- "$rom" --mooneye --panic-on-stuck; then
-        echo "PASS  $name"; pass=$((pass+1))
-      else
-        echo "FAIL  $name"; fail=$((fail+1))
-      fi
-    done
-    echo "----"
-    echo "mooneye '{{glob}}': $found found, $pass pass, $fail fail"
-    [ "$found" -gt 0 ] && [ "$fail" -eq 0 ]
+    MOONEYE_GLOB='{{glob}}' cargo test -p rubc-core --test mooneye_test -- --nocapture
+
+# Report pass/fail across the WHOLE mooneye suite without failing on ROMs that
+# need features not yet implemented (reporting harness, not a gate).
+mooneye-report: mooneye-build
+    cargo test -p rubc-core --test mooneye_test -- --nocapture
 
 # Build the entire mooneye suite to <suite>/build/ via WLA-DX (idempotent).
 mooneye-build:
