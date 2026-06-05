@@ -12,7 +12,6 @@
 use crate::gui::Framework;
 
 use clap::{Parser, Subcommand};
-use pixels::Pixels;
 use rubc_core::bus::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use rubc_core::logger;
 use rubc_core::machine::{Machine, RunStop};
@@ -194,7 +193,12 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
         let window_size = window.inner_size();
         let surface_texture =
             pixels::SurfaceTexture::new(window_size.width, window_size.height, &window);
-        let pixels = Pixels::new(WIDTH, HEIGHT, surface_texture)?;
+        // Disable vsync (PresentMode::Immediate): the default AutoVsync/Fifo
+        // locks render to the 60 Hz monitor, capping the 59.7 Hz Game Boy frame
+        // at ~56 FPS. With vsync off, our own thread::sleep paces the frame.
+        let pixels = pixels::PixelsBuilder::new(WIDTH, HEIGHT, surface_texture)
+            .present_mode(pixels::wgpu::PresentMode::Immediate)
+            .build()?;
         let framework = Framework::new(
             &event_loop,
             window_size.width,
@@ -210,8 +214,20 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
     // true frame-to-frame period (emulation + render + sleep), not just the
     // paced work window.
     let mut last_frame = time::Instant::now();
+    // Absolute next-frame deadline: advanced by exactly one frame period each
+    // iteration so pacing does not drift even if a frame runs long or sleep
+    // overshoots (macOS thread::sleep can over-sleep by ~1ms).
+    let mut next_deadline = time::Instant::now() + fps_target;
+    // Rolling FPS counter: log the measured framerate once per second so it can
+    // be monitored headlessly (fern writes to stdout + the log file).
+    let mut fps_window_start = time::Instant::now();
+    let mut frames_this_window: u32 = 0;
 
     event_loop.run(move |event, _, control_flow| {
+        // Run the loop continuously (default is Wait, which gates frames on
+        // events + the vsync'd render and caps FPS below target); our own
+        // thread::sleep paces to the Game Boy frame period.
+        control_flow.set_poll();
         if input.update(&event) {
 
             if input.key_pressed(VirtualKeyCode::Escape) || input.close_requested() {
@@ -230,38 +246,60 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
                 framework.resize(size.width, size.height);
             }
 
-            // Advance one full frame of emulation, then present it.
+            // One full frame: emulate, draw, and PRESENT inline so the render
+            // cost is inside the pacing budget (the old split RedrawRequested
+            // render leaked ~1ms past the target and capped FPS at ~56).
             machine.step_frame();
-            window.request_redraw();
+            draw_framebuffer(&machine, pixels.frame_mut());
+            framework.prepare(&window);
+            let render_result = pixels.render_with(|encoder, render_target, context| {
+                context.scaling_renderer.render(encoder, render_target);
+                framework.render(encoder, render_target, context);
+                Ok(())
+            });
+            if let Err(err) = render_result {
+                log::error!("pixels.render: {err}");
+                *control_flow = ControlFlow::Exit;
+                return;
+            }
 
-            // Pace to the Game Boy frame period, measured from the START of the
-            // previous frame so render cost is included in the budget (otherwise
-            // render time leaks past the target and caps FPS below 59.7).
-            let frame_elapsed = last_frame.elapsed();
-            if frame_elapsed < fps_target {
-                std::thread::sleep(fps_target - frame_elapsed);
+            // Pace to an ABSOLUTE per-frame deadline. Sleep until just shy of it
+            // (macOS thread::sleep tends to overshoot), then advance the deadline
+            // by exactly one frame period so timing never drifts.
+            let now = time::Instant::now();
+            if now < next_deadline {
+                // Leave a 1ms slack and let the loop spin the remainder.
+                let slack = time::Duration::from_millis(1);
+                if next_deadline - now > slack {
+                    std::thread::sleep(next_deadline - now - slack);
+                }
+                while time::Instant::now() < next_deadline {
+                    std::hint::spin_loop();
+                }
             }
             let period = last_frame.elapsed();
             last_frame = time::Instant::now();
-            window.set_title(&format!("{TITLE}  {:.1} FPS", 1.0 / period.as_secs_f64()));
+            // Advance the deadline; if we fell badly behind, resync to now.
+            next_deadline += fps_target;
+            if next_deadline < last_frame {
+                next_deadline = last_frame + fps_target;
+            }
+            window.set_title(&format!("{TITLE}  {:.3} FPS", 1.0 / period.as_secs_f64()));
+
+            // Once per second, log the average FPS over the window.
+            frames_this_window += 1;
+            let win = fps_window_start.elapsed();
+            if win >= time::Duration::from_secs(1) {
+                let fps = frames_this_window as f64 / win.as_secs_f64();
+                log::info!("fps: {fps:.3} ({frames_this_window} frames in {:.3}s)", win.as_secs_f64());
+                frames_this_window = 0;
+                fps_window_start = time::Instant::now();
+            }
         }
 
-        match event {
-            Event::WindowEvent { event, .. } => framework.handle_event(&event),
-            Event::RedrawRequested(_) => {
-                draw_framebuffer(&machine, pixels.frame_mut());
-                framework.prepare(&window);
-                let render_result = pixels.render_with(|encoder, render_target, context| {
-                    context.scaling_renderer.render(encoder, render_target);
-                    framework.render(encoder, render_target, context);
-                    Ok(())
-                });
-                if let Err(err) = render_result {
-                    log::error!("pixels.render: {err}");
-                    *control_flow = ControlFlow::Exit;
-                }
-            }
-            _ => {}
+        // egui still needs window events; the frame render happens inline above.
+        if let Event::WindowEvent { event, .. } = event {
+            framework.handle_event(&event);
         }
     });
 }
