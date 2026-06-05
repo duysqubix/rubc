@@ -332,4 +332,36 @@ mod tests {
 
         assert_eq!(timer.read(0xFF04), 0xAB);
     }
+
+    #[test]
+    fn tac_disable_while_selected_bit_high_increments_tima() {
+        // mooneye rapid_toggle: disabling the timer (TAC bit 2 -> 0) while the
+        // selected DIV bit is HIGH drops the AND result 1->0 = a falling edge =
+        // a spurious TIMA increment. Selector 0b01 = bit 3.
+        let (mut timer, _irq) = timer_and_interrupts();
+        // Enabled, bit 3 high -> AND result currently true.
+        set_timer_input(&mut timer, 0x0008, 0b101);
+        assert!(timer.timer_input(), "primed: enabled + bit3 high");
+        let before = timer.tima;
+        // Disable the timer: AND result true->false -> spurious increment.
+        timer.write_tac(0b001); // clear bit 2 (enable), keep selector
+        assert_eq!(
+            timer.tima,
+            before.wrapping_add(1),
+            "TAC disable while selected bit high increments TIMA"
+        );
+    }
+
+    #[test]
+    fn tac_disable_while_selected_bit_low_does_not_increment() {
+        // Disabling while the selected bit is LOW: AND result was already false,
+        // so no falling edge, no increment.
+        let (mut timer, _irq) = timer_and_interrupts();
+        set_timer_input(&mut timer, 0x0000, 0b101); // bit3 low
+        assert!(!timer.timer_input());
+        let before = timer.tima;
+        timer.write_tac(0b001);
+        assert_eq!(timer.tima, before, "no edge -> no increment");
+    }
 }
+
