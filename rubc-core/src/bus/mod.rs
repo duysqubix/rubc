@@ -19,14 +19,16 @@
 
 pub mod cartridge;
 pub mod flat;
+pub mod ppu;
 pub mod sm83_vectors;
 pub mod stubs;
 pub mod timer;
 
 pub use cartridge::Cartridge;
+pub use ppu::Ppu;
 pub use flat::FlatBus;
 
-use stubs::{ApuStub, CgbState, Interrupts, PpuStub};
+use stubs::{ApuStub, CgbState, Interrupts};
 use timer::Timer;
 
 /// What the CPU calls each M-cycle. Each `*_m` method runs the full invariant.
@@ -92,13 +94,16 @@ pub struct Bus {
     pub cart: Cartridge,
     pub wram: [u8; 0x2000],
     pub hram: [u8; 0x7F],
-    pub vram: [u8; 0x2000],
+    /// VRAM: 2 banks of 8 KiB. DMG uses only bank 0; CGB selects via VBK ($FF4F).
+    pub vram: [[u8; 0x2000]; 2],
+    /// Active VRAM bank (VBK $FF4F bit 0). Always 0 in DMG mode.
+    pub vbk: u8,
     pub oam: [u8; 0xA0],
     pub io: [u8; 0x80],
 
     pub interrupts: Interrupts,
     pub timer: Timer,
-    pub ppu: PpuStub,
+    pub ppu: Ppu,
     pub apu: ApuStub,
     pub cgb: CgbState,
     dma: OamDma,
@@ -120,12 +125,13 @@ impl Default for Bus {
             cart: Cartridge::default(),
             wram: [0; 0x2000],
             hram: [0; 0x7F],
-            vram: [0; 0x2000],
+            vram: [[0; 0x2000]; 2],
+            vbk: 0,
             oam: [0; 0xA0],
             io: [0; 0x80],
             interrupts: Interrupts::default(),
             timer: Timer::power_on(),
-            ppu: PpuStub::default(),
+            ppu: Ppu::default(),
             apu: ApuStub::default(),
             cgb: CgbState::default(),
             dma: OamDma::default(),
@@ -275,6 +281,14 @@ impl Bus {
                 }
             }
         }
+        // PPU mode blocking: VRAM is unreadable in mode 3, OAM in modes 2-3.
+        // (Checked on the latched CPU path only, so DMA-source reads and
+        // side-effect-free diagnostics via `peek` are unaffected.)
+        match addr {
+            0x8000..=0x9FFF if self.ppu.vram_blocked() => return 0xFF,
+            0xFE00..=0xFE9F if self.ppu.oam_blocked() => return 0xFF,
+            _ => {}
+        }
         self.peek(addr)
     }
 
@@ -288,6 +302,13 @@ impl Bus {
                 return;
             }
         }
+        // PPU mode blocking: writes to VRAM (mode 3) / OAM (modes 2-3) are
+        // dropped while the PPU owns them.
+        match addr {
+            0x8000..=0x9FFF if self.ppu.vram_blocked() => return,
+            0xFE00..=0xFE9F if self.ppu.oam_blocked() => return,
+            _ => {}
+        }
         self.poke(addr, value);
     }
 
@@ -296,12 +317,17 @@ impl Bus {
     pub fn peek(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => self.cart.read(addr),
-            0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize],
+            0x8000..=0x9FFF => self.vram[self.vbk as usize][(addr - 0x8000) as usize],
             0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize],
             0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize], // echo
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupts.if_ | 0xE0, // IF lives in interrupts, not io[]
+            0xFF40 => self.ppu.read_lcdc(),
+            0xFF41 => self.ppu.read_stat(),
+            0xFF44 => self.ppu.read_ly(),
+            0xFF45 => self.ppu.read_lyc(),
+            0xFF4F if self.cgb.cgb_mode => self.vbk | 0xFE, // VBK: only bit 0 valid
             0xFF4D if self.cgb.cgb_mode => {
                 // KEY1 (CGB only): bit 7 = current speed (1 = double), bit 0 =
                 // armed switch, remaining bits read as 1.
@@ -309,6 +335,7 @@ impl Bus {
                 speed | (self.io[0x4D] & 0x01) | 0x7E
             }
             0xFF4D => 0xFF, // KEY1 in DMG mode: open-bus (no speed switch)
+            0xFF4F => 0xFF, // VBK in DMG mode: open-bus (no VRAM banking)
             0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize],
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupts.ie,
@@ -320,13 +347,23 @@ impl Bus {
     /// Side-effect-free write (no tick). Flat placeholder.
     pub fn poke(&mut self, addr: u16, value: u8) {
         match addr {
-            0x8000..=0x9FFF => self.vram[(addr - 0x8000) as usize] = value,
+            0x8000..=0x9FFF => self.vram[self.vbk as usize][(addr - 0x8000) as usize] = value,
             0xC000..=0xDFFF => self.wram[(addr - 0xC000) as usize] = value,
             0xE000..=0xFDFF => self.wram[(addr - 0xE000) as usize] = value,
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
             0xFF04..=0xFF07 => self.timer.write(addr, value, &mut self.interrupts),
             0xFF46 => self.start_oam_dma(value),
             0xFF0F => self.interrupts.if_ = value | 0xE0, // IF lives in interrupts
+            0xFF40 => self.ppu.write_lcdc(value, &mut self.interrupts),
+            0xFF41 => self.ppu.write_stat(value, &mut self.interrupts),
+            0xFF44 => {} // LY is read-only
+            0xFF45 => self.ppu.write_lyc(value, &mut self.interrupts),
+            0xFF4F => {
+                // VBK (CGB only): bit 0 selects the active 8 KiB VRAM bank.
+                if self.cgb.cgb_mode {
+                    self.vbk = value & 0x01;
+                }
+            }
             0xFF4D => {
                 // KEY1: only the "prepare speed switch" bit (0) is writable, and
                 // only in CGB mode. DMG ignores KEY1 entirely (no speed switch).
@@ -536,6 +573,40 @@ mod tests {
         assert_eq!(bus.peek(0xFF4D), 0xFF, "DMG: KEY1 reads open-bus 0xFF");
     }
 
+    #[test]
+    fn vbk_selects_vram_bank_in_cgb() {
+        // CGB: VBK ($FF4F) bit 0 selects the active 8 KiB VRAM bank; the two
+        // banks are independent storage.
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        // Bank 0: write a byte.
+        bus.poke(0xFF4F, 0x00);
+        bus.poke(0x8000, 0xAA);
+        // Switch to bank 1: same address is independent storage.
+        bus.poke(0xFF4F, 0x01);
+        assert_eq!(bus.peek(0x8000), 0x00, "bank 1 is a distinct VRAM page");
+        bus.poke(0x8000, 0xBB);
+        assert_eq!(bus.peek(0x8000), 0xBB);
+        // Back to bank 0: the original byte survives.
+        bus.poke(0xFF4F, 0x00);
+        assert_eq!(bus.peek(0x8000), 0xAA, "bank 0 retained its byte");
+        // VBK reads back bit 0 with the upper bits set.
+        bus.poke(0xFF4F, 0x01);
+        assert_eq!(bus.peek(0xFF4F), 0xFF, "VBK reads bit0=1 | 0xFE");
+    }
+
+    #[test]
+    fn vbk_is_inert_in_dmg_mode() {
+        // DMG has no VRAM banking: VBK writes are ignored (bank stays 0) and the
+        // register reads as open-bus 0xFF.
+        let mut bus = Bus::new(); // cgb_mode defaults to false
+        bus.poke(0x8000, 0xAA); // bank 0
+        bus.poke(0xFF4F, 0x01); // ignored in DMG
+        assert_eq!(bus.vbk, 0, "DMG: VBK write ignored, bank stays 0");
+        assert_eq!(bus.peek(0x8000), 0xAA, "DMG: still reading bank 0");
+        assert_eq!(bus.peek(0xFF4F), 0xFF, "DMG: VBK reads open-bus 0xFF");
+    }
+
     /// S6: the bus diag seam feeds `diag_record_mcycle!` end-to-end. The CPU
     /// (here a stand-in) builds a record from the bus's post-M-cycle
     /// `flight_fields` + its own PC/opcode, records it, and a fatal dump
@@ -637,12 +708,15 @@ mod tests {
         bus.write_m(0xC500, 0xAA); // WRAM -> blocked
         bus.write_m(0x8000, 0xBB); // VRAM -> blocked
         bus.write_m(0xFE10, 0xCC); // OAM  -> blocked
-        bus.write_m(0xFF40, 0xDD); // IO (LCDC) -> blocked
+        bus.write_m(0xFF40, 0xDD); // IO (LCDC, special PPU reg) -> blocked
+        bus.write_m(0xFF42, 0xEE); // IO (SCY, generic io[]) -> blocked
         bus.write_m(0xFFFF, 0xEE); // IE  -> blocked
         bus.write_m(0xFF85, 0x99); // HRAM -> allowed
         assert_eq!(bus.peek(0xC500), 0x00, "WRAM write blocked during DMA");
         assert_eq!(bus.peek(0x8000), 0x00, "VRAM write blocked during DMA");
-        assert_eq!(bus.peek(0xFF40), 0x00, "IO write blocked during DMA");
+        // LCDC routes through the PPU; a blocked write leaves the default 0x91.
+        assert_eq!(bus.peek(0xFF40), 0x91, "special IO (LCDC) write blocked during DMA");
+        assert_eq!(bus.peek(0xFF42), 0x00, "generic IO (SCY) write blocked during DMA");
         assert_eq!(bus.peek(0xFFFF), 0x00, "IE write blocked during DMA");
         assert_eq!(bus.peek(0xFE10), 0x00, "OAM write blocked during DMA");
         assert_eq!(bus.peek(0xFF85), 0x99, "HRAM write allowed during DMA");

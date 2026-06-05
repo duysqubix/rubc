@@ -40,21 +40,6 @@ impl Interrupts {
     }
 }
 
-/// Stub PPU: counts dot-ticks + carries an LY/mode for trace fields. Real FIFO
-/// lands in the PPU waves.
-#[derive(Default)]
-pub struct PpuStub {
-    pub dot_ticks: u64,
-    pub ly: u8,
-    pub mode: u8,
-}
-
-impl PpuStub {
-    pub fn tick_dot(&mut self, _irq: &mut Interrupts) {
-        self.dot_ticks += 1;
-    }
-}
-
 /// Stub APU: counts ticks. Real channels land in the APU wave.
 #[derive(Default)]
 pub struct ApuStub {
