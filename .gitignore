@@ -23,3 +23,14 @@ Cargo.lock
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+
+# GameBoy emulator reference material (docs + test suites).
+# Cloned locally for reference only; .git stripped. NEVER commit to rubc.
+/reference/
+
+# Agent/orchestrator scratch + generated artifacts (not source).
+/.omo/
+graph.svg
+# Disassembly dumps produced by `just disasm` / --disassemble.
+*.gb.txt

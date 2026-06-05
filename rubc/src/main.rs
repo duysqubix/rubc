@@ -32,6 +32,9 @@ struct Args {
         help = "Panic if the emulator gets stuck processing instructions."
     )]
     panic_on_stuck: bool,
+
+    #[clap(long, help = "Run the emulator in test mode.")]
+    test_mode: bool,
 }
 
 const WIDTH: u32 = 160;
@@ -250,7 +253,13 @@ impl Rubc {
         }
 
         if args.panic_on_stuck {
+            log::warn!("Panic on stuck mode enabled");
             builder = builder.panic_on_stuck();
+        }
+
+        if args.test_mode {
+            log::info!("Running in test mode");
+            builder = builder.enable_test_mode();
         }
         Ok(Rubc {
             gameboy: builder.build(),

@@ -143,18 +143,17 @@ impl IntoMBC for MBC1 {
         self.ram_banks
     }
 
-    fn read(&self, address: usize) -> u8 {
+    fn read(&self, mut address: usize) -> u8 {
         match address {
             0x0000..=0x3FFF => {
-                log::trace!("reading from ROM bank 0: {:04X}", address);
                 let mut bank = 0;
                 if self.mode == 1 {
                     bank = (self.ram_bank_select << 5) & self.rom_banks
                 }
+
                 self.rom[utils::rom_absolute_address(bank, address)]
             }
             0x4000..=0x7FFF => {
-                log::trace!("reading from ROM bank 1: {:04X}", address);
                 let bank = (self.ram_bank_select << 5) % self.rom_banks | self.rom_bank_select;
                 self.rom[utils::rom_absolute_address(bank, address - 0x4000)]
             }
@@ -167,7 +166,6 @@ impl IntoMBC for MBC1 {
             return 0xFF;
         }
 
-        log::trace!("Reading from SRAM: {:04X}", address);
         match self.mode {
             0 => self.sram[utils::ram_absolute_address(0 % self.ram_banks, address)],
             1 => {
@@ -179,7 +177,6 @@ impl IntoMBC for MBC1 {
     }
 
     fn write(&mut self, address: usize, value: u8) {
-        log::trace!("Writing to ROM: {:04X}={:02X}", address, value);
         match address {
             0..=0x1FFF => {
                 self.ram_enabled = (value & 0x0F) == 0x0A;

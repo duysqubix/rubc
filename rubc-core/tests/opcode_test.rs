@@ -190,6 +190,11 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "SUPERSEDED by the M-cycle CPU vector harness in rubc-core::cpu::core \
+        tests (96 main + 256 CB `vector_run_*` tests, all green). This legacy test \
+        drives the OLD instruction-stepped `Gameboy` bus, which routes 0xBFFF to \
+        the cartridge instead of flat RAM and therefore cannot pass the sm83 \
+        vectors. Kept (ignored) for history; the new harness is the source of truth."]
     fn test_opcodes() -> anyhow::Result<()> {
         let test_dir = "../assets/sm83/v1";
         let mut files = std::fs::read_dir(test_dir)?

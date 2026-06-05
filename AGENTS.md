@@ -126,3 +126,158 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+<!-- BEGIN GAMEBOY EMULATOR DOC MAP -->
+# rubc — GameBoy DMG/CGB Emulator
+
+**Goal:** a cycle-accurate GameBoy **DMG + CGB** emulator that passes the
+[mooneye-test-suite](https://github.com/Gekkio/mooneye-test-suite) and
+[gb-test-roms](https://github.com/retrio/gb-test-roms) test suites.
+
+**Build order:** CPU → PPU → APU, with MBC support layered in as cartridges need it.
+Target both DMG and CGB from the start (double-speed, color palettes, VRAM/WRAM
+banking, HDMA, CGB-only registers).
+
+## Reference Material (local, git-ignored)
+
+All reference docs/test ROMs are cloned under `reference/` with their `.git`
+stripped and the whole directory listed in `.gitignore` (NEVER commit it).
+
+| Path | What it is | Use for |
+|------|-----------|---------|
+| `reference/docs/gbctr.pdf` | Gekkio — *Game Boy: Complete Technical Reference* (175 pages) | Authoritative cycle-by-cycle timing, electrical/internal behavior, edge cases |
+| `reference/docs/pandocs/src/*.md` | Pan Docs (gbdev) — canonical hardware reference | First stop for register layouts, memory map, behavior summaries |
+| `reference/docs/GBEDG/**/index.md` | GBEDG (Ashiepaws) — *Game Boy Emulator Development Guide* | Implementation-oriented walkthroughs (PPU FIFO, timers, DMA, MBCs) |
+| `reference/test-suites/mooneye-test-suite/` | Gekkio mooneye tests (`.s` RGBDS source) | Precise timing / hardware-edge acceptance tests |
+| `reference/test-suites/gb-test-roms/` | retrio/blargg test ROMs (prebuilt `.gb`) | CPU instr, instr/mem timing, sound, oam bug, halt bug |
+
+> **Note on mooneye:** tests ship as `.s` RGBDS assembly, not prebuilt `.gb`.
+> You must either install RGBDS and assemble them (`make` in that dir) or
+> download Gekkio's prebuilt release. `gb-test-roms` already ship `.gb` files.
+
+## Documentation Lookup Table (by subsystem)
+
+When implementing a subsystem, read the listed references FIRST. `gbctr.pdf`
+is the tiebreaker for any timing disagreement.
+
+### CPU — SM83 core
+
+| Topic | Pan Docs | GBEDG | gbctr.pdf (ch.) | Tests |
+|-------|----------|-------|-----------------|-------|
+| Registers & flags | `CPU_Registers_and_Flags.md` | `concepts/index.md` | ch. "CPU" | `acceptance/bits/reg_f.s` |
+| Instruction set | `CPU_Instruction_Set.md` | — | ch. "Instruction set" | `gb-test-roms/cpu_instrs/` |
+| Instruction timing | `CPU_Instruction_Set.md` | `concepts/index.md` (clocks/cycles) | ch. "Instruction set" | `gb-test-roms/instr_timing/`, `acceptance/*_timing.s` |
+| Z80 comparison | `CPU_Comparison_with_Z80.md` | — | — | — |
+| Power-up state | `Power_Up_Sequence.md` | — | ch. "Boot ROM" | `acceptance/boot_regs-*.s`, `boot_hwio-*.s`, `boot_div-*.s` |
+| HALT / HALT bug | `halt.md` | — | ch. "CPU" (halt) | `gb-test-roms/halt_bug.gb`, `acceptance/halt_*.s` |
+| STOP / speed switch | `Reducing_Power_Consumption.md`, `CGB_Registers.md` (KEY1) | — | ch. "CPU" | `acceptance/*` (di/ei), misc CGB |
+| DAA / BCD | `CPU_Instruction_Set.md` | — | ch. "Instruction set" | `acceptance/instr/daa.s` |
+
+### Interrupts
+
+| Topic | Pan Docs | GBEDG | gbctr.pdf | Tests |
+|-------|----------|-------|-----------|-------|
+| Overview & IME | `Interrupts.md` | `concepts/index.md` | ch. "Interrupts" | `acceptance/ei_*.s`, `di_timing-GS.s`, `rapid_di_ei.s` |
+| Sources (VBlank/STAT/Timer/Serial/Joypad) | `Interrupt_Sources.md` | — | ch. "Interrupts" | `acceptance/intr_timing.s`, `interrupts/ie_push.s` |
+| IE/IF registers | `Interrupt_Sources.md` | — | — | `acceptance/if_ie_registers.s` |
+| Dispatch timing | `Interrupts.md` | — | ch. "Interrupts" | `acceptance/{call,ret,reti,rst,jp,pop,push}_*timing*.s` |
+
+### Timers & Divider
+
+| Topic | Pan Docs | GBEDG | gbctr.pdf | Tests |
+|-------|----------|-------|-----------|-------|
+| DIV/TIMA/TMA/TAC | `Timer_and_Divider_Registers.md` | `timers/index.md` | ch. "Timer" | `acceptance/timer/tim0*.s`, `tim1*.s` |
+| Obscure / edge behavior | `Timer_Obscure_Behaviour.md` | `timers/index.md` | ch. "Timer" | `acceptance/timer/{tima_reload,*_div_trigger,div_write,rapid_toggle}.s` |
+| DIV timing | `Timer_and_Divider_Registers.md` | — | ch. "Timer" | `acceptance/div_timing.s`, `boot_div-*.s` |
+
+### Memory Map & Bus
+
+| Topic | Pan Docs | GBEDG | gbctr.pdf | Tests |
+|-------|----------|-------|-----------|-------|
+| Memory map | `Memory_Map.md` | `concepts/index.md` | ch. "Memory" | — |
+| Cartridge header | `The_Cartridge_Header.md` | `mbcs/index.md` (detection) | — | — |
+| VRAM/OAM access rules | `Accessing_VRAM_and_OAM.md` | `ppu/index.md` | ch. "Video" | `acceptance/bits/mem_oam.s` |
+| Hardware register list | `Hardware_Reg_List.md` | — | — | `acceptance/bits/unused_hwio-GS.s`, misc `unused_hwio-C.s` |
+| Memory access timing | `Accessing_VRAM_and_OAM.md` | — | ch. "Memory" | `gb-test-roms/mem_timing/`, `mem_timing-2/` |
+
+### MBC — Memory Bank Controllers
+
+| Controller | Pan Docs | GBEDG | Tests |
+|-----------|----------|-------|-------|
+| Overview / detection | `MBCs.md`, `nombc.md` | `mbcs/index.md` | — |
+| MBC1 | `MBC1.md` | `mbcs/mbc1/index.md` | `emulator-only/mbc1/*.s` |
+| MBC2 | `MBC2.md` | `mbcs/mbc2/index.md` | `emulator-only/mbc2/*.s` |
+| MBC3 (+RTC) | `MBC3.md` | `mbcs/mbc3/index.md` | — |
+| MBC5 | `MBC5.md` | `mbcs/mbc5/index.md` | `emulator-only/mbc5/*.s` |
+| MBC6 / MBC7 | `MBC6.md`, `MBC7.md` | — | — |
+| Other (HuC1/HuC3/MMM01/M161) | `HuC1.md`, `HuC3.md`, `MMM01.md`, `M161.md`, `othermbc.md` | — | — |
+
+### PPU — Graphics
+
+| Topic | Pan Docs | GBEDG | gbctr.pdf | Tests |
+|-------|----------|-------|-----------|-------|
+| Overview / rendering | `Rendering.md`, `Graphics.md` | `ppu/index.md` (The Basics) | ch. "Video" | — |
+| LCDC / STAT | `LCDC.md`, `STAT.md` | `ppu/index.md` (PPU Modes) | ch. "Video" | `acceptance/ppu/stat_*.s`, `intr_*_timing*.s` |
+| Scrolling / Window | `Scrolling.md`, `Window.md` | `ppu/index.md` (Window Fetching) | ch. "Video" | `acceptance/ppu/hblank_ly_scx_timing-GS.s` |
+| Pixel FIFO | `pixel_fifo.md` | `ppu/index.md` (The Pixel FIFO) | ch. "Video" | `acceptance/ppu/intr_2_mode3_timing.s` |
+| Tile data / maps | `Tile_Data.md`, `Tile_Maps.md` | `ppu/index.md` (Tile Data/BG Maps) | ch. "Video" | — |
+| OAM / sprites | `OAM.md` | `ppu/index.md` (OAM Scanning/Sprite Fetching) | ch. "Video" | `acceptance/ppu/intr_2_mode0_timing_sprites.s` |
+| OAM corruption bug | `OAM_Corruption_Bug.md` | `bugs/index.md` | ch. "Video" | `gb-test-roms/oam_bug/` |
+| Palettes (DMG+CGB) | `Palettes.md`, `CGB_Registers.md` | — | ch. "Video" | — |
+| LCD on/off timing | `Rendering.md` | — | ch. "Video" | `acceptance/ppu/lcdon_*timing-GS.s`, `vblank_stat_intr-*.s` |
+
+### OAM DMA & HDMA
+
+| Topic | Pan Docs | GBEDG | Tests |
+|-------|----------|-------|-------|
+| OAM DMA | `OAM_DMA_Transfer.md` | `dma/index.md` (OAM DMA) | `acceptance/oam_dma/*.s`, `oam_dma*.s` |
+| HDMA / GDMA (CGB) | `CGB_Registers.md` (HDMA1-5) | `dma/index.md` | — |
+
+### APU — Audio
+
+| Topic | Pan Docs | gbctr.pdf | Tests |
+|-------|----------|-----------|-------|
+| Overview | `Audio.md` | ch. "Sound" | — |
+| Registers (NR10-NR52) | `Audio_Registers.md` | ch. "Sound" | — |
+| Channel details (square/wave/noise, envelope, sweep, length) | `Audio_details.md` | ch. "Sound" | `gb-test-roms/dmg_sound/`, `cgb_sound/` |
+
+### Joypad / Serial
+
+| Topic | Pan Docs | Tests |
+|-------|----------|-------|
+| Joypad input | `Joypad_Input.md` | — |
+| Serial (link cable) | `Serial_Data_Transfer_(Link_Cable).md` | `acceptance/serial/boot_sclk_align-dmgABCmgb.s`, `gb-test-roms` serial output is the test-result channel |
+
+### CGB-specific
+
+| Topic | Pan Docs | gbctr.pdf | Tests |
+|-------|----------|-----------|-------|
+| CGB registers (KEY1, VBK, SVBK, BCPS/BCPD, OCPS/OCPD, OPRI, HDMA, RP) | `CGB_Registers.md`, `Hardware_Reg_List.md` | ch. "CGB" | `misc/boot_regs-cgb.s`, `boot_hwio-C.s`, `bits/unused_hwio-C.s` |
+| Double-speed mode | `CGB_Registers.md` (KEY1) | ch. "CPU"/"CGB" | `misc/boot_div-cgb*.s` |
+| VRAM/WRAM banking | `CGB_Registers.md` (VBK/SVBK) | ch. "Memory" | — |
+| Color palettes | `Palettes.md`, `CGB_Registers.md` | ch. "Video" | — |
+| CGB VBlank/STAT intr | — | — | `misc/ppu/vblank_stat_intr-C.s` |
+
+## Existing Foundation (state as of Phase A)
+
+- **rubc-core/** (library): SM83 CPU **complete** (all 256 main + 256 CB opcodes,
+  `opcodes.rs` / `opcodes_cb.rs`, `phf` dispatch maps); memory bus complete;
+  `bits.rs` ALU macros. **Partial:** MBC (only MBC0+MBC1), timer (no obscure
+  edge behavior), interrupts (no halt-bug / IME-timing edge cases).
+  **Stub:** PPU (`LY` hardcoded `0x90`), APU (none), CGB (flags only).
+- **rubc/** (binary): `winit 0.28` + `pixels` + `egui 0.23`. `draw()` is a dummy
+  pattern, NOT wired to a PPU framebuffer yet.
+- **Tests:** `rubc-core/tests/opcode_test.rs` runs SingleStepTests/sm83 JSON
+  vectors (`assets/sm83/v1/`). `just regression-test` runs blargg `cpu_instrs.gb`
+  via serial. No mooneye/blargg-ROM harness yet.
+
+## Build / Test Commands (justfile)
+
+```bash
+just unit-test        # cargo test -p rubc-core
+just test-opcodes     # SM83 JSON opcode vectors
+just regression-test  # run blargg cpu_instrs.gb (serial output)
+just run <args>       # LOG_LEVEL=warn cargo run
+just trun <args>      # LOG_LEVEL=debug cargo run
+```
+<!-- END GAMEBOY EMULATOR DOC MAP -->
