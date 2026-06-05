@@ -29,7 +29,8 @@ const WIDTH: u32 = SCREEN_WIDTH as u32;
 const HEIGHT: u32 = SCREEN_HEIGHT as u32;
 const SCALE: f32 = 3.0;
 const TITLE: &str = "rubc";
-const FPS_US: u64 = 16_740;
+/// Game Boy frame period: 70224 dots / 4194304 Hz = 16742.7 us (~59.727 FPS).
+const FPS_US: u64 = 16_743;
 /// Generous instruction budget for headless test-ROM runs.
 const HEADLESS_MAX_INSTRUCTIONS: u64 = 250_000_000;
 
@@ -205,10 +206,13 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
     };
 
     let fps_target = time::Duration::from_micros(FPS_US);
+    // Tracks the start of the previous frame so the displayed FPS reflects the
+    // true frame-to-frame period (emulation + render + sleep), not just the
+    // paced work window.
+    let mut last_frame = time::Instant::now();
 
     event_loop.run(move |event, _, control_flow| {
         if input.update(&event) {
-            let now = time::Instant::now();
 
             if input.key_pressed(VirtualKeyCode::Escape) || input.close_requested() {
                 *control_flow = ControlFlow::Exit;
@@ -230,11 +234,16 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
             machine.step_frame();
             window.request_redraw();
 
-            let elapsed = now.elapsed();
-            if elapsed < fps_target {
-                std::thread::sleep(fps_target - elapsed);
+            // Pace to the Game Boy frame period, measured from the START of the
+            // previous frame so render cost is included in the budget (otherwise
+            // render time leaks past the target and caps FPS below 59.7).
+            let frame_elapsed = last_frame.elapsed();
+            if frame_elapsed < fps_target {
+                std::thread::sleep(fps_target - frame_elapsed);
             }
-            window.set_title(&format!("{TITLE}  {:.0} FPS", 1.0 / now.elapsed().as_secs_f64()));
+            let period = last_frame.elapsed();
+            last_frame = time::Instant::now();
+            window.set_title(&format!("{TITLE}  {:.1} FPS", 1.0 / period.as_secs_f64()));
         }
 
         match event {
