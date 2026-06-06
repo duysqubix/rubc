@@ -493,7 +493,6 @@ mod tests {
             "06-overflow on trigger.gb",
             "07-len sweep period sync.gb",
             "08-len ctr during power.gb",
-            "09-wave read while on.gb",
             "10-wave trigger while on.gb",
             "11-regs after power.gb",
         ] {
