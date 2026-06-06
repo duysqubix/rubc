@@ -112,6 +112,12 @@ impl Timer {
         }
     }
 
+    /// The full 16-bit internal DIV counter. The APU's frame sequencer (DIV-APU)
+    /// is clocked by the falling edge of DIV bit 4 (bit 5 in CGB double-speed).
+    pub fn div_counter(&self) -> u16 {
+        self.div
+    }
+
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
             0xFF04 => (self.div >> 8) as u8,

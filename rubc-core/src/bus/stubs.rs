@@ -40,18 +40,6 @@ impl Interrupts {
     }
 }
 
-/// Stub APU: counts ticks. Real channels land in the APU wave.
-#[derive(Default)]
-pub struct ApuStub {
-    pub t_ticks: u64,
-}
-
-impl ApuStub {
-    pub fn tick_t(&mut self) {
-        self.t_ticks += 1;
-    }
-}
-
 /// CGB clock/speed state.
 #[derive(Default)]
 pub struct CgbState {

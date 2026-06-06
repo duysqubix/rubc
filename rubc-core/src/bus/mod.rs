@@ -17,6 +17,7 @@
 //!
 //! Diagnostics OBSERVE only; nothing here is on a diag hot path that ticks.
 
+pub mod apu;
 pub mod cartridge;
 pub mod flat;
 pub mod ppu;
@@ -28,7 +29,8 @@ pub use cartridge::Cartridge;
 pub use flat::FlatBus;
 pub use ppu::{CgbRenderState, DmgPalettes, Ppu};
 
-use stubs::{ApuStub, CgbState, Interrupts};
+use apu::Apu;
+use stubs::{CgbState, Interrupts};
 use timer::Timer;
 
 /// What the CPU calls each M-cycle. Each `*_m` method runs the full invariant.
@@ -153,7 +155,7 @@ pub struct Bus {
     pub interrupts: Interrupts,
     pub timer: Timer,
     pub ppu: Ppu,
-    pub apu: ApuStub,
+    pub apu: Apu,
     pub cgb: CgbState,
     dma: OamDma,
     hdma: Hdma,
@@ -187,7 +189,7 @@ impl Default for Bus {
             interrupts: Interrupts::default(),
             timer: Timer::power_on(),
             ppu: Ppu::default(),
-            apu: ApuStub::default(),
+            apu: Apu::default(),
             cgb: CgbState::default(),
             dma: OamDma::default(),
             hdma: Hdma::default(),
@@ -305,8 +307,9 @@ impl Bus {
     fn tick_cpu_t(&mut self) {
         self.t_tick_count += 1;
 
-        // Timer always advances every T.
+        let div_apu_before = self.div_apu_bit_high();
         self.timer.tick_t(&mut self.interrupts);
+        self.clock_div_apu_if_fell(div_apu_before);
 
         if self.cgb.double_speed {
             // PPU/APU advance every 2nd T (twice per M-cycle). PROVISIONAL: with
@@ -343,6 +346,17 @@ impl Bus {
             self.ppu
                 .tick_dot(&mut self.interrupts, &self.vram, &self.oam, palettes, cgb);
             self.apu.tick_t();
+        }
+    }
+
+    fn div_apu_bit_high(&self) -> bool {
+        let mask = if self.cgb.double_speed { 0x20 } else { 0x10 };
+        self.timer.div_counter() & mask != 0
+    }
+
+    fn clock_div_apu_if_fell(&mut self, before: bool) {
+        if before && !self.div_apu_bit_high() {
+            self.apu.tick_div_apu();
         }
     }
 
@@ -573,6 +587,7 @@ impl Bus {
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupts.if_ | 0xE0, // IF lives in interrupts, not io[]
+            0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.read(addr),
             0xFF40 => self.ppu.read_lcdc(),
             0xFF41 => self.ppu.read_stat(),
             0xFF42 => self.ppu.read_scy(),
@@ -644,12 +659,6 @@ impl Bus {
             0xFF00 => 0xC0,                            // P1: bits 7-6 read 1
             0xFF01 => 0x00,                            // SB: full
             0xFF02 => 0x7E, // SC: bit7 + bit0 valid, 6-1 read 1 (DMG); CGB adds bit0
-            0xFF10 => 0x80, // NR10: bit 7 reads 1
-            0xFF1A => 0x7F, // NR30: bits 6-0 read 1
-            0xFF1C => 0x9F, // NR32: bits 7,4-0 read 1
-            0xFF20 => 0xC0, // NR41: bits 7-6 read 1
-            0xFF23 => 0x3F, // NR44: bits 5-0 read 1
-            0xFF26 => 0x70, // NR52: bits 6-4 read 1
             0xFF42 | 0xFF43 | 0xFF4A | 0xFF4B => 0x00, // SCY/SCX/WY/WX: full (but PPU-owned)
             0xFF47..=0xFF49 => 0x00, // BGP/OBP0/OBP1: full
             // CGB-only registers, gated on cgb_mode:
@@ -694,9 +703,15 @@ impl Bus {
                 self.wram[bank][off] = value;
             }
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
-            0xFF04..=0xFF07 => self.timer.write(addr, value, &mut self.interrupts),
+            0xFF04 => {
+                let div_apu_before = self.div_apu_bit_high();
+                self.timer.write(addr, value, &mut self.interrupts);
+                self.clock_div_apu_if_fell(div_apu_before);
+            }
+            0xFF05..=0xFF07 => self.timer.write(addr, value, &mut self.interrupts),
             0xFF46 => self.start_oam_dma(value),
             0xFF0F => self.interrupts.if_ = value | 0xE0, // IF lives in interrupts
+            0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.write(addr, value),
             0xFF40 => self.ppu.write_lcdc(value, &mut self.interrupts),
             0xFF41 => self.ppu.write_stat(value, &mut self.interrupts),
             0xFF42 => self.ppu.write_scy(value),
