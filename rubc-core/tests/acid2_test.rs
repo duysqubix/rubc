@@ -205,3 +205,27 @@ fn mealybug_report() {
          (mid-mode-3 timing needs sub-M-cycle bus -- rubc-7ks)"
     );
 }
+
+/// Reporting harness for cgb-acid-hell: an extremely demanding CGB PPU test
+/// (mid-scanline LCDC/palette/VRAM-bank changes). Prints the RGB555 pixel diff
+/// vs the reference so progress is visible; never fails (it needs T-cycle-
+/// accurate mid-mode-3 register writes -- rubc-1cu / rubc-7ks).
+#[test]
+fn cgb_acid_hell_report() {
+    let Some(frame) = render_cgb("cgb-acid-hell/cgb-acid-hell.gbc") else {
+        eprintln!("cgb-acid-hell: ROM absent or no breakpoint -- skipping");
+        return;
+    };
+    let Some(reference) =
+        load_reference_rgb555("cgb-acid-hell/cgb-acid-hell-reference-rgb555.bin")
+    else {
+        eprintln!("cgb-acid-hell: RGB555 reference absent -- skipping");
+        return;
+    };
+    let diff = pixel_diff_rgb555(&frame, &reference);
+    println!("----");
+    println!(
+        "cgb-acid-hell: {diff} / {FRAMEBUFFER_PIXELS} RGB555 pixels differ \
+         (mid-mode-3 CGB timing -- rubc-1cu)"
+    );
+}
