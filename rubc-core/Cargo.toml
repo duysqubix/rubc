@@ -13,11 +13,10 @@ fern = { version = "0.6.2", features = ["chrono", "colored"] }
 itertools = "0.12.1"
 log = "0.4.20"
 phf = { version = "0.11.2", features = ["macros"] }
-rand = "0.8.5"
 serde = { version = "1.0.196", features = ["rc", "serde_derive"] }
 serde_json = "1.0.113"
-criterion = { version = "0.5.1", features = ["html_reports"] }
-prettytable-rs = "0.10.0"
+
+
 
 
 [features]
