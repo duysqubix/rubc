@@ -383,10 +383,15 @@ impl Bus {
     /// PPU has advanced.
     fn hdma_hblank_step(&mut self) {
         let mode = self.ppu.mode;
-        let entered_hblank = mode == ppu::mode::HBLANK && self.hdma.prev_ppu_mode != ppu::mode::HBLANK;
+        let entered_hblank =
+            mode == ppu::mode::HBLANK && self.hdma.prev_ppu_mode != ppu::mode::HBLANK;
         self.hdma.prev_ppu_mode = mode;
 
-        if self.hdma.hblank_active && self.hdma.remaining > 0 && entered_hblank && self.ppu.lcd_enabled() {
+        if self.hdma.hblank_active
+            && self.hdma.remaining > 0
+            && entered_hblank
+            && self.ppu.lcd_enabled()
+        {
             self.hdma_copy_block();
             if self.hdma.remaining == 0 {
                 self.hdma.hblank_active = false;
