@@ -9,8 +9,9 @@
 //!   2. **T-cycle ticks split around the access** — timer / PPU / APU advance.
 //!      A WRITE commits at the T3 boundary (tick 3 → commit → tick 1), so the
 //!      4th peripheral tick observes the new value, matching DMG hardware where
-//!      a write latches late in the cycle. A READ/idle still ticks all 4 T then
-//!      samples (read placement moves to T3 in Step 3, rubc-cu6). The timer
+//!      a write latches late in the cycle. A READ/idle ticks all 4 T then
+//!      samples at end-of-M (the correct DMG placement; Oracle ses_16262cca4
+//!      confirmed reads must NOT move to T3). The timer
 //!      always advances 4 per M; in CGB double-speed PPU+APU advance every 2nd T.
 //!   3. IRQs raised during the ticks latch IF immediately. The CPU still polls
 //!      and dispatches only at instruction boundaries.
@@ -70,8 +71,8 @@ pub trait CpuBus {
 enum CpuAccess {
     /// Burn one M-cycle with no memory access.
     Idle,
-    /// Memory read (opcode fetch or operand/data read -- identical timing until
-    /// Step 3 splits fetch from operand reads if hardware requires it).
+    /// Memory read (opcode fetch or operand/data read -- identical timing;
+    /// sampled at end-of-M after all 4 T-cycles).
     Read { addr: u16 },
     /// Memory write.
     Write { addr: u16, value: u8 },
@@ -247,8 +248,8 @@ impl Bus {
     ///
     /// STEP 2 (rubc-9am): a WRITE commits at the T3 boundary so the 4th
     /// peripheral tick of the M-cycle observes the new value (matches DMG, where
-    /// a write latches late in the cycle). Reads/idle still sample after all 4 T
-    /// (read placement moves in Step 3, rubc-cu6).
+    /// a write latches late in the cycle). Reads/idle sample after all 4 T
+    /// (end-of-M; reads stay there -- Oracle ses_16262cca4).
     ///
     /// Ordering per M-cycle: OAM-DMA beat (T0) -> N pre-ticks -> access ->
     /// (4-N) post-ticks -> HBlank-HDMA step.
@@ -262,7 +263,11 @@ impl Bus {
                 0xFF
             }
             CpuAccess::Read { addr } => {
-                // Read still samples after all 4 T (Step 3 will move to T3).
+                // Reads sample after all 4 T (end-of-M): the correct DMG
+                // placement that mem_timing / mem_timing-2 and the timer-backed
+                // measurement loops calibrate against. instr_timing was fixed by
+                // immediate IF latching, NOT read repositioning (Oracle
+                // ses_16262cca4).
                 self.tick_t_times(4);
                 self.cpu_read_latched(addr)
             }
