@@ -87,7 +87,7 @@ impl Apu {
             0xFF13 => self.ch1.pulse.freq_low = value,
             0xFF14 => {
                 if self.ch1.pulse.write_control(value, next_step_clocks_length) {
-                    self.trigger_ch1();
+                    self.trigger_ch1(next_step_clocks_length);
                 }
             }
             0xFF16 => self.ch2.write_duty_length(value),
@@ -95,7 +95,7 @@ impl Apu {
             0xFF18 => self.ch2.freq_low = value,
             0xFF19 => {
                 if self.ch2.write_control(value, next_step_clocks_length) {
-                    self.ch2.trigger();
+                    self.ch2.trigger(next_step_clocks_length);
                 }
             }
             0xFF1A => self.ch3.write_dac(value),
@@ -104,7 +104,7 @@ impl Apu {
             0xFF1D => self.ch3.freq_low = value,
             0xFF1E => {
                 if self.ch3.write_control(value, next_step_clocks_length) {
-                    self.ch3.trigger();
+                    self.ch3.trigger(next_step_clocks_length);
                 }
             }
             0xFF20 => self.ch4.write_length(value),
@@ -112,7 +112,7 @@ impl Apu {
             0xFF22 => self.ch4.nr43 = value,
             0xFF23 => {
                 if self.ch4.write_control(value, next_step_clocks_length) {
-                    self.ch4.trigger();
+                    self.ch4.trigger(next_step_clocks_length);
                 }
             }
             0xFF24 => self.nr50 = value,
@@ -205,8 +205,8 @@ impl Apu {
         }
     }
 
-    fn trigger_ch1(&mut self) {
-        self.ch1.pulse.trigger();
+    fn trigger_ch1(&mut self, next_step_clocks_length: bool) {
+        self.ch1.pulse.trigger(next_step_clocks_length);
         self.ch1.sweep.trigger(self.ch1.pulse.frequency());
         if self.ch1.sweep.shift() != 0 && self.ch1.calculate_sweep().is_none() {
             self.ch1.pulse.enabled = false;
@@ -353,9 +353,15 @@ impl PulseChannel {
         value & 0x80 != 0
     }
 
-    fn trigger(&mut self) {
+    fn trigger(&mut self, next_step_clocks_length: bool) {
         if self.length_counter == 0 {
             self.length_counter = 64;
+            // Trigger-time length quirk: if length is enabled and the next
+            // DIV-APU step won't clock the length timer, the freshly reloaded
+            // counter is decremented by one (64 -> 63).
+            if self.length_enabled() && !next_step_clocks_length {
+                self.length_counter -= 1;
+            }
         }
         self.timer = self.period();
         self.envelope.trigger();
@@ -508,9 +514,12 @@ impl WaveChannel {
         value & 0x80 != 0
     }
 
-    fn trigger(&mut self) {
+    fn trigger(&mut self, next_step_clocks_length: bool) {
         if self.length_counter == 0 {
             self.length_counter = 256;
+            if self.length_enabled() && !next_step_clocks_length {
+                self.length_counter -= 1;
+            }
         }
         self.sample_index = 0;
         self.timer = self.period();
@@ -608,9 +617,12 @@ impl NoiseChannel {
         value & 0x80 != 0
     }
 
-    fn trigger(&mut self) {
+    fn trigger(&mut self, next_step_clocks_length: bool) {
         if self.length_counter == 0 {
             self.length_counter = 64;
+            if self.length_enabled() && !next_step_clocks_length {
+                self.length_counter -= 1;
+            }
         }
         self.envelope.trigger();
         self.timer = self.period();
