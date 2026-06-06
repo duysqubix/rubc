@@ -1750,6 +1750,7 @@ dependencies = [
  "egui-winit",
  "log",
  "pixels",
+ "png",
  "rayon",
  "rubc-core",
  "winit",
