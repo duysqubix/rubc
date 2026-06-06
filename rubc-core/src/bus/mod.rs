@@ -417,6 +417,18 @@ impl Bus {
 
     /// Side-effect-free read of the DMA source (no ticking).
     fn read_dma_source(&self, addr: u16) -> u8 {
+        // The OAM-DMA source address decoder folds the whole $E0-$FF source
+        // page range onto WRAM (echo), so a DMA from $E0xx-$FFxx reads WRAM and
+        // NOT OAM/IO. Pan Docs documents only $00-$DF, but mooneye oam_dma/
+        // sources-GS pins the $E0/$FE/$FF behaviour: they read WRAM echo.
+        if addr >= 0xE000 {
+            // Fold $E000-$FFFF onto the WRAM echo. wram_index handles
+            // $E000-$FDFF; $FE00-$FFFF continues the same echo (subtract the
+            // $2000 echo offset) so a DMA source page of $FE reads WRAM $DE00.
+            let echoed = addr - 0x2000;
+            let (bank, off) = self.wram_index(echoed);
+            return self.wram[bank][off];
+        }
         self.peek(addr)
     }
 
