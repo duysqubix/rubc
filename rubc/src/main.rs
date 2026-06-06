@@ -164,9 +164,53 @@ fn boot(rom_path: &str, opts: &RunOpts) -> anyhow::Result<Machine> {
 fn run(rom_path: &str, opts: &RunOpts) -> anyhow::Result<()> {
     let mut machine = boot(rom_path, opts)?;
     if opts.no_gui {
+        // Headless test-ROM runs never touch the filesystem for saves.
         return run_headless(&mut machine, opts);
     }
-    run_windowed(machine)
+    // Windowed: persist battery-backed cart RAM to a `.sav` beside the ROM.
+    let save_path = sav_path(rom_path);
+    if machine.has_battery() {
+        load_save(&mut machine, &save_path);
+    }
+    run_windowed(machine, save_path)
+}
+
+/// The save-file path for a ROM: the ROM path with its extension replaced by
+/// `sav` (e.g. `foo/bar.gbc` -> `foo/bar.sav`). A ROM with no extension simply
+/// gains a `.sav` one.
+fn sav_path(rom_path: &str) -> std::path::PathBuf {
+    let mut p = std::path::PathBuf::from(rom_path);
+    p.set_extension("sav");
+    p
+}
+
+/// Load a battery-backed save file into the machine's cart RAM, if present.
+/// Best-effort: a missing file is normal (a fresh save) and any read error is
+/// logged but never fatal -- the game still boots with blank RAM.
+fn load_save(machine: &mut Machine, save_path: &std::path::Path) {
+    match std::fs::read(save_path) {
+        Ok(bytes) => {
+            machine.load_ram(&bytes);
+            log::info!("loaded battery save {save_path:?} ({} bytes)", bytes.len());
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            log::info!("no battery save at {save_path:?}; starting with blank RAM");
+        }
+        Err(e) => {
+            log::warn!("failed to read battery save {save_path:?}: {e}");
+        }
+    }
+}
+
+/// Write the machine's cart RAM to the `.sav` file. Best-effort: I/O errors are
+/// logged, never fatal. No-op when the cart has no battery or no RAM.
+fn persist_save(machine: &Machine, save_path: &std::path::Path) {
+    if !machine.has_battery() || machine.save_ram().is_empty() {
+        return;
+    }
+    if let Err(e) = std::fs::write(save_path, machine.save_ram()) {
+        log::warn!("failed to write battery save {save_path:?}: {e}");
+    }
 }
 
 /// Headless: run a test ROM to its terminal condition and report pass/fail.
@@ -199,7 +243,7 @@ fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
 }
 
 /// Windowed: run the emulator and render the PPU framebuffer to the window.
-fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
+fn run_windowed(mut machine: Machine, save_path: std::path::PathBuf) -> anyhow::Result<()> {
     let event_loop = EventLoop::new();
     let mut input = WinitInputHelper::new();
 
@@ -266,6 +310,9 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
     // be monitored headlessly (fern writes to stdout + the log file).
     let mut fps_window_start = time::Instant::now();
     let mut frames_this_window: u32 = 0;
+    // Persist battery RAM at most once per second while running, so progress
+    // is not lost if the process is killed without a clean exit.
+    let mut last_save = time::Instant::now();
 
     event_loop.run(move |event, _, control_flow| {
         // Run the loop continuously (default is Wait, which gates frames on
@@ -274,6 +321,8 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
         control_flow.set_poll();
         if input.update(&event) {
             if input.key_pressed(VirtualKeyCode::Escape) || input.close_requested() {
+                // Clean exit (Esc or window close): flush the save first.
+                persist_save(&machine, &save_path);
                 *control_flow = ControlFlow::Exit;
                 return;
             }
@@ -311,6 +360,11 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
             // cost is inside the pacing budget (the old split RedrawRequested
             // render leaked ~1ms past the target and capped FPS at ~56).
             machine.step_frame();
+            // Periodic battery-save flush (best-effort, gated inside).
+            if last_save.elapsed() >= time::Duration::from_secs(1) {
+                persist_save(&machine, &save_path);
+                last_save = time::Instant::now();
+            }
             // Feed this frame's APU samples to the audio device. The APU was
             // told to emit at the device's native rate, so push them straight
             // through with no resampling.
@@ -528,5 +582,26 @@ fn ram_size_str(code: u8) -> &'static str {
         0x04 => "128 KiB (16 banks)",
         0x05 => "64 KiB (8 banks)",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn sav_path_replaces_rom_extension() {
+        assert_eq!(sav_path("foo/bar.gbc"), PathBuf::from("foo/bar.sav"));
+        assert_eq!(sav_path("game.gb"), PathBuf::from("game.sav"));
+        assert_eq!(
+            sav_path("/abs/path/poke.gbc"),
+            PathBuf::from("/abs/path/poke.sav")
+        );
+    }
+
+    #[test]
+    fn sav_path_appends_when_no_extension() {
+        assert_eq!(sav_path("dir/sub/rom"), PathBuf::from("dir/sub/rom.sav"));
     }
 }

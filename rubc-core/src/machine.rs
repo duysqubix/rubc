@@ -131,6 +131,25 @@ impl Machine {
         self.bus.set_button(button, pressed);
     }
 
+    /// True if the loaded cartridge has battery-backed RAM that should be
+    /// persisted to a `.sav` file. Thin pass-through to the cartridge.
+    pub fn has_battery(&self) -> bool {
+        self.bus.cart.has_battery()
+    }
+
+    /// The cartridge external-RAM bytes to write to a `.sav` file (empty when
+    /// the cart has no RAM). Thin pass-through to the cartridge. RTC state is
+    /// NOT included -- RTC persistence is out of scope.
+    pub fn save_ram(&self) -> &[u8] {
+        self.bus.cart.ram()
+    }
+
+    /// Restore external-RAM bytes read from a `.sav` file. Best-effort: a size
+    /// mismatch is tolerated (min-length copy). Thin pass-through.
+    pub fn load_ram(&mut self, data: &[u8]) {
+        self.bus.cart.load_ram(data);
+    }
+
     fn at_boundary(&self) -> bool {
         self.cpu.exec_is_boundary()
     }
@@ -660,5 +679,79 @@ mod tests {
     #[test]
     fn blargg_03_op_sp_hl() {
         assert_blargg_passes("03-op sp,hl.gb");
+    }
+
+    /// Battery-save round trip with a REAL battery cart (Pokemon Crystal,
+    /// MBC3+battery). Write bytes into cart RAM through the emulated
+    /// RAM-enable + write path, snapshot via `save_ram()` to a temp file, then
+    /// boot a FRESH machine, `load_ram()` the file bytes, and confirm the bytes
+    /// survive (visible both via `save_ram()` and the emulated read path).
+    ///
+    /// Skipped if the (git-ignored) asset is absent so CI does not fail.
+    #[test]
+    fn battery_save_round_trips_through_disk_crystal() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/crystal.gbc");
+        let Ok(rom) = std::fs::read(&path) else {
+            eprintln!("skipped: {path:?} absent");
+            return;
+        };
+
+        // Source machine: Crystal is a battery cart.
+        let mut src = Machine::boot_cgb(&rom);
+        assert!(
+            src.has_battery(),
+            "Crystal (MBC3+battery) reports a battery"
+        );
+        assert!(
+            !src.save_ram().is_empty(),
+            "Crystal has external RAM to save"
+        );
+
+        // Write distinct markers into two RAM banks via the emulated MBC path.
+        src.bus.poke(0x0000, 0x0A); // enable cart RAM
+        src.bus.poke(0x4000, 0x00); // select RAM bank 0
+        src.bus.poke(0xA000, 0xA5);
+        src.bus.poke(0xBFFF, 0x3C);
+        src.bus.poke(0x4000, 0x01); // select RAM bank 1
+        src.bus.poke(0xA000, 0x7E);
+        src.bus.poke(0x0000, 0x00); // disable RAM (mimic a real game idle)
+
+        let saved = src.save_ram().to_vec();
+
+        // Persist to a temp `.sav` file (exercises the real disk round trip).
+        let tmp =
+            std::env::temp_dir().join(format!("rubc_crystal_save_{}.sav", std::process::id()));
+        std::fs::write(&tmp, &saved).expect("write temp .sav");
+        let from_disk = std::fs::read(&tmp).expect("read temp .sav");
+        std::fs::remove_file(&tmp).ok();
+        assert_eq!(from_disk, saved, "disk bytes match save_ram() snapshot");
+
+        // Fresh machine (simulates a restart): RAM starts blank.
+        let mut restored = Machine::boot_cgb(&rom);
+        restored.bus.poke(0x0000, 0x0A);
+        restored.bus.poke(0x4000, 0x00);
+        assert_eq!(restored.bus.peek(0xA000), 0x00, "fresh cart RAM is blank");
+
+        // Load the save and confirm the bytes survived the restart.
+        restored.load_ram(&from_disk);
+        assert_eq!(
+            restored.save_ram(),
+            saved.as_slice(),
+            "save_ram() matches after load"
+        );
+        restored.bus.poke(0x0000, 0x0A);
+        restored.bus.poke(0x4000, 0x00);
+        assert_eq!(
+            restored.bus.peek(0xA000),
+            0xA5,
+            "bank 0 byte survived restart"
+        );
+        assert_eq!(restored.bus.peek(0xBFFF), 0x3C, "bank 0 high byte survived");
+        restored.bus.poke(0x4000, 0x01);
+        assert_eq!(
+            restored.bus.peek(0xA000),
+            0x7E,
+            "bank 1 byte survived restart"
+        );
     }
 }
