@@ -216,8 +216,7 @@ fn cgb_acid_hell_report() {
         eprintln!("cgb-acid-hell: ROM absent or no breakpoint -- skipping");
         return;
     };
-    let Some(reference) =
-        load_reference_rgb555("cgb-acid-hell/cgb-acid-hell-reference-rgb555.bin")
+    let Some(reference) = load_reference_rgb555("cgb-acid-hell/cgb-acid-hell-reference-rgb555.bin")
     else {
         eprintln!("cgb-acid-hell: RGB555 reference absent -- skipping");
         return;
