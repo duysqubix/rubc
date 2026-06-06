@@ -10,6 +10,16 @@ pub struct Apu {
     nr50: u8,
     nr51: u8,
     wave_ram: [u8; 0x10],
+    /// Stereo output samples (interleaved L,R as f32 in [-1.0, 1.0]) collected
+    /// at the target output rate via the downsample accumulator below.
+    sample_buffer: Vec<f32>,
+    /// Fractional accumulator for downsampling the ~1.048576 MHz T-cycle rate
+    /// down to `t_per_sample`. When it crosses `t_per_sample` a stereo sample
+    /// is emitted.
+    sample_accum: f32,
+    /// T-cycles per output sample = 1_048_576 / output_sample_rate. 0 disables
+    /// sample collection (e.g. headless test runs that only check registers).
+    t_per_sample: f32,
 }
 
 impl Default for Apu {
@@ -25,6 +35,9 @@ impl Default for Apu {
             nr50: 0,
             nr51: 0,
             wave_ram: [0; 0x10],
+            sample_buffer: Vec::new(),
+            sample_accum: 0.0,
+            t_per_sample: 0.0,
         }
     }
 }
@@ -32,6 +45,76 @@ impl Default for Apu {
 impl Apu {
     pub fn power(&self) -> bool {
         self.powered
+    }
+
+    /// Enable audio sample collection at `rate` Hz (e.g. 48000). Pass 0 to
+    /// disable (headless/test runs). The GB master clock is 4_194_304 Hz but the
+    /// APU is ticked once per T-cycle here at 1_048_576 Hz (4_194_304 / 4).
+    pub fn set_sample_rate(&mut self, rate: u32) {
+        self.t_per_sample = if rate == 0 {
+            0.0
+        } else {
+            1_048_576.0 / rate as f32
+        };
+        self.sample_accum = 0.0;
+        self.sample_buffer.clear();
+    }
+
+    /// Drain the collected stereo samples (interleaved L,R f32 in [-1.0, 1.0]).
+    pub fn drain_samples(&mut self, out: &mut Vec<f32>) {
+        out.append(&mut self.sample_buffer);
+    }
+
+    /// Number of stereo frames currently buffered.
+    pub fn buffered_frames(&self) -> usize {
+        self.sample_buffer.len() / 2
+    }
+
+    /// Mix the four channel DACs into a stereo pair, applying NR51 panning and
+    /// NR50 master volume. Output range approximately [-1.0, 1.0].
+    fn mix_sample(&self) -> (f32, f32) {
+        if !self.powered {
+            return (0.0, 0.0);
+        }
+        let c1 = self.ch1.pulse.dac_output();
+        let c2 = self.ch2.dac_output();
+        let c3 = self.ch3.dac_output(&self.wave_ram);
+        let c4 = self.ch4.dac_output();
+
+        // NR51: bits 0-3 = right channel enables (CH1-4), bits 4-7 = left.
+        let n = self.nr51;
+        let right = (((n & 0x01) != 0) as u8 as f32) * c1
+            + (((n & 0x02) != 0) as u8 as f32) * c2
+            + (((n & 0x04) != 0) as u8 as f32) * c3
+            + (((n & 0x08) != 0) as u8 as f32) * c4;
+        let left = (((n & 0x10) != 0) as u8 as f32) * c1
+            + (((n & 0x20) != 0) as u8 as f32) * c2
+            + (((n & 0x40) != 0) as u8 as f32) * c3
+            + (((n & 0x80) != 0) as u8 as f32) * c4;
+
+        // NR50: bits 0-2 = right master volume, bits 4-6 = left (0-7 -> +1).
+        let right_vol = ((self.nr50 & 0x07) + 1) as f32 / 8.0;
+        let left_vol = (((self.nr50 >> 4) & 0x07) + 1) as f32 / 8.0;
+
+        // Each side sums up to 4 channels; normalize by 4 to keep within ~[-1,1].
+        let l = (left / 4.0) * left_vol;
+        let r = (right / 4.0) * right_vol;
+        (l, r)
+    }
+
+    /// Collect one output sample if the downsample accumulator has crossed the
+    /// per-sample T-cycle threshold. Called once per T-cycle from `tick_t`.
+    fn collect_sample(&mut self) {
+        if self.t_per_sample == 0.0 {
+            return;
+        }
+        self.sample_accum += 1.0;
+        if self.sample_accum >= self.t_per_sample {
+            self.sample_accum -= self.t_per_sample;
+            let (l, r) = self.mix_sample();
+            self.sample_buffer.push(l);
+            self.sample_buffer.push(r);
+        }
     }
 
     pub fn read(&self, addr: u16) -> u8 {
@@ -157,13 +240,15 @@ impl Apu {
 
     pub fn tick_t(&mut self) {
         self.t_ticks += 1;
-        if !self.powered {
-            return;
+        if self.powered {
+            self.ch1.pulse.tick_t();
+            self.ch2.tick_t();
+            self.ch3.tick_t();
+            self.ch4.tick_t();
         }
-        self.ch1.pulse.tick_t();
-        self.ch2.tick_t();
-        self.ch3.tick_t();
-        self.ch4.tick_t();
+        // Always advance the sample clock so the output rate stays constant even
+        // while the APU is powered off (mix_sample emits silence then).
+        self.collect_sample();
     }
 
     fn read_nr52(&self) -> u8 {
@@ -445,6 +530,29 @@ impl PulseChannel {
         (2048 - self.frequency()) * 4
     }
 
+    /// Analog DAC output in [0.0, 1.0]. Returns 0.0 when the channel or its DAC
+    /// is off. A square wave: the selected duty pattern bit gates the current
+    /// envelope volume (0..15) to a normalized level.
+    fn dac_output(&self) -> f32 {
+        if !self.enabled || !self.envelope.dac_enabled() {
+            return 0.0;
+        }
+        // Duty patterns (bits 7-6 of NRx1) -> 8-step high/low waveform.
+        const DUTY: [[u8; 8]; 4] = [
+            [0, 0, 0, 0, 0, 0, 0, 1], // 12.5%
+            [1, 0, 0, 0, 0, 0, 0, 1], // 25%
+            [1, 0, 0, 0, 0, 1, 1, 1], // 50%
+            [0, 1, 1, 1, 1, 1, 1, 0], // 75%
+        ];
+        let pattern = (self.duty_length >> 6) & 0x03;
+        let high = DUTY[pattern as usize][(self.duty_pos & 0x07) as usize] != 0;
+        if high {
+            f32::from(self.envelope.volume) / 15.0
+        } else {
+            0.0
+        }
+    }
+
     fn power_off(&mut self, preserve_length: bool) {
         let length = self.length_counter;
         *self = Self::default();
@@ -607,6 +715,27 @@ impl WaveChannel {
         (2048 - self.frequency()) * 2
     }
 
+    /// Analog DAC output in [0.0, 1.0]. The current 4-bit wave-RAM nibble is
+    /// scaled by the volume shift (NR32 bits 6-5: 0=mute, 1=100%, 2=50%, 3=25%).
+    fn dac_output(&self, wave_ram: &[u8; 0x10]) -> f32 {
+        if !self.enabled || !self.dac_enabled() {
+            return 0.0;
+        }
+        let byte = wave_ram[(self.sample_index >> 1) as usize];
+        let nibble = if self.sample_index & 1 == 0 {
+            byte >> 4
+        } else {
+            byte & 0x0F
+        };
+        let shift = match (self.nr32 >> 5) & 0x03 {
+            0 => return 0.0, // muted
+            1 => 0,
+            2 => 1,
+            _ => 2,
+        };
+        f32::from(nibble >> shift) / 15.0
+    }
+
     fn power_off(&mut self, preserve_length: bool) {
         let length = self.length_counter;
         *self = Self::default();
@@ -715,6 +844,19 @@ impl NoiseChannel {
         const DIVISORS: [u32; 8] = [8, 16, 32, 48, 64, 80, 96, 112];
         let divisor = DIVISORS[(self.nr43 & 0x07) as usize];
         divisor << (self.nr43 >> 4)
+    }
+
+    /// Analog DAC output in [0.0, 1.0]. The inverted LFSR bit 0 gates the
+    /// current envelope volume.
+    fn dac_output(&self) -> f32 {
+        if !self.enabled || !self.envelope.dac_enabled() {
+            return 0.0;
+        }
+        if self.lfsr & 0x01 == 0 {
+            f32::from(self.envelope.volume) / 15.0
+        } else {
+            0.0
+        }
     }
 
     fn power_off(&mut self, preserve_length: bool) {
@@ -905,5 +1047,58 @@ mod tests {
         apu.write(0xFF17, 0x00, false);
 
         assert_eq!(apu.read(0xFF26) & 0x0F, 0x0D);
+    }
+
+    #[test]
+    fn dac_produces_audible_oscillating_output_for_square_channel() {
+        // Drive CH1 (square) with a real tone and prove the mixer emits a
+        // non-silent, OSCILLATING stereo stream -- the floor for "can I hear it".
+        let mut apu = Apu::default();
+        apu.set_sample_rate(48_000);
+        apu.write(0xFF26, 0x80, false); // APU on
+        apu.write(0xFF25, 0xFF, false); // NR51: all channels to L+R
+        apu.write(0xFF24, 0x77, false); // NR50: max master volume L+R
+        apu.write(0xFF11, 0x80, false); // NR11: 50% duty
+        apu.write(0xFF12, 0xF0, false); // NR12: volume 15, DAC on, no envelope
+        apu.write(0xFF13, 0x00, false); // NR13: freq low
+        apu.write(0xFF14, 0x87, false); // NR14: trigger + freq high (audible tone)
+
+        // Run ~1/100s of emulated time (10_485 T-cycles) collecting samples.
+        for _ in 0..10_485 {
+            apu.tick_t();
+        }
+        let mut samples = Vec::new();
+        apu.drain_samples(&mut samples);
+
+        assert!(!samples.is_empty(), "no audio samples were collected");
+        let max = samples.iter().cloned().fold(f32::MIN, f32::max);
+        let min = samples.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(max > 0.0, "output is silent (max amplitude {max})");
+        assert!(
+            max - min > 0.01,
+            "output does not oscillate (min {min}, max {max}); a square wave must swing"
+        );
+        // All samples must stay within the valid normalized range.
+        assert!(
+            samples.iter().all(|s| *s >= -1.0 && *s <= 1.0),
+            "sample out of [-1.0, 1.0] range"
+        );
+    }
+
+    #[test]
+    fn no_samples_collected_when_rate_disabled() {
+        // Headless/test default: sample_rate 0 -> no collection (zero overhead).
+        let mut apu = Apu::default();
+        apu.write(0xFF26, 0x80, false);
+        apu.write(0xFF12, 0xF0, false);
+        apu.write(0xFF14, 0x87, false);
+        for _ in 0..10_000 {
+            apu.tick_t();
+        }
+        assert_eq!(
+            apu.buffered_frames(),
+            0,
+            "samples collected with rate disabled"
+        );
     }
 }
