@@ -59,6 +59,22 @@ pub trait CpuBus {
     fn boundary(&mut self);
 }
 
+/// A single CPU bus access, used to drive the per-M-cycle timing in one place.
+/// The CPU describes WHAT it wants (fetch/read/write/idle); the bus owns WHEN
+/// the access lands within the M-cycle's 4 T-cycles. Step 1 of the T-cycle
+/// migration (rubc-td3): this is a pure refactor -- the placement is still
+/// "tick all 4 T, THEN access", identical to the previous behavior. Later steps
+/// move the access to its correct sub-M T-offset.
+enum CpuAccess {
+    /// Burn one M-cycle with no memory access.
+    Idle,
+    /// Memory read (opcode fetch or operand/data read -- identical timing until
+    /// Step 3 splits fetch from operand reads if hardware requires it).
+    Read { addr: u16 },
+    /// Memory write.
+    Write { addr: u16, value: u8 },
+}
+
 /// Bus-observable fields the CPU merges into a flight record after an M-cycle.
 /// The CPU supplies PC/opcode/regs; the bus supplies these. Side-effect-free.
 #[cfg(feature = "flight-recorder")]
@@ -233,6 +249,23 @@ impl Bus {
 
         // (3) HBlank VRAM DMA: copy one $10 block on each fresh HBlank entry.
         self.hdma_hblank_step();
+    }
+
+    /// Drive one CPU M-cycle for a typed access, centralizing the per-M-cycle
+    /// timing in ONE place. STEP 1 (rubc-6ur): placement is still "tick all 4 T,
+    /// THEN access" -- byte-for-byte identical to the previous
+    /// `begin_cpu_m_cycle` + `cpu_*_latched` flow. Later steps (rubc-9am/cu6)
+    /// split this into `tick 3 -> access -> tick 1` per access kind.
+    fn run_cpu_access(&mut self, access: CpuAccess) -> u8 {
+        self.begin_cpu_m_cycle();
+        match access {
+            CpuAccess::Idle => 0xFF,
+            CpuAccess::Read { addr } => self.cpu_read_latched(addr),
+            CpuAccess::Write { addr, value } => {
+                self.cpu_write_latched(addr, value);
+                0xFF
+            }
+        }
     }
 
     fn tick_cpu_t(&mut self) {
@@ -722,17 +755,15 @@ impl Bus {
 
 impl CpuBus for Bus {
     fn read_m(&mut self, addr: u16) -> u8 {
-        self.begin_cpu_m_cycle();
-        self.cpu_read_latched(addr)
+        self.run_cpu_access(CpuAccess::Read { addr })
     }
 
     fn write_m(&mut self, addr: u16, value: u8) {
-        self.begin_cpu_m_cycle();
-        self.cpu_write_latched(addr, value);
+        self.run_cpu_access(CpuAccess::Write { addr, value });
     }
 
     fn idle_m(&mut self) {
-        self.begin_cpu_m_cycle();
+        self.run_cpu_access(CpuAccess::Idle);
     }
 
     fn irq_pending_mask(&self) -> u8 {
