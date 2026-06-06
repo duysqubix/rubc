@@ -472,6 +472,29 @@ mod tests {
         }
     }
 
+    #[test]
+    fn blargg_cgb_sound_passing_subtests() {
+        // Subtests of blargg's cgb_sound suite that we pass, booted in CGB
+        // mode. Exercises the APU register file, the 512 Hz frame sequencer in
+        // both single- and double-speed (DIV-APU bit 13 mask), and CGB-specific
+        // power-cycle length clearing.
+        for name in [
+            "01-registers.gb",
+            "02-len ctr.gb",
+            "03-trigger.gb",
+            "04-sweep.gb",
+            "05-sweep details.gb",
+            "06-overflow on trigger.gb",
+            "07-len sweep period sync.gb",
+            "08-len ctr during power.gb",
+            "10-wave trigger while on.gb",
+            "11-regs after power.gb",
+        ] {
+            let rel = format!("cgb_sound/rom_singles/{name}");
+            assert!(blargg_passes_at_cgb(&rel), "cgb_sound {name} should pass");
+        }
+    }
+
     /// Run a blargg ROM from an arbitrary path booted in **CGB mode**. Used for
     /// CGB-aware ROMs (header CGB flag bit 7 set) that exercise the KEY1 speed
     /// switch.
