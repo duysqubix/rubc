@@ -73,6 +73,39 @@ build-release:
 build-diag:
     cargo build -p {{core}} --features diag-full
 
+# ---- wasm ------------------------------------------------------------------
+
+# Build the rubc-wasm crate to a browser-ready ES module under
+# rubc-wasm/web/pkg/. Prefers `wasm-pack`; falls back to raw cargo +
+# `wasm-bindgen` CLI when wasm-pack is absent. Serve the demo afterwards with
+# `just wasm-serve` (or `cd rubc-wasm/web && python3 -m http.server`).
+wasm-build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
+    out="rubc-wasm/web/pkg"
+    if command -v wasm-pack >/dev/null 2>&1; then
+      echo "== wasm-build: wasm-pack =>$out =="
+      wasm-pack build rubc-wasm --target web --out-dir web/pkg
+    elif command -v wasm-bindgen >/dev/null 2>&1; then
+      echo "== wasm-build: cargo + wasm-bindgen CLI =>$out =="
+      cargo build -p rubc-wasm --target wasm32-unknown-unknown --release
+      wasm-bindgen target/wasm32-unknown-unknown/release/rubc_wasm.wasm \
+        --target web --out-dir "$out"
+    else
+      echo "Need wasm-pack OR wasm-bindgen-cli. Install one of:"
+      echo "  cargo install wasm-pack"
+      echo "  cargo install wasm-bindgen-cli --version 0.2.91"
+      exit 1
+    fi
+    echo "built: $out  (serve: just wasm-serve)"
+
+# Serve the wasm demo over HTTP (ES modules require http://, not file://).
+# Usage: just wasm-serve [port]
+wasm-serve port="8000":
+    @echo "serving rubc-wasm/web on http://localhost:{{port}}/ (Ctrl-C to stop)"
+    cd rubc-wasm/web && python3 -m http.server {{port}}
+
 # ---- run -------------------------------------------------------------------
 
 # Run a ROM quietly. Usage: just run <rom> [extra args...]
