@@ -146,32 +146,49 @@ impl Machine {
     /// the serial transcript ("Passed"/"Failed"). `LD B,B` is a normal
     /// instruction here and must NOT terminate the run.
     pub fn run_blargg(&mut self, max_instructions: u64) -> RunStop {
-        for _ in 0..max_instructions {
+        // Track whether the cart-RAM protocol has signalled "running" ($A000 ==
+        // 0x80) at least once. A result code is only trusted after that, so a
+        // transient mid-write value (or a coincidental signature in a ROM that
+        // does not use the protocol) cannot be mistaken for a finalized result.
+        let mut cart_ram_was_running = false;
+        for i in 0..max_instructions {
             if matches!(self.cpu.mode, CpuMode::Stopped) {
                 return RunStop::Stuck;
             }
             self.step_instruction();
-            // Channel 1: serial transcript ("Passed"/"Failed").
+            // Channel 1: serial transcript ("Passed"/"Failed"). Cheap to check.
             if let Some(text) = self.serial_text() {
                 if text.contains("Passed") || text.contains("Failed") {
                     return RunStop::BlarggDone;
                 }
             }
-            // Channel 2: cart-RAM protocol. Some blargg ROMs (e.g. mem_timing-2,
-            // dmg_sound) report to $A000-$A003 instead of serial: once the
-            // signature $A001-3 == DE B0 61 is present, $A000 holds the status
-            // (0x80 = still running; any other value = final result code).
-            if self.blargg_cart_ram_done().is_some() {
-                return RunStop::BlarggDone;
+            // The cart-RAM "running" marker can appear briefly; sample it often
+            // but cheaply (3 byte reads).
+            if self.blargg_cart_ram_status() == Some(0x80) {
+                cart_ram_was_running = true;
+            }
+            // The terminal channels (cart-RAM result, LCD console) are stable
+            // end-states, so they only need periodic polling -- scanning the
+            // 360-cell VRAM console every instruction is needlessly expensive.
+            if i % 4096 == 0 {
+                // Channel 2: cart-RAM result (only trusted after "running").
+                if cart_ram_was_running && self.blargg_cart_ram_done().is_some() {
+                    return RunStop::BlarggDone;
+                }
+                // Channel 3: LCD text console (halt_bug, instr_timing).
+                if let Some(text) = self.blargg_console_text() {
+                    if text.contains("Passed") || text.contains("Failed") {
+                        return RunStop::BlarggDone;
+                    }
+                }
             }
         }
         RunStop::Timeout
     }
 
-    /// If a blargg cart-RAM result is finalized, return Some(status_code)
-    /// (0x00 = pass). Returns None while the signature is absent or status is
-    /// still 0x80 (running).
-    fn blargg_cart_ram_done(&self) -> Option<u8> {
+    /// The raw blargg cart-RAM status byte ($A000) when the result signature
+    /// ($A001-3 == DE B0 61) is present, else None. 0x80 = still running.
+    fn blargg_cart_ram_status(&self) -> Option<u8> {
         let sig = [
             self.bus.peek(0xA001),
             self.bus.peek(0xA002),
@@ -180,22 +197,58 @@ impl Machine {
         if sig != [0xDE, 0xB0, 0x61] {
             return None;
         }
-        let status = self.bus.peek(0xA000);
-        if status == 0x80 {
-            None
-        } else {
-            Some(status)
+        Some(self.bus.peek(0xA000))
+    }
+
+    /// If a blargg cart-RAM result is finalized, return Some(status_code)
+    /// (0x00 = pass). Returns None while the signature is absent or status is
+    /// still 0x80 (running).
+    fn blargg_cart_ram_done(&self) -> Option<u8> {
+        match self.blargg_cart_ram_status() {
+            Some(0x80) | None => None,
+            Some(status) => Some(status),
         }
     }
 
-    /// True if a finalized blargg result (serial or cart-RAM) indicates PASS.
+    /// True if a finalized blargg result (serial, cart-RAM, or LCD console)
+    /// indicates PASS.
     pub fn blargg_passed(&self) -> bool {
         if let Some(status) = self.blargg_cart_ram_done() {
             return status == 0x00;
         }
-        self.serial_text()
+        if let Some(t) = self.serial_text() {
+            if t.contains("Passed") || t.contains("Failed") {
+                return t.contains("Passed");
+            }
+        }
+        self.blargg_console_text()
             .map(|t| t.contains("Passed"))
             .unwrap_or(false)
+    }
+
+    /// Decode the blargg on-screen text console (VRAM background tilemap at
+    /// $9800) as ASCII. blargg's console writes ASCII tile indices directly to
+    /// the tilemap, so the bytes are readable text. Returns None if the tilemap
+    /// holds no printable content (e.g. the ROM uses serial instead).
+    pub fn blargg_console_text(&self) -> Option<String> {
+        let mut out = String::new();
+        for row in 0..18u16 {
+            let base = 0x9800u16 + row * 32;
+            for col in 0..20u16 {
+                let b = self.bus.peek(base + col);
+                out.push(if (0x20..0x7f).contains(&b) {
+                    b as char
+                } else {
+                    ' '
+                });
+            }
+            out.push('\n');
+        }
+        if out.trim().is_empty() {
+            None
+        } else {
+            Some(out)
+        }
     }
 
     /// Run a mooneye ROM: it ends at the `LD B,B` (0x40) magic breakpoint, after
@@ -362,6 +415,38 @@ mod tests {
         assert!(
             blargg_passes_at("mem_timing-2/mem_timing.gb"),
             "mem_timing-2 should pass"
+        );
+    }
+
+    /// Like `blargg_passes_at` but boots in CGB mode (for CGB-flagged ROMs).
+    fn blargg_passes_at_cgb(rel: &str) -> bool {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../reference/test-suites/gb-test-roms")
+            .join(rel);
+        let Ok(rom) = std::fs::read(&path) else {
+            return true; // ROM absent on this checkout -> skip
+        };
+        let mut m = Machine::boot_cgb(&rom);
+        m.run_blargg(100_000_000);
+        m.blargg_passed()
+    }
+
+    #[test]
+    fn blargg_halt_bug_passes() {
+        // halt_bug.gb is CGB-flagged and prints its verdict to the on-screen
+        // text console (VRAM tilemap), not serial -- gated via blargg_console_text.
+        assert!(blargg_passes_at_cgb("halt_bug.gb"), "halt_bug should pass");
+    }
+
+    #[test]
+    fn blargg_oam_bug_fails_we_do_not_emulate_it() {
+        // oam_bug requires the DMG OAM-corruption hardware bug, which we do not
+        // emulate; it reports FAIL ($A000 = 0x01) via the cart-RAM protocol. This
+        // pins that our detection does NOT report a false pass (the result code
+        // is only trusted after the ROM signals "running").
+        assert!(
+            !blargg_passes_at("oam_bug/oam_bug.gb"),
+            "oam_bug must report FAIL (OAM corruption bug not emulated)"
         );
     }
 
