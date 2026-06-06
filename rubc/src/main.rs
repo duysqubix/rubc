@@ -34,11 +34,23 @@ const FPS_US: u64 = 16_743;
 /// Generous instruction budget for headless test-ROM runs.
 const HEADLESS_MAX_INSTRUCTIONS: u64 = 250_000_000;
 
+/// Keyboard -> Game Boy controls, shown in `--help` and `rubc controls`.
+const CONTROLS_HELP: &str = "\
+CONTROLS (windowed mode)\n\
+  D-pad .......... Arrow keys (Up / Down / Left / Right)\n\
+  A button ....... X\n\
+  B button ....... Z\n\
+  Start .......... Enter\n\
+  Select ......... Right Shift  (or Backspace)\n\
+  Quit ........... Esc  (or close the window)\n\
+";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "rubc",
     version,
-    about = "A cycle-accurate Game Boy (DMG/CGB) emulator"
+    about = "A cycle-accurate Game Boy (DMG/CGB) emulator",
+    after_help = CONTROLS_HELP
 )]
 struct Cli {
     #[command(subcommand)]
@@ -73,6 +85,8 @@ enum Command {
         #[arg(short, long, value_name = "FILE")]
         output: Option<String>,
     },
+    /// Print the keyboard -> Game Boy control mapping.
+    Controls,
 }
 
 /// Options shared by `run` and the bare-ROM shorthand.
@@ -114,6 +128,10 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Command::Run { rom, opts }) => run(&rom, &opts),
         Some(Command::Cartdump { rom, raw, output }) => cartdump(&rom, raw, output.as_deref()),
+        Some(Command::Controls) => {
+            print!("{CONTROLS_HELP}");
+            Ok(())
+        }
         None => match cli.rom {
             Some(rom) => run(&rom, &cli.run_opts), // bare-ROM shorthand
             None => {
