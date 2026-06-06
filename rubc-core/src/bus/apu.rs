@@ -79,7 +79,7 @@ impl Apu {
         }
         let c1 = self.ch1.pulse.dac_output();
         let c2 = self.ch2.dac_output();
-        let c3 = self.ch3.dac_output(&self.wave_ram);
+        let c3 = self.ch3.dac_output();
         let c4 = self.ch4.dac_output();
 
         // NR51: bits 0-3 = right channel enables (CH1-4), bits 4-7 = left.
@@ -119,6 +119,10 @@ impl Apu {
     }
 
     pub fn read(&self, addr: u16) -> u8 {
+        self.read_for_model(addr, false)
+    }
+
+    pub fn read_for_model(&self, addr: u16, cgb: bool) -> u8 {
         match addr {
             0xFF10 => 0x80 | self.ch1.sweep.nr10,
             0xFF11 => self.ch1.pulse.read_duty_length(),
@@ -143,37 +147,37 @@ impl Apu {
             0xFF24 => self.nr50,
             0xFF25 => self.nr51,
             0xFF26 => self.read_nr52(),
-            0xFF30..=0xFF3F => self.read_wave_ram(addr),
+            0xFF30..=0xFF3F => self.read_wave_ram(addr, cgb),
             _ => 0xFF,
         }
     }
 
-    /// Wave RAM read ($FF30-3F). While CH3 is enabled, the CPU can only see the
-    /// byte the channel is currently reading (wave_ram[sample_index/2]), not the
-    /// addressed byte (DMG hardware quirk; blargg 09-wave-read). When CH3 is
-    /// off, normal addressed access.
-    fn read_wave_ram(&self, addr: u16) -> u8 {
-        if self.ch3.enabled {
-            self.wave_ram[(self.ch3.sample_index >> 1) as usize]
-        } else {
-            self.wave_ram[(addr - 0xFF30) as usize]
+    fn read_wave_ram(&self, addr: u16, cgb: bool) -> u8 {
+        let Some(idx) = self.wave_ram_access_index(addr, cgb) else {
+            return 0xFF;
+        };
+        self.wave_ram[idx]
+    }
+
+    fn write_wave_ram(&mut self, addr: u16, value: u8, cgb: bool) {
+        if let Some(idx) = self.wave_ram_access_index(addr, cgb) {
+            self.wave_ram[idx] = value;
         }
     }
 
-    /// Wave RAM write ($FF30-3F). While CH3 is enabled the write lands at the
-    /// byte currently being read; otherwise at the addressed byte.
-    fn write_wave_ram(&mut self, addr: u16, value: u8) {
-        let idx = if self.ch3.enabled {
-            (self.ch3.sample_index >> 1) as usize
-        } else {
-            (addr - 0xFF30) as usize
-        };
-        self.wave_ram[idx] = value;
+    fn wave_ram_access_index(&self, addr: u16, cgb: bool) -> Option<usize> {
+        if !self.ch3.enabled {
+            return Some((addr - 0xFF30) as usize);
+        }
+        if cgb {
+            return Some(self.ch3.current_wave_byte_index());
+        }
+        self.ch3.wave_access_byte()
     }
 
     pub fn write(&mut self, addr: u16, value: u8, cgb: bool) {
         if (0xFF30..=0xFF3F).contains(&addr) {
-            self.write_wave_ram(addr, value);
+            self.write_wave_ram(addr, value, cgb);
             return;
         }
 
@@ -224,6 +228,9 @@ impl Apu {
             0xFF1D => self.ch3.freq_low = value,
             0xFF1E => {
                 if self.ch3.write_control(value, next_step_clocks_length) {
+                    if !cgb {
+                        self.corrupt_wave_ram_on_dmg_wave_trigger();
+                    }
                     self.ch3.trigger(next_step_clocks_length);
                 }
             }
@@ -267,7 +274,7 @@ impl Apu {
         if self.powered {
             self.ch1.pulse.tick_t();
             self.ch2.tick_t();
-            self.ch3.tick_t();
+            self.ch3.tick_t(&self.wave_ram);
             self.ch4.tick_t();
         }
         // Always advance the sample clock so the output rate stays constant even
@@ -344,6 +351,24 @@ impl Apu {
 
     fn step_clocks_length(step: u8) -> bool {
         matches!(step, 0 | 2 | 4 | 6)
+    }
+
+    fn corrupt_wave_ram_on_dmg_wave_trigger(&mut self) {
+        let Some(idx) = self.ch3.wave_trigger_corruption_byte() else {
+            return;
+        };
+        if idx < 4 {
+            self.wave_ram[0] = self.wave_ram[idx];
+            return;
+        }
+        let base = idx & !0x03;
+        let bytes = [
+            self.wave_ram[base],
+            self.wave_ram[base + 1],
+            self.wave_ram[base + 2],
+            self.wave_ram[base + 3],
+        ];
+        self.wave_ram[..4].copy_from_slice(&bytes);
     }
 }
 
@@ -646,7 +671,15 @@ struct WaveChannel {
     length_counter: u16,
     enabled: bool,
     sample_index: u8,
+    sample_buffer: u8,
     timer: u16,
+    wave_access_window: Option<WaveAccessWindow>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WaveAccessWindow {
+    byte_index: usize,
+    remaining_t: u8,
 }
 
 impl WaveChannel {
@@ -687,11 +720,12 @@ impl WaveChannel {
             }
         }
         self.sample_index = 0;
-        self.timer = self.period();
+        self.timer = self.period() + 6;
         self.enabled = self.dac_enabled();
     }
 
-    fn tick_t(&mut self) {
+    fn tick_t(&mut self, wave_ram: &[u8; 0x10]) {
+        self.clock_wave_access_window();
         if !self.enabled {
             return;
         }
@@ -702,7 +736,48 @@ impl WaveChannel {
         if self.timer == 0 {
             self.timer = self.period();
             self.sample_index = (self.sample_index + 1) & 0x1F;
+            self.read_sample(wave_ram);
         }
+    }
+
+    fn read_sample(&mut self, wave_ram: &[u8; 0x10]) {
+        let byte_index = self.current_wave_byte_index();
+        let byte = wave_ram[byte_index];
+        self.sample_buffer = if self.sample_index & 1 == 0 {
+            byte >> 4
+        } else {
+            byte & 0x0F
+        };
+        self.wave_access_window = Some(WaveAccessWindow {
+            byte_index,
+            remaining_t: 2,
+        });
+    }
+
+    fn clock_wave_access_window(&mut self) {
+        let Some(window) = self.wave_access_window.as_mut() else {
+            return;
+        };
+        if window.remaining_t > 1 {
+            window.remaining_t -= 1;
+        } else {
+            self.wave_access_window = None;
+        }
+    }
+
+    fn current_wave_byte_index(&self) -> usize {
+        (self.sample_index >> 1) as usize
+    }
+
+    fn wave_access_byte(&self) -> Option<usize> {
+        self.wave_access_window.map(|window| window.byte_index)
+    }
+
+    fn wave_trigger_corruption_byte(&self) -> Option<usize> {
+        if !self.enabled || !(1..=2).contains(&self.timer) {
+            return None;
+        }
+        Some(((self.sample_index.wrapping_add(1) & 0x1F) >> 1) as usize)
     }
 
     fn clock_length(&mut self) {
@@ -741,23 +816,17 @@ impl WaveChannel {
 
     /// Analog DAC output in [0.0, 1.0]. The current 4-bit wave-RAM nibble is
     /// scaled by the volume shift (NR32 bits 6-5: 0=mute, 1=100%, 2=50%, 3=25%).
-    fn dac_output(&self, wave_ram: &[u8; 0x10]) -> f32 {
+    fn dac_output(&self) -> f32 {
         if !self.enabled || !self.dac_enabled() {
             return 0.0;
         }
-        let byte = wave_ram[(self.sample_index >> 1) as usize];
-        let nibble = if self.sample_index & 1 == 0 {
-            byte >> 4
-        } else {
-            byte & 0x0F
-        };
         let shift = match (self.nr32 >> 5) & 0x03 {
             0 => return 0.0, // muted
             1 => 0,
             2 => 1,
             _ => 2,
         };
-        f32::from(nibble >> shift) / 15.0
+        f32::from(self.sample_buffer >> shift) / 15.0
     }
 
     fn power_off(&mut self, preserve_length: bool) {
@@ -1073,6 +1142,119 @@ mod tests {
         apu.write(0xFF17, 0x00, false);
 
         assert_eq!(apu.read(0xFF26) & 0x0F, 0x0D);
+    }
+
+    #[test]
+    fn dmg_wave_ram_read_while_active_is_locked_out_between_fetches() {
+        let mut apu = Apu::default();
+
+        apu.write(0xFF30, 0x12, false);
+        apu.write(0xFF1A, 0x80, false);
+        apu.write(0xFF1D, 0xFF, false);
+        apu.write(0xFF1E, 0x87, false);
+
+        assert_eq!(apu.read(0xFF30), 0xFF);
+    }
+
+    #[test]
+    fn dmg_wave_ram_access_while_active_hits_fetch_window_only() {
+        let mut apu = Apu::default();
+
+        apu.write(0xFF30, 0xAB, false);
+        apu.write(0xFF31, 0xCD, false);
+        apu.write(0xFF1A, 0x80, false);
+        apu.write(0xFF1D, 0xFE, false);
+        apu.write(0xFF1E, 0x87, false);
+
+        apu.write(0xFF30, 0x11, false);
+        assert_eq!(apu.wave_ram[0], 0xAB);
+
+        for _ in 0..10 {
+            apu.tick_t();
+        }
+        assert_eq!(apu.read(0xFF3F), 0xAB);
+
+        apu.write(0xFF3F, 0x22, false);
+        assert_eq!(apu.wave_ram[0], 0x22);
+
+        apu.tick_t();
+        assert_eq!(apu.read(0xFF30), 0x22);
+
+        apu.tick_t();
+        assert_eq!(apu.read(0xFF30), 0xFF);
+    }
+
+    #[test]
+    fn cgb_wave_ram_access_while_active_uses_current_byte() {
+        let mut apu = Apu::default();
+
+        apu.write(0xFF30, 0x12, true);
+        apu.write(0xFF31, 0x34, true);
+        apu.write(0xFF1A, 0x80, true);
+        apu.write(0xFF1D, 0xFE, true);
+        apu.write(0xFF1E, 0x87, true);
+
+        assert_eq!(apu.read_for_model(0xFF3F, true), 0x12);
+        apu.write(0xFF3F, 0x56, true);
+        assert_eq!(apu.wave_ram[0], 0x56);
+    }
+
+    #[test]
+    fn dmg_wave_trigger_corrupts_first_byte_from_low_upcoming_fetch_group() {
+        let mut apu = Apu::default();
+        for i in 0..16 {
+            apu.write(0xFF30 + i, i as u8, false);
+        }
+        apu.write(0xFF1A, 0x80, false);
+        apu.write(0xFF1D, 0xFE, false);
+        apu.write(0xFF1E, 0x87, false);
+
+        for _ in 0..20 {
+            apu.tick_t();
+        }
+        apu.write(0xFF1E, 0x87, false);
+
+        assert_eq!(apu.wave_ram[0], 2);
+        assert_eq!(apu.wave_ram[1], 1);
+        assert_eq!(apu.wave_ram[2], 2);
+        assert_eq!(apu.wave_ram[3], 3);
+    }
+
+    #[test]
+    fn dmg_wave_trigger_corrupts_first_four_bytes_from_aligned_upcoming_fetch_group() {
+        let mut apu = Apu::default();
+        for i in 0..16 {
+            apu.write(0xFF30 + i, (0xA0 | i) as u8, false);
+        }
+        apu.write(0xFF1A, 0x80, false);
+        apu.write(0xFF1D, 0xFE, false);
+        apu.write(0xFF1E, 0x87, false);
+
+        for _ in 0..76 {
+            apu.tick_t();
+        }
+        apu.write(0xFF1E, 0x87, false);
+
+        assert_eq!(&apu.wave_ram[..4], &[0xA8, 0xA9, 0xAA, 0xAB]);
+    }
+
+    #[test]
+    fn wave_trigger_keeps_previous_sample_buffer_until_next_fetch() {
+        let mut apu = Apu::default();
+
+        apu.write(0xFF30, 0xA5, false);
+        apu.write(0xFF1A, 0x80, false);
+        apu.write(0xFF1D, 0xFE, false);
+        apu.ch3.sample_buffer = 0x0D;
+        apu.write(0xFF1E, 0x87, false);
+
+        assert_eq!(apu.ch3.sample_buffer, 0x0D);
+
+        for _ in 0..10 {
+            apu.tick_t();
+        }
+
+        assert_eq!(apu.ch3.sample_buffer, 0x05);
     }
 
     #[test]

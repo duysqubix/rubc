@@ -501,7 +501,10 @@ mod tests {
             "06-overflow on trigger.gb",
             "07-len sweep period sync.gb",
             "08-len ctr during power.gb",
+            "09-wave read while on.gb",
+            "10-wave trigger while on.gb",
             "11-regs after power.gb",
+            "12-wave write while on.gb",
         ] {
             let rel = format!("dmg_sound/rom_singles/{name}");
             assert!(blargg_passes_at(&rel), "dmg_sound {name} should pass");
@@ -523,8 +526,10 @@ mod tests {
             "06-overflow on trigger.gb",
             "07-len sweep period sync.gb",
             "08-len ctr during power.gb",
+            "09-wave read while on.gb",
             "10-wave trigger while on.gb",
             "11-regs after power.gb",
+            "12-wave.gb",
         ] {
             let rel = format!("cgb_sound/rom_singles/{name}");
             assert!(blargg_passes_at_cgb(&rel), "cgb_sound {name} should pass");
