@@ -143,14 +143,37 @@ impl Apu {
             0xFF24 => self.nr50,
             0xFF25 => self.nr51,
             0xFF26 => self.read_nr52(),
-            0xFF30..=0xFF3F => self.wave_ram[(addr - 0xFF30) as usize],
+            0xFF30..=0xFF3F => self.read_wave_ram(addr),
             _ => 0xFF,
         }
     }
 
+    /// Wave RAM read ($FF30-3F). While CH3 is enabled, the CPU can only see the
+    /// byte the channel is currently reading (wave_ram[sample_index/2]), not the
+    /// addressed byte (DMG hardware quirk; blargg 09-wave-read). When CH3 is
+    /// off, normal addressed access.
+    fn read_wave_ram(&self, addr: u16) -> u8 {
+        if self.ch3.enabled {
+            self.wave_ram[(self.ch3.sample_index >> 1) as usize]
+        } else {
+            self.wave_ram[(addr - 0xFF30) as usize]
+        }
+    }
+
+    /// Wave RAM write ($FF30-3F). While CH3 is enabled the write lands at the
+    /// byte currently being read; otherwise at the addressed byte.
+    fn write_wave_ram(&mut self, addr: u16, value: u8) {
+        let idx = if self.ch3.enabled {
+            (self.ch3.sample_index >> 1) as usize
+        } else {
+            (addr - 0xFF30) as usize
+        };
+        self.wave_ram[idx] = value;
+    }
+
     pub fn write(&mut self, addr: u16, value: u8, cgb: bool) {
         if (0xFF30..=0xFF3F).contains(&addr) {
-            self.wave_ram[(addr - 0xFF30) as usize] = value;
+            self.write_wave_ram(addr, value);
             return;
         }
 
