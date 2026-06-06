@@ -431,6 +431,14 @@ impl Ppu {
         Self::default()
     }
 
+    pub fn oam_bug_scan_row(&self) -> Option<usize> {
+        if !self.enabled || self.mode != mode::OAM_SCAN || self.ly > LAST_VISIBLE_LINE {
+            return None;
+        }
+        let dot = self.line_dot.clamp(1, MODE2_DOTS);
+        Some(((dot - 1) / 4) as usize)
+    }
+
     // ---- the per-dot scheduler ---------------------------------------------
 
     /// Advance one dot (one T-cycle). Called 4x per M-cycle (or 2x in CGB
