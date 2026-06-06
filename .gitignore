@@ -37,3 +37,6 @@ graph.svg
 .DS_Store
 assets/*.gb
 assets/*.gbc
+
+# Battery-backed save files (user save data, not source)
+*.sav
