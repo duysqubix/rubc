@@ -390,6 +390,8 @@ impl Bus {
     pub fn start_oam_dma(&mut self, value: u8) {
         self.dma.pending_source_hi = Some(value);
         self.dma.start_delay_m = 1;
+        // $FF46 reads back the last value written (mooneye oam_dma/reg_read).
+        self.io[0x46] = value;
     }
 
     /// Side-effect-free read of the DMA source (no ticking).
@@ -400,9 +402,16 @@ impl Bus {
     /// Whether a CPU access to `addr` targets the SAME bus the OAM DMA is
     /// currently driving. The DMA drives the bus its source page lives on:
     /// the video bus ($8000-$9FFF) for sources $80-$9F, else the external bus
-    /// (ROM/SRAM/WRAM). Only same-bus accesses see the in-flight conflict byte;
-    /// the other bus stays usable by the CPU (Pan Docs OAM DMA bus conflicts).
+    /// (ROM/SRAM/WRAM, $0000-$7FFF + $A000-$FDFF). Only same-bus accesses see the
+    /// in-flight conflict byte; the other bus stays usable (Pan Docs OAM DMA bus
+    /// conflicts). The IO/HRAM region ($FF00-$FFFF) is on neither memory bus, so
+    /// the CPU can always access it during DMA (mooneye oam_dma/reg_read reads
+    /// $FF46 while a DMA is in progress).
     fn dma_conflicts_with(&self, addr: u16) -> bool {
+        // IO + HRAM are never on a DMA-driven memory bus.
+        if matches!(addr, 0xFF00..=0xFFFF) {
+            return false;
+        }
         let dma_on_video_bus = matches!(self.dma.source_hi, 0x80..=0x9F);
         let addr_on_video_bus = matches!(addr, 0x8000..=0x9FFF);
         dma_on_video_bus == addr_on_video_bus
@@ -1261,10 +1270,11 @@ mod tests {
 
     #[test]
     fn oam_dma_blocks_same_bus_writes_except_hram() {
-        // P0#2: during DMA the CPU can only write to the bus the DMA is NOT
-        // driving (plus HRAM). DMA from 0xC0 (WRAM) drives the EXTERNAL bus, so
-        // WRAM/ROM/SRAM/IO/IE writes are dropped, but the VIDEO bus (VRAM) and
-        // HRAM stay writable (Pan Docs OAM DMA bus conflicts).
+        // P0#2: during DMA the CPU can only write to a bus the DMA is NOT
+        // driving. DMA from 0xC0 (WRAM) drives the EXTERNAL memory bus, so
+        // WRAM/ROM/SRAM writes are dropped; the VIDEO bus (VRAM), the IO/HRAM
+        // region ($FF00-$FFFF, on neither memory bus), and IE stay writable.
+        // OAM is always blocked (Pan Docs OAM DMA bus conflicts).
         let mut bus = Bus::new();
         bus.poke(0xFF46, 0xC0); // schedule external-bus DMA (source = WRAM)
         bus.idle_m(); // M=1 setup
@@ -1272,8 +1282,8 @@ mod tests {
         bus.write_m(0xC500, 0xAA); // WRAM (external bus) -> blocked
         bus.write_m(0x8000, 0xBB); // VRAM (video bus) -> ALLOWED (other bus)
         bus.write_m(0xFE10, 0xCC); // OAM -> always blocked
-        bus.write_m(0xFF42, 0xEE); // IO (SCY, external bus) -> blocked
-        bus.write_m(0xFFFF, 0xEE); // IE (external bus) -> blocked
+        bus.write_m(0xFF42, 0xEE); // IO (SCY) -> ALLOWED (IO bus, not a DMA bus)
+        bus.write_m(0xFFFF, 0xEE); // IE -> ALLOWED (IO bus)
         bus.write_m(0xFF85, 0x99); // HRAM -> allowed
         assert_eq!(
             bus.peek(0xC500),
@@ -1286,11 +1296,11 @@ mod tests {
             "VRAM write allowed (video bus, DMA drives external bus)"
         );
         assert_eq!(
-            bus.peek(0xFF42),
-            0x00,
-            "generic IO (SCY) write blocked (external bus)"
+            bus.peek(0xFF42) & 0xFF,
+            0xEE,
+            "IO (SCY) write allowed during DMA (not on a DMA memory bus)"
         );
-        assert_eq!(bus.peek(0xFFFF), 0x00, "IE write blocked (external bus)");
+        assert_eq!(bus.interrupts.ie, 0xEE, "IE write allowed during DMA");
         assert_eq!(
             bus.peek(0xFE10),
             0x00,
