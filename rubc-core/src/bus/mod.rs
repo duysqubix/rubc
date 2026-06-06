@@ -1387,7 +1387,7 @@ mod tests {
             "VRAM write allowed (video bus, DMA drives external bus)"
         );
         assert_eq!(
-            bus.peek(0xFF42) & 0xFF,
+            bus.peek(0xFF42),
             0xEE,
             "IO (SCY) write allowed during DMA (not on a DMA memory bus)"
         );

@@ -205,8 +205,10 @@ mod tests {
     const TIMER_IRQ: u8 = 0x04;
 
     fn timer_and_interrupts() -> (Timer, Interrupts) {
-        let mut irq = Interrupts::default();
-        irq.ie = TIMER_IRQ;
+        let irq = Interrupts {
+            ie: TIMER_IRQ,
+            ..Interrupts::default()
+        };
         (Timer::power_on(), irq)
     }
 

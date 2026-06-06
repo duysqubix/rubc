@@ -986,8 +986,10 @@ mod tests {
 
     #[test]
     fn extra_length_clock_fires_when_enabling_before_non_length_step() {
-        let mut apu = Apu::default();
-        apu.frame_step = 1;
+        let mut apu = Apu {
+            frame_step: 1,
+            ..Apu::default()
+        };
 
         apu.write(0xFF17, 0xF0, false);
         apu.write(0xFF16, 0x3F, false);
