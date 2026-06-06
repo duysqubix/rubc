@@ -446,12 +446,11 @@ impl Ppu {
         }
 
         if self.ly <= LAST_VISIBLE_LINE {
-            if self.line_dot == DOTS_PER_LINE - 4 && (self.ly != LAST_VISIBLE_LINE || self.cgb_mode)
-            {
+            if self.line_dot == DOTS_PER_LINE - 4 && self.ly == LAST_VISIBLE_LINE && self.cgb_mode {
                 self.stat_mode2_pulse = true;
             } else if self.line_dot == 4 {
-                self.stat_mode = mode::OAM_SCAN;
-            } else if self.line_dot == MODE2_DOTS {
+                self.enter_stat_mode2();
+            } else if self.line_dot == MODE2_DOTS + 8 {
                 self.stat_mode = mode::DRAWING;
             }
 
@@ -489,6 +488,11 @@ impl Ppu {
             self.set_mode(mode::OAM_SCAN, irq);
             self.stat_mode = mode::HBLANK;
         }
+    }
+
+    fn enter_stat_mode2(&mut self) {
+        self.stat_mode = mode::OAM_SCAN;
+        self.stat_mode2_pulse = true;
     }
 
     fn set_mode(&mut self, new_mode: u8, irq: &mut Interrupts) {
@@ -1314,10 +1318,14 @@ mod tests {
     }
 
     #[test]
-    fn stat_mode_enters_drawing_with_internal_mode3() {
+    fn stat_mode_lags_internal_mode3_by_eight_dots() {
         let mut p = ppu_at_line_start();
         tick(&mut p, MODE2_DOTS);
         assert_eq!(p.mode, mode::DRAWING);
+        assert_eq!(p.read_stat() & 0x03, mode::OAM_SCAN);
+        tick(&mut p, 7);
+        assert_eq!(p.read_stat() & 0x03, mode::OAM_SCAN);
+        tick(&mut p, 1);
         assert_eq!(p.read_stat() & 0x03, mode::DRAWING);
     }
 
@@ -1325,12 +1333,11 @@ mod tests {
     fn stat_mode2_source_is_one_dot_pulse() {
         let mut p = ppu_at_line_start();
         p.ly = 1;
-        p.line_dot = DOTS_PER_LINE - 5;
-        p.mode = mode::HBLANK;
         p.stat_mode = mode::HBLANK;
         p.stat_enables = 0x20;
+        assert_eq!(tick(&mut p, 3) & 0x02, 0);
         assert_eq!(tick(&mut p, 1) & 0x02, 0x02);
-        assert_eq!(p.read_stat() & 0x03, mode::HBLANK);
+        assert_eq!(p.read_stat() & 0x03, mode::OAM_SCAN);
         assert_eq!(tick(&mut p, 1) & 0x02, 0);
         assert!(!p.stat_line);
     }
