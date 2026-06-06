@@ -297,7 +297,7 @@ pub struct Ppu {
     pub dot_ticks: u64,
     /// Current scanline (LCDC Y, `$FF44`).
     pub ly: u8,
-    /// Current mode (STAT bits 1-0).
+    /// Current internal render/access mode.
     pub mode: u8,
     /// Fully-resolved framebuffer: the PPU applies BGP/OBP at emission time, so
     /// each pixel is a post-palette `FramePixel` (DMG shade now; CGB RGB later).
@@ -325,6 +325,12 @@ pub struct Ppu {
     lyc: u8,
     /// STAT interrupt-source-select bits (3-6), stored as written.
     stat_enables: u8,
+    /// CPU-visible STAT mode bits. This intentionally lags the internal render
+    /// mode on a few hardware edges without moving pixel/access timing.
+    stat_mode: u8,
+    /// Single-dot mode 2 STAT source pulse. Mode 2 is not a level source here:
+    /// holding it high for all OAM scan dots blocks later shared-line edges.
+    stat_mode2_pulse: bool,
     /// LYC == LY coincidence flag (STAT bit 2).
     coincidence: bool,
     /// Previous level of the ORed "STAT line" (for rising-edge IRQ detection).
@@ -373,6 +379,8 @@ impl Default for Ppu {
             line_dot: 0,
             lyc: 0,
             stat_enables: 0,
+            stat_mode: mode::OAM_SCAN,
+            stat_mode2_pulse: false,
             coincidence: true, // LY=0, LYC=0 at power-on
             stat_line: false,
             scy: 0,
@@ -438,6 +446,12 @@ impl Ppu {
         }
 
         if self.ly <= LAST_VISIBLE_LINE {
+            if self.line_dot == 4 {
+                self.enter_stat_mode2();
+            } else if self.line_dot == MODE2_DOTS + 8 {
+                self.stat_mode = mode::DRAWING;
+            }
+
             match self.mode {
                 mode::OAM_SCAN => {
                     self.tick_oam_scan(oam);
@@ -464,9 +478,16 @@ impl Ppu {
                 self.window_line_counter = 0;
             }
             self.set_mode(mode::VBLANK, irq);
+            self.stat_mode = mode::VBLANK;
         } else {
             self.set_mode(mode::OAM_SCAN, irq);
+            self.stat_mode = mode::HBLANK;
         }
+    }
+
+    fn enter_stat_mode2(&mut self) {
+        self.stat_mode = mode::OAM_SCAN;
+        self.stat_mode2_pulse = true;
     }
 
     fn set_mode(&mut self, new_mode: u8, irq: &mut Interrupts) {
@@ -590,6 +611,7 @@ impl Ppu {
         self.pending_sprite = None;
         self.sprite_fetch_ticks = 0;
         self.sprite_idle_ticks = 0;
+        self.stat_mode = mode::HBLANK;
         self.set_mode(mode::HBLANK, irq);
     }
 
@@ -938,13 +960,14 @@ impl Ppu {
             irq.request(INT_STAT);
         }
         self.stat_line = line;
+        self.stat_mode2_pulse = false;
     }
 
     fn stat_line_level(&self) -> bool {
         let e = self.stat_enables;
-        let mode0 = (e & 0x08) != 0 && self.mode == mode::HBLANK;
-        let mode1 = (e & 0x10) != 0 && self.mode == mode::VBLANK;
-        let mode2 = (e & 0x20) != 0 && self.mode == mode::OAM_SCAN;
+        let mode0 = (e & 0x08) != 0 && self.stat_mode == mode::HBLANK;
+        let mode1 = (e & 0x10) != 0 && self.stat_mode == mode::VBLANK;
+        let mode2 = (e & 0x20) != 0 && self.stat_mode2_pulse;
         let lyc = (e & 0x40) != 0 && self.coincidence;
         mode0 || mode1 || mode2 || lyc
     }
@@ -975,6 +998,8 @@ impl Ppu {
             self.ly = 0;
             self.line_dot = 0;
             self.mode = mode::HBLANK;
+            self.stat_mode = mode::HBLANK;
+            self.stat_mode2_pulse = false;
             self.bg_fifo.clear();
             self.sprite_fifo.clear();
         } else if !was_on && self.enabled {
@@ -985,6 +1010,8 @@ impl Ppu {
             self.ly = 0;
             self.line_dot = 0;
             self.mode = mode::HBLANK;
+            self.stat_mode = mode::HBLANK;
+            self.stat_mode2_pulse = false;
             self.window_y_condition = false;
             self.window_line_counter = 0;
             self.bg_fifo.clear();
@@ -1001,7 +1028,7 @@ impl Ppu {
 
     /// Read STAT (`$FF41`): enables (bits 3-6) | bit7=1 | coincidence<<2 | mode.
     pub fn read_stat(&self) -> u8 {
-        0x80 | self.stat_enables | ((self.coincidence as u8) << 2) | self.mode
+        0x80 | self.stat_enables | ((self.coincidence as u8) << 2) | self.stat_mode
     }
 
     /// Write STAT (`$FF41`): only the interrupt-source-select bits (3-6) are
@@ -1126,6 +1153,8 @@ mod tests {
         p.ly = 0;
         p.line_dot = 0;
         p.mode = mode::OAM_SCAN;
+        p.stat_mode = mode::OAM_SCAN;
+        p.stat_mode2_pulse = false;
         p.coincidence = true;
         p.stat_line = false;
         p
@@ -1233,6 +1262,31 @@ mod tests {
         assert!(irq & 0x02 != 0, "STAT fires entering mode 0");
         let irq2 = tick(&mut p, 10);
         assert_eq!(irq2 & 0x02, 0, "no re-raise while in mode 0");
+    }
+
+    #[test]
+    fn stat_mode_lags_internal_mode3_by_eight_dots() {
+        let mut p = ppu_at_line_start();
+        tick(&mut p, MODE2_DOTS);
+        assert_eq!(p.mode, mode::DRAWING);
+        assert_eq!(p.read_stat() & 0x03, mode::OAM_SCAN);
+        tick(&mut p, 7);
+        assert_eq!(p.read_stat() & 0x03, mode::OAM_SCAN);
+        tick(&mut p, 1);
+        assert_eq!(p.read_stat() & 0x03, mode::DRAWING);
+    }
+
+    #[test]
+    fn stat_mode2_source_is_one_dot_pulse() {
+        let mut p = ppu_at_line_start();
+        p.ly = 1;
+        p.stat_mode = mode::HBLANK;
+        p.stat_enables = 0x20;
+        assert_eq!(tick(&mut p, 3) & 0x02, 0);
+        assert_eq!(tick(&mut p, 1) & 0x02, 0x02);
+        assert_eq!(p.read_stat() & 0x03, mode::OAM_SCAN);
+        assert_eq!(tick(&mut p, 1) & 0x02, 0);
+        assert!(!p.stat_line);
     }
 
     #[test]
