@@ -675,8 +675,14 @@ impl Bus {
         let raw = self.io[idx];
         // (or_mask): bits forced to 1 on read. 0x00 = all bits readable.
         let or_mask: u8 = match addr {
-            0xFF00 => 0xC0,                            // P1: bits 7-6 read 1
-            0xFF01 => 0x00,                            // SB: full
+            // P1/JOYP ($FF00): bits 7-6 always read 1; bits 5-4 are the writable
+            // line-select; bits 3-0 report the selected line's buttons, active
+            // LOW (1 = not pressed). With no joypad input wired, nothing is
+            // pressed, so the low nibble always reads 1111. Returning the raw
+            // io byte for the low nibble (0 after a select write) would signal
+            // "all buttons held", which stalls games that wait for no-input.
+            0xFF00 => return (raw & 0x30) | 0xCF, // bits 7-6 + low nibble = 1 (idle)
+            0xFF01 => 0x00,                       // SB: full
             0xFF02 => 0x7E, // SC: bit7 + bit0 valid, 6-1 read 1 (DMG); CGB adds bit0
             0xFF42 | 0xFF43 | 0xFF4A | 0xFF4B => 0x00, // SCY/SCX/WY/WX: full (but PPU-owned)
             0xFF47..=0xFF49 => 0x00, // BGP/OBP0/OBP1: full
@@ -1562,5 +1568,24 @@ mod tests {
             vec![8192, 8192, 8192, 8192],
             "DIV-APU must step every 8192 T-cycles (512 Hz)"
         );
+    }
+
+    #[test]
+    fn joypad_reads_idle_when_no_input() {
+        // P1/JOYP ($FF00): with no buttons pressed (no input wired), the low
+        // nibble must read 1111 (active-low: 1 = not pressed) regardless of the
+        // line-select bits the game writes. Bits 7-6 always read 1. Returning a
+        // 0 low nibble signals "all buttons held" and stalls games (e.g.
+        // Pokemon Crystal) that wait for no-input during boot.
+        let mut bus = Bus::new();
+        // Game selects the button line ($20) -> reads must still show idle.
+        bus.poke(0xFF00, 0x20);
+        assert_eq!(bus.peek(0xFF00), 0xEF, "button line selected, none pressed");
+        // Select the d-pad line ($10).
+        bus.poke(0xFF00, 0x10);
+        assert_eq!(bus.peek(0xFF00), 0xDF, "d-pad line selected, none pressed");
+        // Neither line selected (both bits high): low nibble still 1111.
+        bus.poke(0xFF00, 0x30);
+        assert_eq!(bus.peek(0xFF00), 0xFF, "no line selected, all bits 1");
     }
 }
