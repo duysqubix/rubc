@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>rubc — Game Boy emulator (WebAssembly)</title>
+  <style>
+    :root { color-scheme: dark; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+      padding: 2rem 1rem;
+      background: #11131a;
+      color: #e0e0e0;
+      font: 15px/1.5 system-ui, sans-serif;
+    }
+    h1 { margin: 0; font-size: 1.4rem; letter-spacing: 0.5px; }
+    h1 small { color: #88c070; font-weight: 400; }
+    #screen {
+      image-rendering: pixelated;
+      width: 480px;            /* 160 * 3 */
+      height: 432px;           /* 144 * 3 */
+      background: #081820;
+      border: 2px solid #2a2f3a;
+      border-radius: 6px;
+    }
+    .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; justify-content: center; }
+    button, label.file {
+      background: #2a2f3a; color: #e0e0e0; border: 1px solid #3a4150;
+      border-radius: 5px; padding: 0.5rem 0.9rem; cursor: pointer; font: inherit;
+    }
+    button:hover, label.file:hover { background: #343b48; }
+    input[type=file] { display: none; }
+    #status { color: #88c070; min-height: 1.2em; }
+    .help { color: #8a93a6; font-size: 0.85rem; max-width: 480px; text-align: center; }
+    kbd { background:#2a2f3a; border:1px solid #3a4150; border-radius:3px; padding:0 4px; }
+  </style>
+</head>
+<body>
+  <h1>rubc <small>· Game Boy / Color · WebAssembly</small></h1>
+
+  <canvas id="screen" width="160" height="144"></canvas>
+
+  <div class="controls">
+    <label class="file">
+      Load ROM (.gb / .gbc)
+      <input id="rom" type="file" accept=".gb,.gbc,.bin" />
+    </label>
+    <button id="pause" disabled>Pause</button>
+    <button id="sound" disabled>Enable sound</button>
+  </div>
+
+  <div id="status">Pick a Game Boy ROM to start.</div>
+
+  <div class="help">
+    Controls: <kbd>←↑↓→</kbd> D-pad ·
+    <kbd>X</kbd> A · <kbd>Z</kbd> B ·
+    <kbd>Enter</kbd> Start · <kbd>Shift</kbd>/<kbd>Backspace</kbd> Select.
+    <br />Audio starts muted (browser autoplay policy); click “Enable sound”.
+  </div>
+
+  <script type="module" src="./index.js"></script>
+</body>
+</html>

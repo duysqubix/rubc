@@ -40,3 +40,6 @@ assets/*.gbc
 
 # Battery-backed save files (user save data, not source)
 *.sav
+
+# Generated wasm-bindgen output for the rubc-wasm web demo.
+rubc-wasm/web/pkg/
