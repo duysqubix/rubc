@@ -23,6 +23,7 @@ use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
 mod gui;
+mod audio;
 
 const WIDTH: u32 = SCREEN_WIDTH as u32;
 const HEIGHT: u32 = SCREEN_HEIGHT as u32;
@@ -213,6 +214,27 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
         (pixels, framework)
     };
 
+    // Audio: open the default output device and tell the APU to produce samples
+    // at the device's native rate (no resampling). If no device is available
+    // (headless CI, no soundcard), warn and run silently -- the emulator must
+    // still run without audio.
+    let audio = match audio::AudioOutput::new() {
+        Ok(a) => {
+            machine.bus.apu.set_sample_rate(a.sample_rate());
+            log::info!("audio: output enabled at {} Hz", a.sample_rate());
+            Some(a)
+        }
+        Err(e) => {
+            log::warn!("audio: disabled ({e}); continuing without sound");
+            None
+        }
+    };
+    // Scratch buffer reused each frame to drain APU samples without realloc.
+    let mut audio_scratch: Vec<f32> = Vec::new();
+    // Per-second counter of stereo frames pushed to the device (audio evidence).
+    let mut audio_frames_pushed: usize = 0;
+    let mut audio_log_start = time::Instant::now();
+
     let fps_target = time::Duration::from_micros(FPS_US);
     // Tracks the start of the previous frame so the displayed FPS reflects the
     // true frame-to-frame period (emulation + render + sleep), not just the
@@ -253,6 +275,15 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
             // cost is inside the pacing budget (the old split RedrawRequested
             // render leaked ~1ms past the target and capped FPS at ~56).
             machine.step_frame();
+            // Feed this frame's APU samples to the audio device. The APU was
+            // told to emit at the device's native rate, so push them straight
+            // through with no resampling.
+            if let Some(audio) = &audio {
+                audio_scratch.clear();
+                machine.bus.apu.drain_samples(&mut audio_scratch);
+                audio_frames_pushed += audio_scratch.len() / 2;
+                audio.push_samples(&audio_scratch);
+            }
             draw_framebuffer(&machine, pixels.frame_mut());
             framework.prepare(&window);
             let render_result = pixels.render_with(|encoder, render_target, context| {
@@ -300,6 +331,22 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
                 );
                 frames_this_window = 0;
                 fps_window_start = time::Instant::now();
+            }
+
+            // Once per second, log audio frames pushed to the device + current
+            // device-side buffer depth: evidence the APU->device path carries
+            // real (non-zero) samples.
+            if let Some(audio) = &audio {
+                let alog = audio_log_start.elapsed();
+                if alog >= time::Duration::from_secs(1) {
+                    log::info!(
+                        "audio: {audio_frames_pushed} frames pushed in {:.3}s, {} frames buffered",
+                        alog.as_secs_f64(),
+                        audio.buffered_frames(),
+                    );
+                    audio_frames_pushed = 0;
+                    audio_log_start = time::Instant::now();
+                }
             }
         }
 
