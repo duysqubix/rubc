@@ -1,8 +1,10 @@
-//! Headless screenshot capture for rubc.
+//! Headless screenshot + GIF capture for rubc.
 //!
 //! Boots a ROM with no window, steps the emulator for a number of frames, and
-//! encodes the 160x144 PPU framebuffer to a PNG via the pure-Rust `png` crate
-//! (DEFLATE through `fdeflate`/`miniz_oxide`).
+//! encodes the 160x144 PPU framebuffer to a PNG (single frame) or an animated
+//! GIF (a sequence of frames). Both encoders are pure Rust:
+//! - PNG via the `png` crate (DEFLATE through `fdeflate`/`miniz_oxide`),
+//! - GIF via the `gif` crate (LZW through `weezl`).
 //!
 //! Nothing here participates in emulation; it only reads the resolved
 //! framebuffer (see [`framebuffer_rgba`]) the same way the windowed frontend
@@ -10,6 +12,7 @@
 
 use rubc_core::bus::ppu::{FramePixel, SCREEN_HEIGHT, SCREEN_WIDTH};
 use rubc_core::machine::Machine;
+use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::Path;
 
@@ -79,6 +82,25 @@ fn scale_rgba(src: &[u8], w: usize, h: usize, k: usize) -> Vec<u8> {
     out
 }
 
+/// Nearest-neighbour upscale of an 8-bit indexed image by factor `k` (>=1).
+fn scale_indexed(src: &[u8], w: usize, h: usize, k: usize) -> Vec<u8> {
+    if k <= 1 {
+        return src.to_vec();
+    }
+    let dw = w * k;
+    let mut out = vec![0u8; dw * h * k];
+    for y in 0..h {
+        for x in 0..w {
+            let v = src[y * w + x];
+            for dy in 0..k {
+                let row = (y * k + dy) * dw + x * k;
+                out[row..row + k].fill(v);
+            }
+        }
+    }
+    out
+}
+
 /// Encode an RGBA image to a PNG file at `path`.
 fn write_png(path: &Path, rgba: &[u8], w: u32, h: u32) -> anyhow::Result<()> {
     let file = std::fs::File::create(path)
@@ -91,7 +113,7 @@ fn write_png(path: &Path, rgba: &[u8], w: u32, h: u32) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Booting `machine` is the caller's job; here we step `frames` whole frames and
+/// Boot `machine` is the caller's job; here we step `frames` whole frames and
 /// capture the final framebuffer to a PNG, optionally upscaled by `scale`.
 pub fn capture_screenshot(
     machine: &mut Machine,
@@ -109,9 +131,149 @@ pub fn capture_screenshot(
     Ok(())
 }
 
+/// A 256-colour (max) global palette plus the bit-shift used to quantize colours
+/// into it. `shift == 0` means the palette is exact (the image had <=256 distinct
+/// colours); a larger shift drops low bits per channel until the distinct count
+/// fits, which is ample for Game Boy content (<=4 DMG shades or a modest CGB set).
+struct Palette {
+    /// Flat RGB triplets, length is a power-of-two * 3 (GIF colour-table rule).
+    rgb: Vec<u8>,
+    /// Index lookup keyed by the *quantized* (masked) RGB triplet.
+    index: HashMap<[u8; 3], u8>,
+    shift: u8,
+}
+
+impl Palette {
+    /// Quantize one RGBA pixel to its palette index.
+    #[inline]
+    fn lookup(&self, px: &[u8]) -> u8 {
+        let key = [
+            (px[0] >> self.shift) << self.shift,
+            (px[1] >> self.shift) << self.shift,
+            (px[2] >> self.shift) << self.shift,
+        ];
+        *self.index.get(&key).unwrap_or(&0)
+    }
+}
+
+/// Build a global palette across every captured RGBA frame. Tries an exact
+/// palette first; if there are >256 distinct colours, drops one low bit per
+/// channel at a time until the set fits in 256. Deterministic: colours are
+/// sorted before indices are assigned.
+fn build_palette(frames: &[Vec<u8>]) -> Palette {
+    for shift in 0u8..=8 {
+        let mut set: std::collections::BTreeSet<[u8; 3]> = std::collections::BTreeSet::new();
+        for frame in frames {
+            for px in frame.chunks_exact(4) {
+                set.insert([
+                    (px[0] >> shift) << shift,
+                    (px[1] >> shift) << shift,
+                    (px[2] >> shift) << shift,
+                ]);
+            }
+        }
+        if set.len() <= 256 {
+            let colors: Vec<[u8; 3]> = set.into_iter().collect();
+            let mut index = HashMap::with_capacity(colors.len());
+            let mut rgb = Vec::with_capacity(colors.len() * 3);
+            for (i, c) in colors.iter().enumerate() {
+                index.insert(*c, i as u8);
+                rgb.extend_from_slice(c);
+            }
+            // GIF colour tables must be a power-of-two count of entries.
+            let mut entries = colors.len().max(1);
+            let mut pow = 1usize;
+            while pow < entries {
+                pow <<= 1;
+            }
+            entries = pow;
+            rgb.resize(entries * 3, 0);
+            return Palette { rgb, index, shift };
+        }
+    }
+    // Unreachable for real images: shift==8 collapses everything to one colour.
+    Palette {
+        rgb: vec![0, 0, 0],
+        index: HashMap::new(),
+        shift: 8,
+    }
+}
+
+/// GIF inter-frame delay (centiseconds) for capturing every `every` GB frames.
+/// One GB frame is ~16.742 ms; clamp to >=2 cs so viewers don't run flat-out.
+fn gif_delay_cs(every: u32) -> u16 {
+    let ms = every.max(1) as f64 * 16.742_f64;
+    ((ms / 10.0).round() as u16).max(2)
+}
+
+/// Record an animated GIF: skip `skip` warm-up frames (e.g. boot logos), then
+/// step the emulator, capturing one frame every `every` steps until `frames`
+/// frames are collected, then encode (looping forever), upscaled by `scale`.
+pub fn capture_gif(
+    machine: &mut Machine,
+    out: &Path,
+    frames: u32,
+    every: u32,
+    scale: u32,
+    skip: u32,
+) -> anyhow::Result<()> {
+    let every = every.max(1);
+    // Warm-up: advance past boot logos / static lead-in without capturing.
+    for _ in 0..skip {
+        machine.step_frame();
+    }
+    let mut shots: Vec<Vec<u8>> = Vec::with_capacity(frames as usize);
+    for _ in 0..frames {
+        for _ in 0..every {
+            machine.step_frame();
+        }
+        shots.push(framebuffer_rgba(machine));
+    }
+    if shots.is_empty() {
+        anyhow::bail!("gif capture requested 0 frames");
+    }
+
+    let palette = build_palette(&shots);
+    let k = scale.max(1) as usize;
+    let (dw, dh) = ((W * k) as u16, (H * k) as u16);
+    let delay = gif_delay_cs(every);
+
+    let file = std::fs::File::create(out)
+        .map_err(|e| anyhow::anyhow!("failed to create {}: {e}", out.display()))?;
+    let mut encoder = gif::Encoder::new(BufWriter::new(file), dw, dh, &palette.rgb)?;
+    encoder.set_repeat(gif::Repeat::Infinite)?;
+
+    for shot in &shots {
+        // RGBA -> palette indices at native resolution, then upscale the index
+        // buffer (nearest-neighbour on indices == nearest-neighbour on colour).
+        let mut indices = vec![0u8; W * H];
+        for (dst, px) in indices.iter_mut().zip(shot.chunks_exact(4)) {
+            *dst = palette.lookup(px);
+        }
+        let scaled = scale_indexed(&indices, W, H, k);
+        let frame = gif::Frame {
+            width: dw,
+            height: dh,
+            delay,
+            buffer: std::borrow::Cow::Owned(scaled),
+            ..Default::default()
+        };
+        encoder.write_frame(&frame)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gif_delay_floor_and_scaling() {
+        // every=1 -> ~17ms -> 2cs; every=2 -> ~33ms -> 3cs.
+        assert_eq!(gif_delay_cs(1), 2);
+        assert_eq!(gif_delay_cs(2), 3);
+        assert_eq!(gif_delay_cs(0), 2); // clamped
+    }
 
     #[test]
     fn scale_rgba_blocks_each_pixel() {
@@ -122,6 +284,20 @@ mod tests {
         for px in out.chunks_exact(4) {
             assert_eq!(px, &[255, 0, 0, 255]);
         }
+    }
+
+    #[test]
+    fn palette_exact_for_few_colors() {
+        // Two distinct colours -> exact palette (shift 0), padded to power of two.
+        let frame: Vec<u8> = [[0u8, 0, 0, 255], [255, 255, 255, 255]]
+            .iter()
+            .flat_map(|p| p.iter().copied())
+            .collect();
+        let pal = build_palette(&[frame]);
+        assert_eq!(pal.shift, 0);
+        assert!(pal.index.len() == 2);
+        // Power-of-two entries: 2 colours -> 2 entries -> 6 bytes.
+        assert_eq!(pal.rgb.len(), 2 * 3);
     }
 
     /// Path to a reference ROM under the (git-ignored) `reference/` symlink at

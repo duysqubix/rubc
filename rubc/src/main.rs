@@ -108,6 +108,32 @@ enum Command {
         #[arg(long)]
         force_cgb: bool,
     },
+    /// Boot a ROM headlessly and record an animated, looping GIF.
+    Gif {
+        /// Path to the `.gb` / `.gbc` ROM image.
+        rom: String,
+        /// Output GIF path.
+        #[arg(long, value_name = "GIF")]
+        out: String,
+        /// Number of GIF frames to capture.
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        /// Capture one GIF frame every M emulator frames (2 = ~30fps).
+        #[arg(long, default_value_t = 2)]
+        every: u32,
+        /// Nearest-neighbour upscale factor.
+        #[arg(long, default_value_t = 3)]
+        scale: u32,
+        /// Skip this many warm-up frames (boot logos) before recording.
+        #[arg(long, default_value_t = 0)]
+        skip: u32,
+        /// Force DMG mode regardless of the cartridge CGB flag.
+        #[arg(long, conflicts_with = "force_cgb")]
+        force_dmg: bool,
+        /// Force CGB mode regardless of the cartridge CGB flag.
+        #[arg(long)]
+        force_cgb: bool,
+    },
     Controls,
 }
 
@@ -161,6 +187,30 @@ fn main() -> anyhow::Result<()> {
             let mut machine = boot(&rom, force_dmg, force_cgb)?;
             capture::capture_screenshot(&mut machine, std::path::Path::new(&out), frames, scale)?;
             println!("wrote screenshot to {out} ({frames} frames, scale {scale})");
+            Ok(())
+        }
+        Some(Command::Gif {
+            rom,
+            out,
+            frames,
+            every,
+            scale,
+            skip,
+            force_dmg,
+            force_cgb,
+        }) => {
+            let mut machine = boot(&rom, force_dmg, force_cgb)?;
+            capture::capture_gif(
+                &mut machine,
+                std::path::Path::new(&out),
+                frames,
+                every,
+                scale,
+                skip,
+            )?;
+            println!(
+                "wrote gif to {out} ({frames} frames, every {every}, scale {scale}, skip {skip})"
+            );
             Ok(())
         }
         Some(Command::Controls) => {
