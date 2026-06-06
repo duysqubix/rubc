@@ -17,6 +17,11 @@ core      := "rubc-core"
 ref       := "reference/test-suites"
 blargg    := ref / "gb-test-roms"
 mooneye   := ref / "mooneye-test-suite"
+acidhell  := ref / "cgb-acid-hell"
+# RGBDS toolchains. Some ROMs use legacy 0.4.x macro syntax (`name: MACRO`,
+# STRLWR, strings-as-numbers), others the modern 1.x (`MACRO name`). We keep
+# both and pick per ROM. `rgbds_legacy` = 0.4.2 bin dir; `rgbds_modern` = PATH.
+rgbds_legacy := env_var_or_default("RGBDS_LEGACY", "/opt/homebrew/opt/rgbds-0.4.2/bin")
 diag_dir  := env_var_or_default("DIAG_DIR", "/tmp/logs/rubc/diag")
 log_dir   := "/tmp/logs/rubc"
 
@@ -187,6 +192,37 @@ mooneye-build:
 # under reference/test-suites/acid2 + mealybug (git-ignored; skips if absent).
 acid2:
     cargo test -p rubc-core --test acid2_test -- --nocapture
+
+# Build an RGBDS ROM, auto-selecting the toolchain version by the assembly's
+# macro syntax. Legacy 0.4.x ROMs use `name: MACRO` + STRLWR; modern 1.x ROMs
+# use `MACRO name`. We grep the .asm and call the matching rgbasm/rgblink/
+# rgbfix (legacy from {{rgbds_legacy}}, modern from PATH). Idempotent.
+# Usage: just rgbds-build <dir> <basename>   e.g. just rgbds-build {{acidhell}} cgb-acid-hell
+rgbds-build dir base:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dir="{{dir}}"; base="{{base}}"
+    asm="$dir/$base.asm"
+    [ -f "$asm" ] || { echo "no $asm"; exit 1; }
+    # Detect legacy syntax: a `LABEL: MACRO` line means RGBDS <= 0.4.x.
+    if grep -Eq '^[A-Za-z_][A-Za-z0-9_]*:[[:space:]]+MACRO' "$asm"; then
+      bin="{{rgbds_legacy}}"; ver="legacy 0.4.x"
+      [ -x "$bin/rgbasm" ] || { echo "legacy RGBDS not found at $bin (set RGBDS_LEGACY)"; exit 1; }
+    else
+      bin="$(dirname "$(command -v rgbasm)")"; ver="modern (PATH)"
+      command -v rgbasm >/dev/null || { echo "rgbasm not on PATH"; exit 1; }
+    fi
+    echo "rgbds-build: $base via $ver ($($bin/rgbasm --version))"
+    ( cd "$dir" && "$bin/rgbasm" -o "$base.o" "$base.asm" \
+      && "$bin/rgblink" -n "$base.sym" -m "$base.map" -o "$base.gbc" "$base.o" \
+      && "$bin/rgbfix" -v -p 255 "$base.gbc" )
+    echo "built: $dir/$base.gbc"
+
+# Build cgb-acid-hell (legacy RGBDS 0.4.x) and copy the ROM into assets/.
+acid-hell-build:
+    just rgbds-build {{acidhell}} cgb-acid-hell
+    cp -f "{{acidhell}}/cgb-acid-hell.gbc" assets/cgb-acid-hell.gbc
+    @echo "assets/cgb-acid-hell.gbc ready"
 
 # ---- quality gates ---------------------------------------------------------
 
