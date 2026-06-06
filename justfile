@@ -182,6 +182,12 @@ mooneye-build:
     n=$(find "{{mooneye}}/build" -name '*.gb' | wc -l | tr -d ' ')
     echo "mooneye: $n ROMs built in {{mooneye}}/build/"
 
+# Visual PPU tests: dmg-acid2 + cgb-acid2 (pixel-exact gates) + mealybug-tearoom
+# (reporting). Compares the rendered framebuffer to reference images vendored
+# under reference/test-suites/acid2 + mealybug (git-ignored; skips if absent).
+acid2:
+    cargo test -p rubc-core --test acid2_test -- --nocapture
+
 # ---- quality gates ---------------------------------------------------------
 
 # Format the whole workspace.

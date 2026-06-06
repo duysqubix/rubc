@@ -12,7 +12,7 @@
 use crate::gui::Framework;
 
 use clap::{Parser, Subcommand};
-use rubc_core::bus::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
+use rubc_core::bus::ppu::{FramePixel, SCREEN_HEIGHT, SCREEN_WIDTH};
 use rubc_core::logger;
 use rubc_core::machine::{Machine, RunStop};
 use std::time;
@@ -310,7 +310,7 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
     });
 }
 
-/// The 4 DMG shades (lightest -> darkest) as RGBA, applied through BGP ($FF47).
+/// The 4 DMG shades (lightest -> darkest) as RGBA.
 const DMG_SHADES: [[u8; 4]; 4] = [
     [0xE0, 0xF8, 0xD0, 0xFF], // 0: lightest
     [0x88, 0xC0, 0x70, 0xFF], // 1
@@ -318,15 +318,29 @@ const DMG_SHADES: [[u8; 4]; 4] = [
     [0x08, 0x18, 0x20, 0xFF], // 3: darkest
 ];
 
-/// Map the PPU's raw 2-bit framebuffer through the BG palette (BGP, $FF47) into
-/// the RGBA `pixels` buffer.
+/// Map the PPU's resolved framebuffer into the RGBA `pixels` buffer. The PPU has
+/// already applied BGP/OBP at emission time, so each pixel is a display-ready
+/// shade -- the frontend only maps shade -> RGB.
 fn draw_framebuffer(machine: &Machine, frame: &mut [u8]) {
-    let bgp = machine.bus.peek(0xFF47);
     let fb = &machine.bus.ppu.framebuffer;
-    for (px, &raw) in frame.chunks_exact_mut(4).zip(fb.iter()) {
-        // BGP maps each 2-bit color index to a shade: bits [1:0]=idx0, [3:2]=idx1...
-        let shade = (bgp >> (raw * 2)) & 0x03;
-        px.copy_from_slice(&DMG_SHADES[shade as usize]);
+    for (px, &pixel) in frame.chunks_exact_mut(4).zip(fb.iter()) {
+        match pixel {
+            FramePixel::DmgShade(shade) => {
+                px.copy_from_slice(&DMG_SHADES[shade as usize]);
+            }
+            FramePixel::CgbRgb555(rgb) => {
+                // CGB color path: expand each 5-bit channel to 8-bit with
+                // (x<<3)|(x>>2) so full intensity (31) maps to 255 (not 248).
+                let expand = |c: u16| -> u8 {
+                    let c = (c & 0x1F) as u8;
+                    (c << 3) | (c >> 2)
+                };
+                let r = expand(rgb);
+                let g = expand(rgb >> 5);
+                let b = expand(rgb >> 10);
+                px.copy_from_slice(&[r, g, b, 0xFF]);
+            }
+        }
     }
 }
 

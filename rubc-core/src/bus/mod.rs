@@ -26,7 +26,7 @@ pub mod timer;
 
 pub use cartridge::Cartridge;
 pub use flat::FlatBus;
-pub use ppu::Ppu;
+pub use ppu::{CgbRenderState, DmgPalettes, Ppu};
 
 use stubs::{ApuStub, CgbState, Interrupts};
 use timer::Timer;
@@ -102,6 +102,15 @@ pub struct Bus {
     pub vram: [[u8; 0x2000]; 2],
     /// Active VRAM bank (VBK $FF4F bit 0). Always 0 in DMG mode.
     pub vbk: u8,
+    /// CGB background palette RAM: 8 palettes x 4 colors x 2 bytes = 64 bytes,
+    /// RGB555 little-endian. Addressed via BCPS ($FF68), data via BCPD ($FF69).
+    pub bg_palette_ram: [u8; 64],
+    /// CGB object palette RAM: same layout, via OCPS ($FF6A) / OCPD ($FF6B).
+    pub obj_palette_ram: [u8; 64],
+    /// BCPS ($FF68): bit 7 = auto-increment, bits 5-0 = bg_palette_ram index.
+    bcps: u8,
+    /// OCPS ($FF6A): bit 7 = auto-increment, bits 5-0 = obj_palette_ram index.
+    ocps: u8,
     pub oam: [u8; 0xA0],
     pub io: [u8; 0x80],
 
@@ -132,6 +141,10 @@ impl Default for Bus {
             hram: [0; 0x7F],
             vram: [[0; 0x2000]; 2],
             vbk: 0,
+            bg_palette_ram: [0xFF; 64],
+            obj_palette_ram: [0xFF; 64],
+            bcps: 0,
+            ocps: 0,
             oam: [0; 0xA0],
             io: [0; 0x80],
             interrupts: Interrupts::default(),
@@ -214,13 +227,33 @@ impl Bus {
             // dot-accurate tests before the CGB timing wave.
             self.cgb.t_phase = !self.cgb.t_phase;
             if self.cgb.t_phase {
+                let palettes = DmgPalettes {
+                    bgp: self.io[0x47],
+                    obp0: self.io[0x48],
+                    obp1: self.io[0x49],
+                };
+                let cgb = CgbRenderState {
+                    enabled: self.cgb.cgb_mode,
+                    bg_palette_ram: &self.bg_palette_ram,
+                    obj_palette_ram: &self.obj_palette_ram,
+                };
                 self.ppu
-                    .tick_dot(&mut self.interrupts, &self.vram[0], &self.oam);
+                    .tick_dot(&mut self.interrupts, &self.vram, &self.oam, palettes, cgb);
                 self.apu.tick_t();
             }
         } else {
+            let palettes = DmgPalettes {
+                bgp: self.io[0x47],
+                obp0: self.io[0x48],
+                obp1: self.io[0x49],
+            };
+            let cgb = CgbRenderState {
+                enabled: self.cgb.cgb_mode,
+                bg_palette_ram: &self.bg_palette_ram,
+                obj_palette_ram: &self.obj_palette_ram,
+            };
             self.ppu
-                .tick_dot(&mut self.interrupts, &self.vram[0], &self.oam);
+                .tick_dot(&mut self.interrupts, &self.vram, &self.oam, palettes, cgb);
             self.apu.tick_t();
         }
     }
@@ -368,6 +401,24 @@ impl Bus {
             0xFF70 => 0xFF, // SVBK in DMG mode: open-bus (no WRAM banking)
             0xFF6C if self.cgb.cgb_mode => (self.io[0x6C] & 0x01) | 0xFE, // OPRI bit0
             0xFF6C => 0xFF, // OPRI in DMG mode: open-bus
+            0xFF68 if self.cgb.cgb_mode => self.bcps | 0x40, // BCPS: bit6 reads 1
+            0xFF6A if self.cgb.cgb_mode => self.ocps | 0x40, // OCPS: bit6 reads 1
+            0xFF69 if self.cgb.cgb_mode => {
+                // BCPD: palette RAM is inaccessible during mode 3 (reads 0xFF).
+                if self.ppu.cgb_palette_blocked() {
+                    0xFF
+                } else {
+                    self.bg_palette_ram[(self.bcps & 0x3F) as usize]
+                }
+            }
+            0xFF6B if self.cgb.cgb_mode => {
+                if self.ppu.cgb_palette_blocked() {
+                    0xFF
+                } else {
+                    self.obj_palette_ram[(self.ocps & 0x3F) as usize]
+                }
+            }
+            0xFF68..=0xFF6B => 0xFF, // palette regs in DMG mode: open-bus
             0xFF00..=0xFF7F => self.read_io_masked(addr),
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupts.ie,
@@ -466,6 +517,40 @@ impl Bus {
                 // OPRI (CGB only): object priority mode flag (bit 0).
                 if self.cgb.cgb_mode {
                     self.io[0x6C] = value & 0x01;
+                }
+            }
+            0xFF68 => {
+                // BCPS (CGB only): bit 7 auto-increment, bits 5-0 = BG palette index.
+                if self.cgb.cgb_mode {
+                    self.bcps = value & 0xBF;
+                }
+            }
+            0xFF6A => {
+                // OCPS (CGB only): bit 7 auto-increment, bits 5-0 = OBJ palette index.
+                if self.cgb.cgb_mode {
+                    self.ocps = value & 0xBF;
+                }
+            }
+            0xFF69 => {
+                // BCPD (CGB only): write BG palette RAM at BCPS index (blocked
+                // during mode 3), then auto-increment the index if BCPS bit 7 set.
+                if self.cgb.cgb_mode {
+                    if !self.ppu.cgb_palette_blocked() {
+                        self.bg_palette_ram[(self.bcps & 0x3F) as usize] = value;
+                    }
+                    if self.bcps & 0x80 != 0 {
+                        self.bcps = (self.bcps & 0x80) | (self.bcps.wrapping_add(1) & 0x3F);
+                    }
+                }
+            }
+            0xFF6B => {
+                if self.cgb.cgb_mode {
+                    if !self.ppu.cgb_palette_blocked() {
+                        self.obj_palette_ram[(self.ocps & 0x3F) as usize] = value;
+                    }
+                    if self.ocps & 0x80 != 0 {
+                        self.ocps = (self.ocps & 0x80) | (self.ocps.wrapping_add(1) & 0x3F);
+                    }
                 }
             }
             0xFF4D => {

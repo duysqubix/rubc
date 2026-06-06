@@ -1,0 +1,207 @@
+//! Visual PPU test harness for the acid2 + mealybug-tearoom suites.
+//!
+//! These are *rendering* tests: a ROM draws a frame, halts at the `LD B,B`
+//! breakpoint, and the resulting screen is compared pixel-for-pixel against a
+//! reference image. We pre-convert the reference PNGs to raw shade-index `.bin`
+//! files (one byte per pixel, 0..=3, light->dark) at vendor time, so this
+//! harness needs no PNG decoder -- just `std::fs` and a framebuffer diff.
+//!
+//! ## What is gated vs. reported
+//! - **dmg-acid2** is a hard gate: it is a line-based renderer test (no
+//!   mid-mode-3 writes, no CGB palette), which our PPU FIFO can render exactly.
+//!   The DMG palette at the breakpoint is the identity BGP=0xE4, so our raw
+//!   2-bit framebuffer indices map 1:1 onto the reference shade indices.
+//! - **mealybug-tearoom** and **cgb-acid2** are REPORTED, not gated: mealybug
+//!   needs T-cycle-accurate mid-mode-3 register writes (our bus is M-cycle;
+//!   tracked by rubc-7ks), and cgb-acid2 needs CGB color palettes (rubc-5a0).
+//!   The harness prints their pixel-diff so progress is visible, but does not
+//!   fail on them.
+//!
+//! Skips cleanly when the (git-ignored) reference material is absent, so a
+//! fresh checkout still passes `cargo test`.
+
+use rubc_core::bus::ppu::{FramePixel, FRAMEBUFFER_PIXELS};
+use rubc_core::machine::{Machine, RunStop};
+use std::path::{Path, PathBuf};
+
+const MAX_INSTRUCTIONS: u64 = 20_000_000;
+
+fn suites_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../reference/test-suites")
+}
+
+/// Run a ROM to the `LD B,B` breakpoint and return its framebuffer as DMG shade
+/// indices (0..=3), one byte per pixel. The PPU stores resolved `FramePixel`s;
+/// we extract the DMG shade for comparison against the reference `.bin`. Returns
+/// None if the ROM is absent or never reached the breakpoint.
+fn render(rom_rel: &str, cgb: bool) -> Option<Vec<u8>> {
+    let path = suites_dir().join(rom_rel);
+    let rom = std::fs::read(&path).ok()?;
+    let mut m = if cgb {
+        Machine::boot_cgb(&rom)
+    } else {
+        Machine::boot_dmg(&rom)
+    };
+    match m.run_mooneye(MAX_INSTRUCTIONS) {
+        RunStop::MooneyeBreakpoint => Some(
+            m.bus
+                .ppu
+                .framebuffer
+                .iter()
+                .map(|p| match p {
+                    FramePixel::DmgShade(s) => *s,
+                    FramePixel::CgbRgb555(_) => 0,
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Run a CGB ROM to the `LD B,B` breakpoint and return its framebuffer as
+/// RGB555 values (one u16 per pixel). The PPU emits resolved `CgbRgb555` pixels
+/// in CGB mode; we compare these against the hardware-native RGB555 reference
+/// (color-curve independent). Returns None if absent or no breakpoint.
+fn render_cgb(rom_rel: &str) -> Option<Vec<u16>> {
+    let path = suites_dir().join(rom_rel);
+    let rom = std::fs::read(&path).ok()?;
+    let mut m = Machine::boot_cgb(&rom);
+    match m.run_mooneye(MAX_INSTRUCTIONS) {
+        RunStop::MooneyeBreakpoint => Some(
+            m.bus
+                .ppu
+                .framebuffer
+                .iter()
+                .map(|p| match p {
+                    FramePixel::CgbRgb555(rgb) => *rgb,
+                    FramePixel::DmgShade(s) => *s as u16,
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
+/// Load an RGB555 reference (.bin, two little-endian bytes/pixel) if present.
+fn load_reference_rgb555(rel: &str) -> Option<Vec<u16>> {
+    let path = suites_dir().join(rel);
+    let data = std::fs::read(&path).ok()?;
+    if data.len() != FRAMEBUFFER_PIXELS * 2 {
+        return None;
+    }
+    Some(
+        data.chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]) & 0x7FFF)
+            .collect(),
+    )
+}
+
+/// Load a raw shade-index reference (.bin, one byte/pixel) if present.
+fn load_reference(rel: &str) -> Option<Vec<u8>> {
+    let path = suites_dir().join(rel);
+    let data = std::fs::read(&path).ok()?;
+    (data.len() == FRAMEBUFFER_PIXELS).then_some(data)
+}
+
+fn pixel_diff(frame: &[u8], reference: &[u8]) -> usize {
+    frame
+        .iter()
+        .zip(reference.iter())
+        .filter(|(a, b)| (**a & 3) != (**b & 3))
+        .count()
+}
+
+#[test]
+fn dmg_acid2_renders_exactly() {
+    let Some(frame) = render("acid2/dmg-acid2.gb", false) else {
+        eprintln!(
+            "dmg-acid2: ROM absent or no breakpoint -- skipping (run with reference/ present)"
+        );
+        return;
+    };
+    let Some(reference) = load_reference("acid2/dmg-acid2-reference.bin") else {
+        eprintln!("dmg-acid2: reference .bin absent -- skipping");
+        return;
+    };
+    let diff = pixel_diff(&frame, &reference);
+    println!("dmg-acid2: {diff} / {FRAMEBUFFER_PIXELS} pixels differ");
+    assert_eq!(
+        diff, 0,
+        "dmg-acid2 must render pixel-exact ({diff} pixels differ)"
+    );
+}
+
+/// Count RGB555 pixels that differ between a rendered frame and a reference.
+fn pixel_diff_rgb555(frame: &[u16], reference: &[u16]) -> usize {
+    frame
+        .iter()
+        .zip(reference.iter())
+        .filter(|(a, b)| a != b)
+        .count()
+}
+
+/// cgb-acid2 must render pixel-exact in RGB555. We compare against the
+/// hardware-native RGB555 reference (reverse-mapped from the reference PNG), so
+/// the result is independent of any display color-correction curve.
+#[test]
+fn cgb_acid2_renders_exactly() {
+    let Some(frame) = render_cgb("acid2/cgb-acid2.gbc") else {
+        eprintln!("cgb-acid2: ROM absent or no breakpoint -- skipping");
+        return;
+    };
+    let Some(reference) = load_reference_rgb555("acid2/cgb-acid2-reference-rgb555.bin") else {
+        eprintln!("cgb-acid2: RGB555 reference absent -- skipping");
+        return;
+    };
+    let diff = pixel_diff_rgb555(&frame, &reference);
+    println!("cgb-acid2: {diff} / {FRAMEBUFFER_PIXELS} RGB555 pixels differ");
+    assert_eq!(
+        diff, 0,
+        "cgb-acid2 must render pixel-exact ({diff} pixels differ)"
+    );
+}
+
+/// Reporting harness for the mealybug-tearoom suite: these need T-cycle-accurate
+/// mid-mode-3 register writes (rubc-7ks). Prints the per-ROM pixel diff vs the
+/// DMG reference so progress toward sub-M-cycle timing is visible; never fails.
+#[test]
+fn mealybug_report() {
+    let raw_dir = suites_dir().join("mealybug/expected/DMG-raw");
+    let Ok(entries) = std::fs::read_dir(&raw_dir) else {
+        eprintln!("mealybug: expected refs absent -- skipping");
+        return;
+    };
+    let mut refs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("bin"))
+        .collect();
+    refs.sort();
+
+    let mut total = 0usize;
+    let mut exact = 0usize;
+    for ref_path in &refs {
+        let name = ref_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let Some(reference) = std::fs::read(ref_path)
+            .ok()
+            .filter(|d| d.len() == FRAMEBUFFER_PIXELS)
+        else {
+            continue;
+        };
+        let Some(frame) = render(&format!("mealybug/{name}.gb"), false) else {
+            println!("mealybug {name}: no breakpoint");
+            continue;
+        };
+        total += 1;
+        let diff = pixel_diff(&frame, &reference);
+        if diff == 0 {
+            exact += 1;
+        }
+        println!("mealybug {name}: {diff} px differ");
+    }
+    println!("----");
+    println!(
+        "mealybug DMG: {exact}/{total} pixel-exact \
+         (mid-mode-3 timing needs sub-M-cycle bus -- rubc-7ks)"
+    );
+}

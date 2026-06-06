@@ -50,11 +50,86 @@ pub mod mode {
 const INT_VBLANK: u8 = 0;
 const INT_STAT: u8 = 1;
 
+/// A fully-resolved framebuffer pixel: palette has already been applied by the
+/// PPU at emission time (Oracle ses_1651a4026: palette selection is part of
+/// rendering, not presentation). On DMG this is a 2-bit shade (post-BGP/OBP);
+/// the `CgbRgb555` variant is reserved for the CGB color wave (rubc-5a0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FramePixel {
+    /// Post-palette DMG shade, 0 (lightest) ..= 3 (darkest).
+    DmgShade(u8),
+    /// Post-palette CGB color, 15-bit RGB (bit15 unused). Reserved for rubc-5a0.
+    CgbRgb555(u16),
+}
+
+impl Default for FramePixel {
+    fn default() -> Self {
+        FramePixel::DmgShade(0)
+    }
+}
+
+impl FramePixel {
+    /// Extract the DMG shade (0..=3). Panics on a CGB pixel -- mixed-mode
+    /// callers must branch on the variant first.
+    pub fn dmg_shade(self) -> u8 {
+        match self {
+            FramePixel::DmgShade(s) => s,
+            FramePixel::CgbRgb555(_) => {
+                panic!("dmg_shade() called on a CGB framebuffer pixel")
+            }
+        }
+    }
+}
+
+/// Which DMG palette a FIFO pixel resolves through at emission time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DmgPaletteSource {
+    #[default]
+    Bg,
+    Obp0,
+    Obp1,
+}
+
+/// Live DMG palette registers, snapshotted from the bus each `tick_dot`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DmgPalettes {
+    pub bgp: u8,
+    pub obp0: u8,
+    pub obp1: u8,
+}
+
+/// Live CGB render state, snapshotted from the bus each `tick_dot`. When
+/// `enabled` is false the PPU runs the DMG path and emits `DmgShade` pixels.
+#[derive(Clone, Copy)]
+pub struct CgbRenderState<'a> {
+    pub enabled: bool,
+    pub bg_palette_ram: &'a [u8; 64],
+    pub obj_palette_ram: &'a [u8; 64],
+}
+
+/// Per-sprite attributes passed to `overlay_sprite_pixels` (bundled to keep the
+/// argument count manageable).
+#[derive(Clone, Copy)]
+struct SpriteOverlay {
+    bg_priority: bool,
+    palette: DmgPaletteSource,
+    cgb_palette: u8,
+    oam_index: u8,
+    cgb_priority: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct FifoPixel {
     color: u8,
     bg_priority: bool,
     occupied: bool,
+    /// Palette this pixel resolves through (BG, or OBP0/OBP1 for sprites).
+    palette: DmgPaletteSource,
+    /// CGB palette number (0..=7). BG uses BCPD palettes, OBJ uses OCPD.
+    cgb_palette: u8,
+    /// OAM index of the sprite that produced this pixel (lower = higher CGB
+    /// priority). Meaningless for BG pixels.
+    oam_index: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -86,13 +161,17 @@ impl PixelFifo {
         self.len == 0
     }
 
-    fn push_bg_pixels(&mut self, colors: [u8; FIFO_CAPACITY]) {
+    fn push_bg_pixels(&mut self, colors: [u8; FIFO_CAPACITY], cgb_palette: u8, bg_priority: bool) {
         self.len = FIFO_CAPACITY;
         for (slot, color) in self.pixels.iter_mut().zip(colors) {
             *slot = FifoPixel {
                 color: color & 0x03,
-                bg_priority: false,
+                // CGB BG attr bit 7 (master priority over OBJ); always false on DMG.
+                bg_priority,
                 occupied: true,
+                palette: DmgPaletteSource::Bg,
+                cgb_palette,
+                oam_index: 0,
             };
         }
     }
@@ -100,20 +179,38 @@ impl PixelFifo {
     fn overlay_sprite_pixels(
         &mut self,
         colors: [u8; FIFO_CAPACITY],
-        bg_priority: bool,
         first_visible_pixel: usize,
+        attrs: SpriteOverlay,
     ) {
+        let SpriteOverlay {
+            bg_priority,
+            palette,
+            cgb_palette,
+            oam_index,
+            cgb_priority,
+        } = attrs;
         for (slot, color) in colors.iter().copied().skip(first_visible_pixel).enumerate() {
             if slot >= FIFO_CAPACITY {
                 break;
             }
-            if color == 0 || self.pixels[slot].occupied {
+            if color == 0 {
                 continue;
+            }
+            let existing = self.pixels[slot];
+            if existing.occupied {
+                // DMG: first sprite (by X/OAM fetch order) keeps the slot.
+                // CGB: the lower OAM index wins, even if fetched later.
+                if !cgb_priority || oam_index >= existing.oam_index {
+                    continue;
+                }
             }
             self.pixels[slot] = FifoPixel {
                 color: color & 0x03,
                 bg_priority,
                 occupied: true,
+                palette,
+                cgb_palette,
+                oam_index,
             };
             self.len = self.len.max(slot + 1);
         }
@@ -158,6 +255,8 @@ struct BgFetcher {
     step_ticks: u8,
     fetcher_x: u8,
     tile: u8,
+    /// CGB BG map attribute byte (from VRAM bank 1). 0 on DMG.
+    attr: u8,
     low: u8,
     high: u8,
     dummy_fetch_done: bool,
@@ -200,8 +299,21 @@ pub struct Ppu {
     pub ly: u8,
     /// Current mode (STAT bits 1-0).
     pub mode: u8,
-    /// Raw 2-bit color-index framebuffer. Palettes are intentionally not applied.
-    pub framebuffer: Box<[u8; FRAMEBUFFER_PIXELS]>,
+    /// Fully-resolved framebuffer: the PPU applies BGP/OBP at emission time, so
+    /// each pixel is a post-palette `FramePixel` (DMG shade now; CGB RGB later).
+    pub framebuffer: Box<[FramePixel; FRAMEBUFFER_PIXELS]>,
+
+    /// DMG palette registers, snapshotted from the bus on each `tick_dot` so the
+    /// pixel pipeline resolves shades against the value live at emission time.
+    bgp: u8,
+    obp0: u8,
+    obp1: u8,
+    /// CGB mode flag + palette RAM, snapshotted from the bus each `tick_dot`.
+    /// When set, pixels resolve through RGB555 palette RAM (`CgbRgb555`); when
+    /// clear, the DMG BGP/OBP path emits `DmgShade`.
+    cgb_mode: bool,
+    cgb_bg_palette_ram: [u8; 64],
+    cgb_obj_palette_ram: [u8; 64],
 
     /// LCD master enable (LCDC bit 7).
     enabled: bool,
@@ -248,7 +360,13 @@ impl Default for Ppu {
             dot_ticks: 0,
             ly: 0,
             mode: mode::OAM_SCAN,
-            framebuffer: Box::new([0; FRAMEBUFFER_PIXELS]),
+            framebuffer: Box::new([FramePixel::DmgShade(0); FRAMEBUFFER_PIXELS]),
+            bgp: 0xFC,
+            obp0: 0xFF,
+            obp1: 0xFF,
+            cgb_mode: false,
+            cgb_bg_palette_ram: [0xFF; 64],
+            cgb_obj_palette_ram: [0xFF; 64],
             // LCD starts enabled with the post-boot LCDC ($91 = on, BG on, ...).
             enabled: true,
             lcdc: 0x91,
@@ -292,7 +410,21 @@ impl Ppu {
     /// Advance one dot (one T-cycle). Called 4x per M-cycle (or 2x in CGB
     /// double-speed) from the bus tick loop. Raises VBlank / STAT interrupts via
     /// `irq`. The bus owns VRAM/OAM and passes the current DMG VRAM bank + OAM.
-    pub fn tick_dot(&mut self, irq: &mut Interrupts, vram: &[u8; 0x2000], oam: &[u8; 0xA0]) {
+    /// `palettes` is the live BGP/OBP0/OBP1 snapshot, applied at pixel emission.
+    pub fn tick_dot(
+        &mut self,
+        irq: &mut Interrupts,
+        vram: &[[u8; 0x2000]; 2],
+        oam: &[u8; 0xA0],
+        palettes: DmgPalettes,
+        cgb: CgbRenderState,
+    ) {
+        self.bgp = palettes.bgp;
+        self.obp0 = palettes.obp0;
+        self.obp1 = palettes.obp1;
+        self.cgb_mode = cgb.enabled;
+        self.cgb_bg_palette_ram = *cgb.bg_palette_ram;
+        self.cgb_obj_palette_ram = *cgb.obj_palette_ram;
         self.dot_ticks += 1;
         if !self.enabled {
             return;
@@ -423,7 +555,7 @@ impl Ppu {
         self.set_mode(mode::DRAWING, irq);
     }
 
-    fn tick_drawing(&mut self, vram: &[u8; 0x2000], irq: &mut Interrupts) {
+    fn tick_drawing(&mut self, vram: &[[u8; 0x2000]; 2], irq: &mut Interrupts) {
         self.drawing_dots += 1;
 
         if self.sprite_idle_ticks > 0 {
@@ -461,15 +593,22 @@ impl Ppu {
         self.set_mode(mode::HBLANK, irq);
     }
 
-    fn clock_bg_fetcher(&mut self, vram: &[u8; 0x2000]) {
+    fn clock_bg_fetcher(&mut self, vram: &[[u8; 0x2000]; 2]) {
         if self.bg_fetcher.step == FetchStep::Push {
             if self.bg_fifo.is_empty() {
-                let colors = if self.lcdc & 0x01 == 0 {
+                let x_flip = self.cgb_mode && self.bg_fetcher.attr & 0x20 != 0;
+                let colors = if self.lcdc & 0x01 == 0 && !self.cgb_mode {
+                    // DMG: LCDC bit 0 clear blanks the BG. In CGB this bit only
+                    // affects OBJ master priority, not BG visibility.
                     [0; FIFO_CAPACITY]
                 } else {
-                    decode_2bpp(self.bg_fetcher.low, self.bg_fetcher.high, false)
+                    decode_2bpp(self.bg_fetcher.low, self.bg_fetcher.high, x_flip)
                 };
-                self.bg_fifo.push_bg_pixels(colors);
+                // CGB BG attr: bits 2-0 = palette, bit 7 = BG-to-OBJ priority.
+                let cgb_palette = self.bg_fetcher.attr & 0x07;
+                let bg_priority = self.cgb_mode && self.bg_fetcher.attr & 0x80 != 0;
+                self.bg_fifo
+                    .push_bg_pixels(colors, cgb_palette, bg_priority);
                 self.bg_fetcher.fetcher_x = self.bg_fetcher.fetcher_x.wrapping_add(1);
                 self.bg_fetcher.step = FetchStep::TileNo;
                 self.bg_fetcher.step_ticks = 0;
@@ -485,17 +624,19 @@ impl Ppu {
 
         match self.bg_fetcher.step {
             FetchStep::TileNo => {
-                self.bg_fetcher.tile = self.fetch_bg_tile_no(vram);
+                let (tile, attr) = self.fetch_bg_tile_no(vram);
+                self.bg_fetcher.tile = tile;
+                self.bg_fetcher.attr = attr;
                 self.bg_fetcher.step = FetchStep::TileDataLow;
             }
             FetchStep::TileDataLow => {
                 let addr = self.fetch_bg_tile_data_addr();
-                self.bg_fetcher.low = read_vram(vram, addr);
+                self.bg_fetcher.low = read_vram(&vram[self.bg_tile_bank()], addr);
                 self.bg_fetcher.step = FetchStep::TileDataHigh;
             }
             FetchStep::TileDataHigh => {
                 let addr = self.fetch_bg_tile_data_addr() + 1;
-                self.bg_fetcher.high = read_vram(vram, addr);
+                self.bg_fetcher.high = read_vram(&vram[self.bg_tile_bank()], addr);
                 if self.bg_fetcher.dummy_fetch_done {
                     self.bg_fetcher.step = FetchStep::Push;
                 } else {
@@ -509,7 +650,16 @@ impl Ppu {
         }
     }
 
-    fn fetch_bg_tile_no(&self, vram: &[u8; 0x2000]) -> u8 {
+    /// CGB tile data VRAM bank for the current BG tile (attr bit 3). Always 0 on DMG.
+    fn bg_tile_bank(&self) -> usize {
+        if self.cgb_mode && self.bg_fetcher.attr & 0x08 != 0 {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn fetch_bg_tile_no(&self, vram: &[[u8; 0x2000]; 2]) -> (u8, u8) {
         let map_base = if self.bg_fetcher.window {
             if self.lcdc & 0x40 != 0 {
                 0x1C00
@@ -533,15 +683,26 @@ impl Ppu {
             32 * (((self.ly.wrapping_add(self.scy) as usize) / 8) & 0x1F)
         };
         let offset = (y_offset + x_offset as usize) & 0x03FF;
-        read_vram(vram, map_base + offset)
+        let tile = read_vram(&vram[0], map_base + offset);
+        // CGB stores the tile attribute at the same tilemap offset in bank 1.
+        let attr = if self.cgb_mode {
+            read_vram(&vram[1], map_base + offset)
+        } else {
+            0
+        };
+        (tile, attr)
     }
 
     fn fetch_bg_tile_data_addr(&self) -> usize {
-        let row = if self.bg_fetcher.window {
+        let mut row = if self.bg_fetcher.window {
             (self.window_line_counter & 0x07) as usize
         } else {
             (self.ly.wrapping_add(self.scy) & 0x07) as usize
         };
+        // CGB BG attr bit 6 = vertical flip within the 8-pixel tile row.
+        if self.cgb_mode && self.bg_fetcher.attr & 0x40 != 0 {
+            row = 7 - row;
+        }
 
         if self.lcdc & 0x10 != 0 {
             self.bg_fetcher.tile as usize * 16 + row * 2
@@ -598,7 +759,7 @@ impl Ppu {
         false
     }
 
-    fn advance_sprite_fetch(&mut self, vram: &[u8; 0x2000]) {
+    fn advance_sprite_fetch(&mut self, vram: &[[u8; 0x2000]; 2]) {
         if self.sprite_fetch_ticks > 0 {
             self.sprite_fetch_ticks -= 1;
         }
@@ -616,22 +777,48 @@ impl Ppu {
         }
     }
 
-    fn load_sprite_fifo(&mut self, vram: &[u8; 0x2000], sprite: ScanlineSprite) {
+    fn load_sprite_fifo(&mut self, vram: &[[u8; 0x2000]; 2], sprite: ScanlineSprite) {
+        // CGB OBJ tile data VRAM bank (OAM attr bit 3). Always bank 0 on DMG.
+        let bank = if self.cgb_mode && sprite.attr & 0x08 != 0 {
+            1
+        } else {
+            0
+        };
         let addr = self.sprite_tile_data_addr(sprite);
-        let low = read_vram(vram, addr);
-        let high = read_vram(vram, addr + 1);
+        let low = read_vram(&vram[bank], addr);
+        let high = read_vram(&vram[bank], addr + 1);
         let x_flip = sprite.attr & 0x20 != 0;
         let colors = decode_2bpp(low, high, x_flip);
         let first_visible = 8usize.saturating_sub(sprite.x as usize).min(7);
-        self.sprite_fifo
-            .overlay_sprite_pixels(colors, sprite.attr & 0x80 != 0, first_visible);
+        // DMG OBJ palette select: attr bit 4 chooses OBP1 over OBP0.
+        let palette = if sprite.attr & 0x10 != 0 {
+            DmgPaletteSource::Obp1
+        } else {
+            DmgPaletteSource::Obp0
+        };
+        // CGB OBJ palette number = OAM attr bits 2-0.
+        let cgb_palette = sprite.attr & 0x07;
+        self.sprite_fifo.overlay_sprite_pixels(
+            colors,
+            first_visible,
+            SpriteOverlay {
+                bg_priority: sprite.attr & 0x80 != 0,
+                palette,
+                cgb_palette,
+                oam_index: sprite.oam_index,
+                cgb_priority: self.cgb_mode,
+            },
+        );
     }
 
     fn sprite_tile_data_addr(&self, sprite: ScanlineSprite) -> usize {
         let height = self.sprite_height();
         let mut row = self.ly.wrapping_add(16).wrapping_sub(sprite.y);
         if sprite.attr & 0x40 != 0 {
-            row = height - 1 - row;
+            // Y-flip mirrors the row within the sprite. `row` can momentarily
+            // exceed `height` for objects being fetched off their covered range
+            // (mid-mode-3 OAM changes); wrap to match hardware index behavior.
+            row = (height - 1).wrapping_sub(row);
         }
 
         let tile = if height == 16 {
@@ -661,24 +848,17 @@ impl Ppu {
             return true;
         }
 
-        let bg_color = if self.lcdc & 0x01 == 0 {
-            0
-        } else {
-            bg_pixel.color & 0x03
-        };
         let sprite_pixel = self.sprite_fifo.pop().unwrap_or_default();
-        let final_color = if sprite_pixel.occupied
-            && sprite_pixel.color != 0
-            && !(sprite_pixel.bg_priority && bg_color != 0)
-        {
-            sprite_pixel.color & 0x03
+
+        let pixel = if self.cgb_mode {
+            self.resolve_cgb_pixel(bg_pixel, sprite_pixel)
         } else {
-            bg_color
+            self.resolve_dmg_pixel(bg_pixel, sprite_pixel)
         };
 
         if self.ly <= LAST_VISIBLE_LINE && self.lcd_x < SCREEN_WIDTH {
             let index = self.ly as usize * SCREEN_WIDTH + self.lcd_x;
-            self.framebuffer[index] = final_color;
+            self.framebuffer[index] = pixel;
         }
         self.lcd_x += 1;
 
@@ -686,6 +866,67 @@ impl Ppu {
             self.finish_drawing(irq);
         }
         true
+    }
+
+    /// DMG pixel resolution: priority by OBJ attr bit 7, palette through
+    /// BGP/OBP0/OBP1, emitting a post-palette `DmgShade`.
+    fn resolve_dmg_pixel(&self, bg_pixel: FifoPixel, sprite_pixel: FifoPixel) -> FramePixel {
+        let bg_color = if self.lcdc & 0x01 == 0 {
+            0
+        } else {
+            bg_pixel.color & 0x03
+        };
+        let sprite_wins = sprite_pixel.occupied
+            && sprite_pixel.color != 0
+            && !(sprite_pixel.bg_priority && bg_color != 0);
+
+        let shade = if sprite_wins {
+            let obp = match sprite_pixel.palette {
+                DmgPaletteSource::Obp1 => self.obp1,
+                _ => self.obp0,
+            };
+            (obp >> (sprite_pixel.color * 2)) & 0x03
+        } else {
+            (self.bgp >> (bg_color * 2)) & 0x03
+        };
+        FramePixel::DmgShade(shade)
+    }
+
+    /// CGB pixel resolution: the BG/OBJ priority table (Pan Docs), then a
+    /// 15-bit RGB lookup into BCPD/OCPD palette RAM, emitting `CgbRgb555`.
+    fn resolve_cgb_pixel(&self, bg_pixel: FifoPixel, sprite_pixel: FifoPixel) -> FramePixel {
+        let bg_color = bg_pixel.color & 0x03;
+        let sprite_opaque = sprite_pixel.occupied && sprite_pixel.color != 0;
+
+        // CGB BG/OBJ priority (Pan Docs table):
+        //  - LCDC bit 0 clear  => OBJ always wins (master priority).
+        //  - else if BG color 0 => OBJ wins.
+        //  - else if BG-attr.7 or OAM-attr.7 set => BG colors 1-3 win.
+        //  - else OBJ wins.
+        let obj_master = self.lcdc & 0x01 == 0;
+        let bg_has_priority = bg_pixel.bg_priority || sprite_pixel.bg_priority;
+        let sprite_wins = sprite_opaque && (obj_master || bg_color == 0 || !bg_has_priority);
+
+        if sprite_wins {
+            let rgb = self.cgb_color(
+                &self.cgb_obj_palette_ram,
+                sprite_pixel.cgb_palette,
+                sprite_pixel.color,
+            );
+            FramePixel::CgbRgb555(rgb)
+        } else {
+            let rgb = self.cgb_color(&self.cgb_bg_palette_ram, bg_pixel.cgb_palette, bg_color);
+            FramePixel::CgbRgb555(rgb)
+        }
+    }
+
+    /// Read a 15-bit RGB555 color from a CGB palette RAM block: palette 0..=7,
+    /// color 0..=3, two little-endian bytes per color.
+    fn cgb_color(&self, palette_ram: &[u8; 64], palette: u8, color: u8) -> u16 {
+        let base = (palette as usize & 0x07) * 8 + (color as usize & 0x03) * 2;
+        let lo = palette_ram[base] as u16;
+        let hi = palette_ram[base + 1] as u16;
+        (lo | (hi << 8)) & 0x7FFF
     }
 
     /// The "STAT line": OR of the enabled STAT conditions. The STAT interrupt
@@ -892,10 +1133,28 @@ mod tests {
         [0; 0xA0]
     }
 
+    /// Identity DMG palettes (0xE4): each raw color N maps to shade N, so the
+    /// existing raw-index framebuffer assertions remain meaningful.
+    const IDENTITY_PALETTES: DmgPalettes = DmgPalettes {
+        bgp: 0xE4,
+        obp0: 0xE4,
+        obp1: 0xE4,
+    };
+
     fn tick_with(p: &mut Ppu, n: u32, vram: &[u8; 0x2000], oam: &[u8; 0xA0]) -> u8 {
         let mut irq = Interrupts::default();
+        // Tests exercise the DMG path: bank 0 holds the data, bank 1 is empty,
+        // and CGB rendering is disabled so the DMG shade pipeline runs.
+        let mut banks = [[0u8; 0x2000]; 2];
+        banks[0] = *vram;
+        let zero = [0u8; 64];
+        let cgb = CgbRenderState {
+            enabled: false,
+            bg_palette_ram: &zero,
+            obj_palette_ram: &zero,
+        };
         for _ in 0..n {
-            p.tick_dot(&mut irq, vram, oam);
+            p.tick_dot(&mut irq, &banks, oam, IDENTITY_PALETTES, cgb);
         }
         irq.settle_boundary();
         irq.if_ & 0x1F
@@ -1075,7 +1334,11 @@ mod tests {
 
         run_line(&mut p, &vram, &oam);
 
-        assert_eq!(&p.framebuffer[0..8], &[0, 1, 2, 3, 0, 1, 2, 3]);
+        let shades: Vec<u8> = p.framebuffer[0..8]
+            .iter()
+            .map(|px| px.dmg_shade())
+            .collect();
+        assert_eq!(shades, vec![0, 1, 2, 3, 0, 1, 2, 3]);
     }
 
     #[test]
@@ -1095,7 +1358,8 @@ mod tests {
         sprite_wins.write_lcdc(0x93, &mut Interrupts::default());
         run_line(&mut sprite_wins, &vram, &oam);
         assert_eq!(
-            sprite_wins.framebuffer[0], 2,
+            sprite_wins.framebuffer[0].dmg_shade(),
+            2,
             "sprite color wins without priority bit"
         );
 
@@ -1104,7 +1368,8 @@ mod tests {
         bg_wins.write_lcdc(0x93, &mut Interrupts::default());
         run_line(&mut bg_wins, &vram, &oam);
         assert_eq!(
-            bg_wins.framebuffer[0], 1,
+            bg_wins.framebuffer[0].dmg_shade(),
+            1,
             "BG color wins when OBJ priority is set"
         );
     }
@@ -1125,7 +1390,11 @@ mod tests {
 
         run_line(&mut p, &vram, &oam);
 
-        assert_eq!(&p.framebuffer[0..8], &[2; 8]);
+        let shades: Vec<u8> = p.framebuffer[0..8]
+            .iter()
+            .map(|px| px.dmg_shade())
+            .collect();
+        assert_eq!(shades, vec![2; 8]);
     }
 
     #[test]
