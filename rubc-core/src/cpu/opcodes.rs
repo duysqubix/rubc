@@ -329,12 +329,13 @@ fn step_inc_dec_rr<B: CpuBus>(cpu: &mut Cpu, bus: &mut B, op: u8, phase: u8, dec
     match phase {
         0 => cpu.next_phase(op, 1),
         _ => {
-            bus.idle_m();
             let group = (op >> 4) & 0x03;
+            let old = read_rr(cpu, group);
+            bus.oam_bug_idu_m(old);
             let value = if dec {
-                read_rr(cpu, group).wrapping_sub(1)
+                old.wrapping_sub(1)
             } else {
-                read_rr(cpu, group).wrapping_add(1)
+                old.wrapping_add(1)
             };
             write_rr(cpu, group, value);
             cpu.finish();
@@ -548,13 +549,17 @@ fn step_call_a16<B: CpuBus>(cpu: &mut Cpu, bus: &mut B, op: u8, phase: u8, taken
             cpu.next_phase(op, 4);
         }
         4 => {
+            let old_sp = cpu.r.sp;
             cpu.r.sp = cpu.r.sp.wrapping_sub(1);
             bus.write_m(cpu.r.sp, (cpu.r.pc >> 8) as u8);
+            bus.oam_bug_idu_glitch(old_sp);
             cpu.next_phase(op, 5);
         }
         _ => {
+            let old_sp = cpu.r.sp;
             cpu.r.sp = cpu.r.sp.wrapping_sub(1);
             bus.write_m(cpu.r.sp, cpu.r.pc as u8);
+            bus.oam_bug_idu_glitch(old_sp);
             cpu.r.pc = cpu.tmp16();
             cpu.finish();
         }
@@ -574,6 +579,7 @@ fn step_ret_cc<B: CpuBus>(cpu: &mut Cpu, bus: &mut B, op: u8, phase: u8) {
         }
         2 => {
             let lo = bus.read_m(cpu.r.sp);
+            bus.oam_bug_idu_glitch(cpu.r.sp);
             cpu.r.sp = cpu.r.sp.wrapping_add(1);
             cpu.set_tmp8(lo);
             cpu.next_phase(op, 3);
@@ -597,6 +603,7 @@ fn step_ret<B: CpuBus>(cpu: &mut Cpu, bus: &mut B, op: u8, phase: u8, reti: bool
         0 => cpu.next_phase(op, 1),
         1 => {
             let lo = bus.read_m(cpu.r.sp);
+            bus.oam_bug_idu_glitch(cpu.r.sp);
             cpu.r.sp = cpu.r.sp.wrapping_add(1);
             cpu.set_tmp8(lo);
             cpu.next_phase(op, 2);
@@ -626,13 +633,17 @@ fn step_rst<B: CpuBus>(cpu: &mut Cpu, bus: &mut B, op: u8, phase: u8) {
             cpu.next_phase(op, 2);
         }
         2 => {
+            let old_sp = cpu.r.sp;
             cpu.r.sp = cpu.r.sp.wrapping_sub(1);
             bus.write_m(cpu.r.sp, (cpu.r.pc >> 8) as u8);
+            bus.oam_bug_idu_glitch(old_sp);
             cpu.next_phase(op, 3);
         }
         _ => {
+            let old_sp = cpu.r.sp;
             cpu.r.sp = cpu.r.sp.wrapping_sub(1);
             bus.write_m(cpu.r.sp, cpu.r.pc as u8);
+            bus.oam_bug_idu_glitch(old_sp);
             cpu.r.pc = (op & 0x38) as u16;
             cpu.finish();
         }
@@ -648,14 +659,18 @@ fn step_push_rr<B: CpuBus>(cpu: &mut Cpu, bus: &mut B, op: u8, phase: u8) {
         }
         2 => {
             let value = read_stack_rr(cpu, (op >> 4) & 0x03);
+            let old_sp = cpu.r.sp;
             cpu.r.sp = cpu.r.sp.wrapping_sub(1);
             bus.write_m(cpu.r.sp, (value >> 8) as u8);
+            bus.oam_bug_idu_glitch(old_sp);
             cpu.next_phase(op, 3);
         }
         _ => {
             let value = read_stack_rr(cpu, (op >> 4) & 0x03);
+            let old_sp = cpu.r.sp;
             cpu.r.sp = cpu.r.sp.wrapping_sub(1);
             bus.write_m(cpu.r.sp, value as u8);
+            bus.oam_bug_idu_glitch(old_sp);
             cpu.finish();
         }
     }
@@ -666,6 +681,7 @@ fn step_pop_rr<B: CpuBus>(cpu: &mut Cpu, bus: &mut B, op: u8, phase: u8) {
         0 => cpu.next_phase(op, 1),
         1 => {
             let lo = bus.read_m(cpu.r.sp);
+            bus.oam_bug_idu_glitch(cpu.r.sp);
             cpu.r.sp = cpu.r.sp.wrapping_add(1);
             cpu.set_tmp8(lo);
             cpu.next_phase(op, 2);

@@ -464,15 +464,26 @@ mod tests {
     }
 
     #[test]
-    fn blargg_oam_bug_fails_we_do_not_emulate_it() {
-        // oam_bug requires the DMG OAM-corruption hardware bug, which we do not
-        // emulate; it reports FAIL ($A000 = 0x01) via the cart-RAM protocol. This
-        // pins that our detection does NOT report a false pass (the result code
-        // is only trusted after the ROM signals "running").
+    fn blargg_oam_bug_combined_still_fails_until_instr_patterns_are_complete() {
         assert!(
             !blargg_passes_at("oam_bug/oam_bug.gb"),
-            "oam_bug must report FAIL (OAM corruption bug not emulated)"
+            "combined oam_bug needs the remaining exact multi-access instruction patterns"
         );
+    }
+
+    #[test]
+    fn blargg_oam_bug_passing_subtests() {
+        for name in [
+            "1-lcd_sync.gb",
+            "2-causes.gb",
+            "3-non_causes.gb",
+            "4-scanline_timing.gb",
+            "5-timing_bug.gb",
+            "6-timing_no_bug.gb",
+        ] {
+            let rel = format!("oam_bug/rom_singles/{name}");
+            assert!(blargg_passes_at(&rel), "oam_bug {name} should pass");
+        }
     }
 
     #[test]
