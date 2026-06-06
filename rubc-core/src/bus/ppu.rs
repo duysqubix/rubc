@@ -978,13 +978,13 @@ impl Ppu {
             self.bg_fifo.clear();
             self.sprite_fifo.clear();
         } else if !was_on && self.enabled {
-            // LCD on: restart the frame from the top.
-            // TODO(rubc-9d4 lcdon wave): the first line after enable starts in
-            // mode 0 (not mode 2) and has special shorter timing. We restart in
-            // mode 2 for now; lcdon_timing-GS is gated to that wave.
+            // LCD on: restart the frame from the top. The first scanline after
+            // enable begins in mode 0 (HBlank), not mode 2 -- the OAM-scan phase
+            // is skipped on the very first line (mooneye stat_lyc_onoff). The
+            // scheduler advances into mode 2 on the next line boundary.
             self.ly = 0;
             self.line_dot = 0;
-            self.mode = mode::OAM_SCAN;
+            self.mode = mode::HBLANK;
             self.window_y_condition = false;
             self.window_line_counter = 0;
             self.bg_fifo.clear();
@@ -1320,6 +1320,27 @@ mod tests {
         p.write_lcdc(0x80, &mut irq_b);
         irq_b.settle_boundary();
         assert_eq!(irq_b.if_ & 0x02, 0x02, "false->true fires STAT once");
+    }
+
+    #[test]
+    fn lcd_on_starts_first_line_in_mode0() {
+        // mooneye stat_lyc_onoff: after enabling the LCD, the first scanline
+        // starts in mode 0 (HBlank), not mode 2 (OAM scan). STAT therefore reads
+        // mode bits = 0 immediately after LCD-on.
+        let mut p = ppu_at_line_start();
+        let mut irq = Interrupts::default();
+        p.write_lcdc(0x00, &mut irq); // LCD off
+        p.write_lcdc(0x80, &mut irq); // LCD on
+        assert_eq!(
+            p.mode,
+            mode::HBLANK,
+            "first line after LCD enable is mode 0"
+        );
+        assert_eq!(
+            p.read_stat() & 0x03,
+            0,
+            "STAT mode bits read 0 after enable"
+        );
     }
 
     #[test]
