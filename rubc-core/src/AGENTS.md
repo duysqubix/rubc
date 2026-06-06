@@ -1,7 +1,7 @@
 # rubc-core Implementation Map
 
 ## OVERVIEW
-Core library for GameBoy DMG/CGB emulator. CPU/Bus complete; MBC/Timer/Interrupts partial; PPU stub; APU none.
+Core library for GameBoy DMG/CGB emulator. CPU/Bus/Timer/Interrupts complete; PPU complete (FIFO renderer, acid2 pixel-exact); APU complete (4 channels + sample output); CGB complete (color, double-speed, banking, HDMA); MBC0/1/2/3+RTC/5.
 
 ## MODULE MAP
 | File | Responsibility | Status |
