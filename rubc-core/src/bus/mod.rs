@@ -95,6 +95,10 @@ struct OamDma {
     active: bool,
     source_hi: u8,
     index: u8,
+    /// A freshly-written $FF46 source, armed but not yet started. The transfer
+    /// begins after a 1 M-cycle startup delay; a restart keeps the old DMA
+    /// running through the setup cycle, so we cannot clear `active` immediately.
+    pending_source_hi: Option<u8>,
     start_delay_m: u8,
     /// The byte transferred this M-cycle (what a conflicting CPU read sees).
     conflict_byte_this_m: Option<u8>,
@@ -346,14 +350,20 @@ impl Bus {
         self.dma.conflict_byte_this_m = None;
         self.dma.active_for_cpu_this_m = false;
 
-        if self.dma.start_delay_m > 0 {
-            self.dma.start_delay_m -= 1;
-            if self.dma.start_delay_m == 0 {
+        // Pending DMA from a fresh $FF46 write (Oracle ses_164ac8274): numbering
+        // the write M-cycle as M=0, M=1 is a setup cycle (no transfer; a restart
+        // lets the OLD DMA keep running), and the new transfer begins on M=2.
+        if self.dma.pending_source_hi.is_some() {
+            if self.dma.start_delay_m > 0 {
+                self.dma.start_delay_m -= 1;
+                // Do NOT return: an older DMA must still transfer during M=1.
+            } else {
+                self.dma.source_hi = self.dma.pending_source_hi.take().unwrap();
                 self.dma.active = true;
                 self.dma.index = 0;
             }
-            return;
         }
+
         if !self.dma.active {
             return;
         }
@@ -373,14 +383,13 @@ impl Bus {
         }
     }
 
-    /// Schedule an OAM DMA from `0xXX00` (value = `XX`).
+    /// Schedule an OAM DMA from `0xXX00` (value = `XX`). The transfer starts
+    /// after a 1 M-cycle setup delay (byte 0 on relative M=2). On a restart, the
+    /// currently-active DMA keeps running through the setup cycle, so `active` is
+    /// NOT cleared here -- the pending source replaces it on M=2.
     pub fn start_oam_dma(&mut self, value: u8) {
-        self.dma.source_hi = value;
-        // PROVISIONAL: 2-M-cycle startup delay before the first transfer is not
-        // yet ROM-calibrated. Verify against mooneye `acceptance/oam_dma/*`
-        // (oam_dma_start, oam_dma_timing) in the OAM-DMA wave; adjust if it fails.
-        self.dma.start_delay_m = 2;
-        self.dma.active = false;
+        self.dma.pending_source_hi = Some(value);
+        self.dma.start_delay_m = 1;
     }
 
     /// Side-effect-free read of the DMA source (no ticking).
@@ -482,7 +491,8 @@ impl Bus {
     fn cpu_read_latched(&mut self, addr: u16) -> u8 {
         self.ticks_at_last_sample = self.t_tick_count;
 
-        // OAM DMA bus conflict: CPU sees the in-flight byte; OAM blocked; HRAM ok.
+        // OAM DMA bus conflict: the CPU sees the in-flight DMA byte; OAM blocked;
+        // HRAM accessible.
         if self.dma.active_for_cpu_this_m {
             match addr {
                 0xFF80..=0xFFFE => {} // HRAM accessible
@@ -912,8 +922,7 @@ mod tests {
         }
         bus.poke(0xFF46, 0xC0); // start OAM DMA from 0xC000 (via poke -> start_oam_dma)
 
-        // start_delay_m = 2: two M-cycles before the first transfer.
-        bus.idle_m();
+        // M=1 setup (no transfer), then M=2 transfers byte 0.
         bus.idle_m();
         // Next M transfers byte 0 -> OAM[0]; a conflicting general read sees it.
         let conflict = bus.read_m(0x4000); // ROM region, would normally read rom
@@ -922,6 +931,56 @@ mod tests {
         // HRAM stays accessible during DMA.
         bus.poke(0xFF80, 0x99);
         assert_eq!(bus.read_m(0xFF80), 0x99, "HRAM accessible during DMA");
+    }
+
+    #[test]
+    fn oam_dma_first_byte_transfers_on_relative_m2() {
+        // rubc-33y (Oracle ses_164ac8274): numbering the $FF46 write M-cycle as
+        // M=0, the startup is 1 M-cycle: M=1 is setup (no transfer, OAM still
+        // accessible), and DMA byte 0 transfers on M=2. Byte i transfers on M=2+i.
+        let mut bus = Bus::new();
+        for i in 0..0xA0u16 {
+            bus.poke(0xC000 + i, 0x10 + i as u8);
+        }
+        // M=0: the FF46 write commits. poke models the write committing.
+        bus.poke(0xFF46, 0xC0);
+        // M=1: setup cycle -- no transfer yet, OAM[0] still its old value.
+        bus.idle_m();
+        assert_eq!(bus.oam[0], 0x00, "M=1 setup: no DMA transfer yet");
+        // M=2: byte 0 transfers and the conflict byte is exposed THIS M-cycle.
+        let conflict = bus.read_m(0x4000);
+        assert_eq!(conflict, 0x10, "M=2: conflicting read sees DMA byte 0");
+        assert_eq!(bus.oam[0], 0x10, "M=2: DMA wrote OAM[0]");
+        // M=3: byte 1.
+        bus.idle_m();
+        assert_eq!(bus.oam[1], 0x11, "M=3: DMA wrote OAM[1]");
+    }
+
+    #[test]
+    fn oam_dma_last_byte_then_inactive() {
+        // Byte 159 transfers on relative M=161 (last active cycle); M=162 is
+        // inactive (CPU sees real memory again).
+        let mut bus = Bus::new();
+        for i in 0..0xA0u16 {
+            bus.poke(0xC000 + i, 0x10 + i as u8);
+        }
+        bus.poke(0xFF46, 0xC0); // M=0
+        bus.idle_m(); // M=1 setup
+                      // M=2..=M=161 transfer bytes 0..=159 (160 transfers).
+        for _ in 0..159 {
+            bus.idle_m();
+        }
+        // We are now at M=161 about to transfer byte 159 on the NEXT beat's read.
+        let last = bus.read_m(0x4000); // M=161: byte 159 active
+        assert_eq!(
+            last,
+            0x10 + 159,
+            "M=161: last DMA conflict byte (index 159)"
+        );
+        assert_eq!(bus.oam[159], 0x10 + 159, "OAM[159] written");
+        // M=162: DMA done, conflicting read sees real memory (ROM 0x4000).
+        let after = bus.read_m(0x4000);
+        assert_ne!(after, 0x10 + 159, "M=162: DMA inactive, real memory");
     }
 
     #[test]
