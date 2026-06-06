@@ -18,6 +18,25 @@ the commands to run each suite are in the [justfile](../justfile).
 | `cgb_sound` (01–12) | ✅ 12/12 |
 | `oam_bug` | ◐ 6/8 sub-tests (DMG OAM corruption — POP/RET patterns in progress) |
 
+rubc's own rendered output running each suite to completion:
+
+<table>
+  <tr>
+    <td align="center"><img src="media/tests/cpu_instrs.png" width="200"><br><sub>cpu_instrs</sub></td>
+    <td align="center"><img src="media/tests/instr_timing.png" width="200"><br><sub>instr_timing</sub></td>
+    <td align="center"><img src="media/tests/mem_timing.png" width="200"><br><sub>mem_timing</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="media/tests/mem_timing-2.png" width="200"><br><sub>mem_timing-2</sub></td>
+    <td align="center"><img src="media/tests/halt_bug.png" width="200"><br><sub>halt_bug</sub></td>
+    <td align="center"><img src="media/tests/dmg_sound.png" width="200"><br><sub>dmg_sound</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="media/tests/cgb_sound.png" width="200"><br><sub>cgb_sound</sub></td>
+    <td></td>
+    <td></td>
+  </tr>
+</table>
 ## Visual / PPU reference tests
 
 | Test | Result |
@@ -27,6 +46,13 @@ the commands to run each suite are in the [justfile](../justfile).
 | `cgb-acid-hell` | ◐ 23038/23040 (two-pixel mid-scanline scroll edge) |
 | `mealybug-tearoom` | 🚧 mid-mode-3 register-write timing in progress |
 
+<table>
+  <tr>
+    <td align="center"><img src="media/tests/dmg-acid2.png" width="200"><br><sub>dmg-acid2 — pixel-exact</sub></td>
+    <td align="center"><img src="media/tests/cgb-acid2.png" width="200"><br><sub>cgb-acid2 — pixel-exact</sub></td>
+    <td align="center"><img src="media/tests/cgb-acid-hell.png" width="200"><br><sub>cgb-acid-hell — 23038/23040</sub></td>
+  </tr>
+</table>
 ## Mooneye acceptance (`mooneye-test-suite`)
 
 **93 / 115** overall, targeting **DMG revisions A/B/C** and **Game Boy Color**.
