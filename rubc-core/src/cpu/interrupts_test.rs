@@ -62,7 +62,10 @@ fn ei_waits_one_instruction_and_di_disables_immediately() {
     // NOT taken before it. `run_one_instruction` breaks at the post-NOP Running
     // boundary, BEFORE the next `step_m` promotes IME -> polls -> dispatches.
     let _ = run_one_instr(&mut cpu, &mut bus); // the NOP after EI
-    assert!(!cpu.ime, "IME remains disabled through the instruction after EI");
+    assert!(
+        !cpu.ime,
+        "IME remains disabled through the instruction after EI"
+    );
     assert_eq!(cpu.r.pc, 0x0002, "NOP after EI executed normally");
 
     // Now drive the dispatch: the next boundary promotes IME=1, then services
@@ -277,7 +280,7 @@ fn stop_in_dmg_halts_even_after_key1_write() {
 
     run_one_instr(&mut cpu, &mut bus); // LD A,1
     run_one_instr(&mut cpu, &mut bus); // LDH (KEY1),A  -> ignored in DMG
-    // STOP: drive a few M-cycles; the CPU must enter Stopped, not resume.
+                                       // STOP: drive a few M-cycles; the CPU must enter Stopped, not resume.
     for _ in 0..4 {
         cpu.step_m(&mut bus);
     }

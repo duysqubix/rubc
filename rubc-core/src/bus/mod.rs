@@ -25,8 +25,8 @@ pub mod stubs;
 pub mod timer;
 
 pub use cartridge::Cartridge;
-pub use ppu::Ppu;
 pub use flat::FlatBus;
+pub use ppu::Ppu;
 
 use stubs::{ApuStub, CgbState, Interrupts};
 use timer::Timer;
@@ -384,15 +384,15 @@ impl Bus {
         let raw = self.io[idx];
         // (or_mask): bits forced to 1 on read. 0x00 = all bits readable.
         let or_mask: u8 = match addr {
-            0xFF00 => 0xC0,             // P1: bits 7-6 read 1
-            0xFF01 => 0x00,             // SB: full
-            0xFF02 => 0x7E,             // SC: bit7 + bit0 valid, 6-1 read 1 (DMG); CGB adds bit0
-            0xFF10 => 0x80,             // NR10: bit 7 reads 1
-            0xFF1A => 0x7F,             // NR30: bits 6-0 read 1
-            0xFF1C => 0x9F,             // NR32: bits 7,4-0 read 1
-            0xFF20 => 0xC0,             // NR41: bits 7-6 read 1
-            0xFF23 => 0x3F,             // NR44: bits 5-0 read 1
-            0xFF26 => 0x70,             // NR52: bits 6-4 read 1
+            0xFF00 => 0xC0,                            // P1: bits 7-6 read 1
+            0xFF01 => 0x00,                            // SB: full
+            0xFF02 => 0x7E, // SC: bit7 + bit0 valid, 6-1 read 1 (DMG); CGB adds bit0
+            0xFF10 => 0x80, // NR10: bit 7 reads 1
+            0xFF1A => 0x7F, // NR30: bits 6-0 read 1
+            0xFF1C => 0x9F, // NR32: bits 7,4-0 read 1
+            0xFF20 => 0xC0, // NR41: bits 7-6 read 1
+            0xFF23 => 0x3F, // NR44: bits 5-0 read 1
+            0xFF26 => 0x70, // NR52: bits 6-4 read 1
             0xFF42 | 0xFF43 | 0xFF4A | 0xFF4B => 0x00, // SCY/SCX/WY/WX: full (but PPU-owned)
             0xFF47..=0xFF49 => 0x00, // BGP/OBP0/OBP1: full
             // CGB-only registers, gated on cgb_mode:
@@ -758,7 +758,7 @@ mod tests {
         let mut bus = Bus::new();
         bus.cgb.cgb_mode = true;
         bus.poke(0xFF70, 0x02); // svbk = bank 2 at D000
-        // Bank 0 via C000, read back via the E000 echo.
+                                // Bank 0 via C000, read back via the E000 echo.
         bus.poke(0xC000, 0xC0);
         assert_eq!(bus.peek(0xE000), 0xC0, "E000 echoes C000 (bank 0)");
         // svbk bank via D000, read back via the F000 echo.
@@ -919,8 +919,16 @@ mod tests {
         assert_eq!(bus.peek(0xC500), 0x00, "WRAM write blocked during DMA");
         assert_eq!(bus.peek(0x8000), 0x00, "VRAM write blocked during DMA");
         // LCDC routes through the PPU; a blocked write leaves the default 0x91.
-        assert_eq!(bus.peek(0xFF40), 0x91, "special IO (LCDC) write blocked during DMA");
-        assert_eq!(bus.peek(0xFF42), 0x00, "generic IO (SCY) write blocked during DMA");
+        assert_eq!(
+            bus.peek(0xFF40),
+            0x91,
+            "special IO (LCDC) write blocked during DMA"
+        );
+        assert_eq!(
+            bus.peek(0xFF42),
+            0x00,
+            "generic IO (SCY) write blocked during DMA"
+        );
         assert_eq!(bus.peek(0xFFFF), 0x00, "IE write blocked during DMA");
         assert_eq!(bus.peek(0xFE10), 0x00, "OAM write blocked during DMA");
         assert_eq!(bus.peek(0xFF85), 0x99, "HRAM write allowed during DMA");

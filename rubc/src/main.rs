@@ -34,7 +34,11 @@ const FPS_US: u64 = 16_743;
 const HEADLESS_MAX_INSTRUCTIONS: u64 = 250_000_000;
 
 #[derive(Parser, Debug)]
-#[command(name = "rubc", version, about = "A cycle-accurate Game Boy (DMG/CGB) emulator")]
+#[command(
+    name = "rubc",
+    version,
+    about = "A cycle-accurate Game Boy (DMG/CGB) emulator"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -229,7 +233,6 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
         // thread::sleep paces to the Game Boy frame period.
         control_flow.set_poll();
         if input.update(&event) {
-
             if input.key_pressed(VirtualKeyCode::Escape) || input.close_requested() {
                 *control_flow = ControlFlow::Exit;
                 return;
@@ -291,7 +294,10 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
             let win = fps_window_start.elapsed();
             if win >= time::Duration::from_secs(1) {
                 let fps = frames_this_window as f64 / win.as_secs_f64();
-                log::info!("fps: {fps:.3} ({frames_this_window} frames in {:.3}s)", win.as_secs_f64());
+                log::info!(
+                    "fps: {fps:.3} ({frames_this_window} frames in {:.3}s)",
+                    win.as_secs_f64()
+                );
                 frames_this_window = 0;
                 fps_window_start = time::Instant::now();
             }
@@ -344,7 +350,11 @@ fn cartdump(rom_path: &str, raw: bool, output: Option<&str>) -> anyhow::Result<(
     let ram_code = rom.get(0x0149).copied().unwrap_or(0);
 
     out.push_str(&format!("file:      {rom_path}\n"));
-    out.push_str(&format!("size:      {} bytes ({} KiB)\n", rom.len(), rom.len() / 1024));
+    out.push_str(&format!(
+        "size:      {} bytes ({} KiB)\n",
+        rom.len(),
+        rom.len() / 1024
+    ));
     out.push_str(&format!("title:     {title}\n"));
     out.push_str(&format!(
         "cgb flag:  {cgb:#04X} ({})\n",
@@ -354,13 +364,27 @@ fn cartdump(rom_path: &str, raw: bool, output: Option<&str>) -> anyhow::Result<(
             _ => "DMG",
         }
     ));
-    out.push_str(&format!("cart type: {cart_type:#04X} ({})\n", cart_type_name(cart_type)));
-    out.push_str(&format!("rom size:  {rom_code:#04X} ({})\n", rom_size_str(rom_code)));
-    out.push_str(&format!("ram size:  {ram_code:#04X} ({})\n", ram_size_str(ram_code)));
+    out.push_str(&format!(
+        "cart type: {cart_type:#04X} ({})\n",
+        cart_type_name(cart_type)
+    ));
+    out.push_str(&format!(
+        "rom size:  {rom_code:#04X} ({})\n",
+        rom_size_str(rom_code)
+    ));
+    out.push_str(&format!(
+        "ram size:  {ram_code:#04X} ({})\n",
+        ram_size_str(ram_code)
+    ));
 
     if raw {
         out.push_str("\nheader bytes 0x0100-0x014F:\n");
-        for (i, chunk) in rom.get(0x0100..=0x014F).unwrap_or(&[]).chunks(16).enumerate() {
+        for (i, chunk) in rom
+            .get(0x0100..=0x014F)
+            .unwrap_or(&[])
+            .chunks(16)
+            .enumerate()
+        {
             let hex: Vec<String> = chunk.iter().map(|b| format!("{b:02X}")).collect();
             out.push_str(&format!("  {:04X}: {}\n", 0x0100 + i * 16, hex.join(" ")));
         }

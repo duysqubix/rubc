@@ -28,8 +28,7 @@ const MAX_INSTRUCTIONS: u64 = 20_000_000;
 
 /// Absolute path to the WLA-DX build output directory.
 fn build_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../reference/test-suites/mooneye-test-suite/build")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../reference/test-suites/mooneye-test-suite/build")
 }
 
 /// Recursively collect every `.gb` under `dir`, returning (abs_path, rel_path).
@@ -66,14 +65,9 @@ fn run_rom(path: &Path) -> std::io::Result<Outcome> {
     // Decide DMG vs CGB. Most ROMs use the header CGB flag, but mooneye ships
     // CGB-behavior tests with a DMG header and signals CGB intent via the file
     // name suffix (`-cgb*`, `-C`, `-A` = CGB-variant; `-GS`/`-S`/`-dmg*` = DMG).
-    let name = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
     let header_cgb = rom.get(0x0143).is_some_and(|f| f & 0x80 != 0);
-    let name_cgb = name.contains("-cgb")
-        || name.ends_with("-C")
-        || name.ends_with("-A");
+    let name_cgb = name.contains("-cgb") || name.ends_with("-C") || name.ends_with("-A");
     let cgb = header_cgb || name_cgb;
     let mut m = if cgb {
         Machine::boot_cgb(&rom)

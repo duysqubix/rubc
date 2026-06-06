@@ -5,7 +5,7 @@ pub fn setup_logger() -> Result<(), fern::InitError> {
     let now = SystemTime::now();
     let now = now.duration_since(SystemTime::UNIX_EPOCH).unwrap();
     // convert to mm-dd-yyyy
-    let now = chrono::NaiveDateTime::from_timestamp_opt(now.as_secs() as i64, 0).unwrap();
+    let now = chrono::DateTime::from_timestamp(now.as_secs() as i64, 0).unwrap();
     let now = now.format("%m-%d-%Y:%H").to_string();
     let now = now.as_str();
 

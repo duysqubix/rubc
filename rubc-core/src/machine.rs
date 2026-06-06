@@ -350,13 +350,19 @@ mod tests {
     #[test]
     fn blargg_mem_timing_passes() {
         // mem_timing reports via serial.
-        assert!(blargg_passes_at("mem_timing/mem_timing.gb"), "mem_timing should pass");
+        assert!(
+            blargg_passes_at("mem_timing/mem_timing.gb"),
+            "mem_timing should pass"
+        );
     }
 
     #[test]
     fn blargg_mem_timing_2_passes() {
         // mem_timing-2 reports via the cart-RAM $A000 protocol, not serial.
-        assert!(blargg_passes_at("mem_timing-2/mem_timing.gb"), "mem_timing-2 should pass");
+        assert!(
+            blargg_passes_at("mem_timing-2/mem_timing.gb"),
+            "mem_timing-2 should pass"
+        );
     }
 
     /// Run a blargg ROM from an arbitrary path booted in **CGB mode**. Used for

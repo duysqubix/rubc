@@ -38,7 +38,7 @@ help:
     @echo "  RUN"
     @echo "    just run <rom>       # run quietly (LOG_LEVEL=warn)"
     @echo "    just trun <rom>      # run verbose (LOG_LEVEL=debug)"
-    @echo "    just diag <rom>      # AFK self-diagnosis run -> {{diag_dir}}/<run>/"
+    @echo "    just blargg <rom>    # headless blargg test ROM (--no-gui)"
     @echo ""
     @echo "  TEST (wave order)"
     @echo "    just sm83            # SM83 JSON opcode vectors (CPU core)"
@@ -47,10 +47,9 @@ help:
     @echo "    just test            # unit tests (rubc-core)"
     @echo "    just check           # fmt-check + clippy + build + unit tests"
     @echo ""
-    @echo "  DIAGNOSE (AFK runbook)"
-    @echo "    just diag <rom>      # produce full artifact bundle"
-    @echo "    just last-diag       # path to the most recent diag run"
-    @echo "    just diag-tail       # tail the flight recorder of last run"
+    @echo "  INSPECT"
+    @echo "    just cartdump <rom>  # decode the cartridge header"
+    @echo "    just env-info        # toolchain + git context"
     @echo ""
     @echo "  See 'just --list' for everything."
 
@@ -64,10 +63,10 @@ build:
 build-release:
     cargo build --workspace --release --no-default-features
 
-# Full self-diagnosis build (flight recorder, trace, hash, metrics, snapshot).
+# Compile rubc-core with the full diagnostics feature set (flight recorder,
+# trace, hash, metrics, snapshot). Exercised by the core's own tests.
 build-diag:
     cargo build -p {{core}} --features diag-full
-    cargo build -p rubc --features diag-full
 
 # ---- run -------------------------------------------------------------------
 
@@ -83,44 +82,12 @@ trun *args:
 trace-run *args:
     LOG_LEVEL=trace cargo run -- {{args}}
 
-# ---- diagnose (AFK runbook) ------------------------------------------------
-
-# Full self-diagnosis run. Produces a timestamped artifact bundle for offline
-# debugging. Usage: just diag <rom> [extra args...]
-# Artifacts: run.json rubc.log anomalies.jsonl metrics.json hash.csv
-#            trace.bgb flight.bin flight.tail.txt snapshot.json serial.txt
-diag rom *args:
-    mkdir -p "{{diag_dir}}"
-    LOG_LEVEL=debug cargo run -p rubc --features diag-full -- \
-      --rom "{{rom}}" \
-      --diag-dir "{{diag_dir}}" \
-      --flight-recorder 1048576 \
-      --trace-bgb \
-      --hash frame \
-      --metrics \
-      --snapshot-on-panic \
-      --snapshot-on-stuck \
-      --panic-on-stuck \
-      --max-frames 600 \
-      {{args}}
-
-# Print the path to the most recent diag run directory.
-last-diag:
-    @d=$(ls -dt "{{diag_dir}}"/*/ 2>/dev/null | head -1); \
-      if [ -n "$d" ]; then echo "$d"; else echo "no diag runs yet under {{diag_dir}}"; fi
-
-# Tail the decoded flight recorder of the most recent diag run.
-diag-tail:
-    @d=$(ls -dt "{{diag_dir}}"/*/ 2>/dev/null | head -1); \
-      if [ -n "$d" ] && [ -f "$d/flight.tail.txt" ]; then \
-        echo "== $d/flight.tail.txt =="; tail -50 "$d/flight.tail.txt"; \
-      else echo "no flight.tail.txt in latest diag run"; fi
-
-# Show the run.json summary of the most recent diag run.
-diag-summary:
-    @d=$(ls -dt "{{diag_dir}}"/*/ 2>/dev/null | head -1); \
-      if [ -n "$d" ] && [ -f "$d/run.json" ]; then cat "$d/run.json"; \
-      else echo "no run.json in latest diag run"; fi
+# ---- diagnose -------------------------------------------------------------
+#
+# The diagnostics layer (flight recorder, trace, hash, metrics, snapshot) lives
+# in rubc-core behind the `diag-full` feature and is exercised by the core's own
+# tests. The binary does not yet wire a diagnostics run path, so a `just diag
+# <rom>` runbook is intentionally absent until that CLI surface exists.
 
 # Remove all diagnostic run directories and rotating logs.
 diag-clean:
@@ -136,21 +103,22 @@ test:
 # Alias kept for muscle memory.
 unit-test: test
 
-# SM83 JSON opcode vectors (the CPU-core acceptance suite).
+# SM83 JSON opcode vectors (the CPU-core acceptance suite, assets/sm83/v1/).
 sm83:
-    cargo test -p {{core}} --test opcode_test -- --show-output
+    cargo test -p {{core}} --lib cpu::core::tests::vector_run -- --show-output
 
 # Alias kept for muscle memory.
 test-opcodes: sm83
 
 # Per-opcode M-cycle count traces (taken/not-taken branch timing).
 mcycle:
-    cargo test -p {{core}} mcycle_count -- --show-output
+    cargo test -p {{core}} --lib cpu::mcycle -- --show-output
 
 # ---- test: blargg gb-test-roms (prebuilt .gb) ------------------------------
 
-# Run a blargg test ROM by name (default cpu_instrs). The ROM boots and reports
-# pass/fail via the serial channel. Usage: just blargg [cpu_instrs|instr_timing|halt_bug|...]
+# Run a blargg test ROM by name (default cpu_instrs) headlessly on the M-cycle
+# core; reports PASS/FAIL via serial or the cart-RAM result protocol.
+# Usage: just blargg [cpu_instrs|instr_timing|halt_bug|mem_timing|...]
 blargg name="cpu_instrs":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -163,11 +131,10 @@ blargg name="cpu_instrs":
     done
     if [ -z "$rom" ]; then echo "blargg ROM not found for '{{name}}'"; exit 1; fi
     echo "== blargg: $rom =="
-    LOG_LEVEL=warn cargo run -- "$rom" --panic-on-stuck
+    LOG_LEVEL=warn cargo run -q -- run --no-gui --test blargg "$rom"
 
-# Run the blargg cpu_instrs sub-tests through the NEW M-cycle machine harness
-# (rubc-core::machine integration tests). This is the source of truth now;
-# the legacy `blargg`/`regression-test` recipes drive the old binary.
+# Run the blargg cpu_instrs sub-tests through the M-cycle machine harness
+# (rubc-core::machine integration tests) -- the source-of-truth CPU regression.
 cpu-roms:
     cargo test -p rubc-core machine::tests::blargg -- --show-output
 
@@ -197,8 +164,8 @@ mem-timing:
 mooneye glob: mooneye-build
     MOONEYE_GLOB='{{glob}}' cargo test -p rubc-core --test mooneye_test -- --nocapture
 
-# Report pass/fail across the WHOLE mooneye suite without failing on ROMs that
-# need features not yet implemented (reporting harness, not a gate).
+# Report pass/fail across the WHOLE mooneye suite (reporting harness, not a
+# gate -- does not fail on ROMs needing unimplemented features).
 mooneye-report: mooneye-build
     cargo test -p rubc-core --test mooneye_test -- --nocapture
 
@@ -234,10 +201,10 @@ check: fmt-check clippy build test
 
 # ---- inspection ------------------------------------------------------------
 
-# Dump a ROM's disassembly to <rom>.txt and exit. Usage: just disasm <rom>
-disasm rom:
-    cargo run -- "{{rom}}" --disassemble
-    @echo "wrote {{rom}}.txt"
+# Decode and print a cartridge header (title, MBC, ROM/RAM size, CGB flag).
+# Usage: just cartdump <rom> [--raw]
+cartdump *args:
+    cargo run -q -- cartdump {{args}}
 
 # Print cargo + toolchain + git context (useful in bug reports).
 env-info:

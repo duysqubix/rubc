@@ -37,7 +37,6 @@ impl Default for Cartridge {
     }
 }
 
-
 impl Cartridge {
     /// Build a cartridge from a raw ROM image, selecting the controller from the
     /// header byte at `0x0147`. Only the controllers the CPU/timing/MBC test ROMs

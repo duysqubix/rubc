@@ -292,12 +292,7 @@ impl Ppu {
     /// Advance one dot (one T-cycle). Called 4x per M-cycle (or 2x in CGB
     /// double-speed) from the bus tick loop. Raises VBlank / STAT interrupts via
     /// `irq`. The bus owns VRAM/OAM and passes the current DMG VRAM bank + OAM.
-    pub fn tick_dot(
-        &mut self,
-        irq: &mut Interrupts,
-        vram: &[u8; 0x2000],
-        oam: &[u8; 0xA0],
-    ) {
+    pub fn tick_dot(&mut self, irq: &mut Interrupts, vram: &[u8; 0x2000], oam: &[u8; 0xA0]) {
         self.dot_ticks += 1;
         if !self.enabled {
             return;
@@ -516,7 +511,11 @@ impl Ppu {
 
     fn fetch_bg_tile_no(&self, vram: &[u8; 0x2000]) -> u8 {
         let map_base = if self.bg_fetcher.window {
-            if self.lcdc & 0x40 != 0 { 0x1C00 } else { 0x1800 }
+            if self.lcdc & 0x40 != 0 {
+                0x1C00
+            } else {
+                0x1800
+            }
         } else if self.lcdc & 0x08 != 0 {
             0x1C00
         } else {
@@ -526,10 +525,7 @@ impl Ppu {
         let x_offset = if self.bg_fetcher.window {
             self.bg_fetcher.fetcher_x & 0x1F
         } else {
-            self.bg_fetcher
-                .fetcher_x
-                .wrapping_add(self.scx / 8)
-                & 0x1F
+            self.bg_fetcher.fetcher_x.wrapping_add(self.scx / 8) & 0x1F
         };
         let y_offset = if self.bg_fetcher.window {
             32 * ((self.window_line_counter as usize / 8) & 0x1F)
@@ -647,7 +643,11 @@ impl Ppu {
     }
 
     fn sprite_height(&self) -> u8 {
-        if self.lcdc & 0x04 != 0 { 16 } else { 8 }
+        if self.lcdc & 0x04 != 0 {
+            16
+        } else {
+            8
+        }
     }
 
     fn shift_pixel(&mut self, irq: &mut Interrupts) -> bool {
@@ -1094,13 +1094,19 @@ mod tests {
         let mut sprite_wins = ppu_at_line_start();
         sprite_wins.write_lcdc(0x93, &mut Interrupts::default());
         run_line(&mut sprite_wins, &vram, &oam);
-        assert_eq!(sprite_wins.framebuffer[0], 2, "sprite color wins without priority bit");
+        assert_eq!(
+            sprite_wins.framebuffer[0], 2,
+            "sprite color wins without priority bit"
+        );
 
         oam[3] = 0x80;
         let mut bg_wins = ppu_at_line_start();
         bg_wins.write_lcdc(0x93, &mut Interrupts::default());
         run_line(&mut bg_wins, &vram, &oam);
-        assert_eq!(bg_wins.framebuffer[0], 1, "BG color wins when OBJ priority is set");
+        assert_eq!(
+            bg_wins.framebuffer[0], 1,
+            "BG color wins when OBJ priority is set"
+        );
     }
 
     #[test]
@@ -1157,7 +1163,10 @@ mod tests {
 
         assert_eq!(counts[mode::OAM_SCAN as usize], MODE2_DOTS);
         assert_eq!(counts[mode::DRAWING as usize], BASE_MODE3_DOTS + 3);
-        assert_eq!(counts[mode::HBLANK as usize], DOTS_PER_LINE - MODE2_DOTS - BASE_MODE3_DOTS - 3);
+        assert_eq!(
+            counts[mode::HBLANK as usize],
+            DOTS_PER_LINE - MODE2_DOTS - BASE_MODE3_DOTS - 3
+        );
         assert_eq!(p.ly, 1);
         assert_eq!(p.line_dot, 0);
         assert_eq!(p.mode, mode::OAM_SCAN);
@@ -1214,7 +1223,10 @@ mod tests {
         // sprite fetch start or be in progress.
         for _ in 0..(DOTS_PER_LINE - MODE2_DOTS) {
             tick_with(&mut p, 1, &vram, &oam);
-            assert!(p.pending_sprite.is_none(), "X=0 sprite must never be fetched");
+            assert!(
+                p.pending_sprite.is_none(),
+                "X=0 sprite must never be fetched"
+            );
             assert_eq!(p.sprite_fetch_ticks, 0, "no sprite fetch in progress");
             assert_eq!(p.sprite_idle_ticks, 0, "no sprite idle penalty incurred");
         }

@@ -364,4 +364,3 @@ mod tests {
         assert_eq!(timer.tima, before, "no edge -> no increment");
     }
 }
-

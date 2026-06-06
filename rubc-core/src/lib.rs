@@ -1,19 +1,9 @@
 #![forbid(unsafe_code)]
 
-#[macro_use]
-pub mod bits;
-
 pub mod bus;
-pub mod cartridge;
 pub mod cpu;
-pub mod gameboy;
-pub mod globals;
 pub mod logger;
 pub mod machine;
-pub mod mbc;
-pub mod opcodes;
-pub mod opcodes_cb;
-pub mod utils;
 
 #[cfg(feature = "diagnostics")]
 pub mod diag;
@@ -70,7 +60,3 @@ macro_rules! diag_trace_instr {
 
 pub type Result<T> = anyhow::Result<T>;
 pub type Error = anyhow::Error;
-
-pub fn format_binary(value: u8) -> String {
-    format!("0b{:04b}_{:04b}", value >> 4, value & 0x0F)
-}
