@@ -264,6 +264,11 @@ struct BgFetcher {
     high: u8,
     dummy_fetch_done: bool,
     window: bool,
+    /// BG map Y coordinate (ly + scy, or window_line_counter) latched at the
+    /// TileNo fetch step. Reused for the tile-data row so a mid-tile-fetch SCY
+    /// write does not split the tilemap row from the tile-data row (CGB-D+
+    /// reads SCY only at the fetcher B stage). cgb-acid-hell relies on this.
+    y: u8,
 }
 
 impl BgFetcher {
@@ -746,6 +751,15 @@ impl Ppu {
 
         match self.bg_fetcher.step {
             FetchStep::TileNo => {
+                // Latch the BG map Y (ly+scy, or window line) at the TileNo
+                // fetch so the tile-data row uses the SAME Y even if a
+                // mid-tile-fetch SCY write lands before the data fetch.
+                self.bg_fetcher.y = if self.bg_fetcher.window {
+                    self.window_line_counter
+                } else {
+                    self.ly.wrapping_add(self.scy)
+                };
+
                 let (tile, attr) = self.fetch_bg_tile_no(vram);
                 self.bg_fetcher.tile = tile;
                 self.bg_fetcher.attr = attr;
@@ -802,7 +816,8 @@ impl Ppu {
         let y_offset = if self.bg_fetcher.window {
             32 * ((self.window_line_counter as usize / 8) & 0x1F)
         } else {
-            32 * (((self.ly.wrapping_add(self.scy) as usize) / 8) & 0x1F)
+            // Use the Y latched at TileNo (set just before this call).
+            32 * ((self.bg_fetcher.y as usize / 8) & 0x1F)
         };
         let offset = (y_offset + x_offset as usize) & 0x03FF;
         let tile = read_vram(&vram[0], map_base + offset);
@@ -816,11 +831,10 @@ impl Ppu {
     }
 
     fn fetch_bg_tile_data_addr(&self) -> usize {
-        let mut row = if self.bg_fetcher.window {
-            (self.window_line_counter & 0x07) as usize
-        } else {
-            (self.ly.wrapping_add(self.scy) & 0x07) as usize
-        };
+        // Use the Y latched at the TileNo fetch step, so a mid-tile-fetch SCY
+        // write does not split the tilemap row from the tile-data row (CGB-D+
+        // samples SCY only at the fetcher B stage). cgb-acid-hell relies on it.
+        let mut row = (self.bg_fetcher.y & 0x07) as usize;
         // CGB BG attr bit 6 = vertical flip within the 8-pixel tile row.
         if self.cgb_mode && self.bg_fetcher.attr & 0x40 != 0 {
             row = 7 - row;
