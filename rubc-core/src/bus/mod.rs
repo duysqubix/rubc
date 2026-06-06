@@ -368,11 +368,63 @@ impl Bus {
             0xFF70 => 0xFF, // SVBK in DMG mode: open-bus (no WRAM banking)
             0xFF6C if self.cgb.cgb_mode => (self.io[0x6C] & 0x01) | 0xFE, // OPRI bit0
             0xFF6C => 0xFF, // OPRI in DMG mode: open-bus
-            0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize],
+            0xFF00..=0xFF7F => self.read_io_masked(addr),
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupts.ie,
             0xA000..=0xBFFF => self.cart.read_ram(addr),
             _ => 0xFF, // unmapped
+        }
+    }
+
+    /// Read a generic IO register ($FF00-$FF7F not special-cased above), applying
+    /// the per-register "unused bits read as 1" masks and returning 0xFF for
+    /// unmapped addresses (mooneye unused_hwio). `idx` = addr - 0xFF00.
+    fn read_io_masked(&self, addr: u16) -> u8 {
+        let idx = (addr - 0xFF00) as usize;
+        let raw = self.io[idx];
+        // (or_mask): bits forced to 1 on read. 0x00 = all bits readable.
+        let or_mask: u8 = match addr {
+            0xFF00 => 0xC0,             // P1: bits 7-6 read 1
+            0xFF01 => 0x00,             // SB: full
+            0xFF02 => 0x7E,             // SC: bit7 + bit0 valid, 6-1 read 1 (DMG); CGB adds bit0
+            0xFF10 => 0x80,             // NR10: bit 7 reads 1
+            0xFF1A => 0x7F,             // NR30: bits 6-0 read 1
+            0xFF1C => 0x9F,             // NR32: bits 7,4-0 read 1
+            0xFF20 => 0xC0,             // NR41: bits 7-6 read 1
+            0xFF23 => 0x3F,             // NR44: bits 5-0 read 1
+            0xFF26 => 0x70,             // NR52: bits 6-4 read 1
+            0xFF42 | 0xFF43 | 0xFF4A | 0xFF4B => 0x00, // SCY/SCX/WY/WX: full (but PPU-owned)
+            0xFF47..=0xFF49 => 0x00, // BGP/OBP0/OBP1: full
+            // CGB-only registers, gated on cgb_mode:
+            0xFF68 | 0xFF6A if self.cgb.cgb_mode => 0x40, // BCPS/OCPS: bit 6 reads 1 (unused_hwio-C)
+            0xFF72 | 0xFF73 if self.cgb.cgb_mode => 0x00, // fully read/write
+            0xFF75 if self.cgb.cgb_mode => 0x8F,          // only bits 6-4 writable
+            0xFF76 | 0xFF77 if self.cgb.cgb_mode => return 0x00, // PCM12/34: read-only 0
+            _ => return self.unmapped_io_or_raw(addr, raw),
+        };
+        raw | or_mask
+    }
+
+    /// For addresses not in the masked table: registers backed by `io[]` that we
+    /// model return their raw byte; truly unmapped IO reads 0xFF.
+    fn unmapped_io_or_raw(&self, addr: u16, raw: u8) -> u8 {
+        // Addresses we DON'T implement read as open-bus 0xFF (mooneye
+        // unused_hwio test_unmapped). Everything FF00-FF7F that isn't a real
+        // register: FF03, FF08-FF0E, FF15, FF1F, FF27-FF2E, FF4C-FF4E, FF50-FF67
+        // (minus 51-55 HDMA), FF69, FF6B, FF6D-FF6F, FF71, FF74, FF78-FF7F.
+        let mapped = matches!(addr,
+            0xFF00..=0xFF02 | 0xFF04..=0xFF07 | 0xFF0F
+            | 0xFF10..=0xFF14 | 0xFF16..=0xFF1E | 0xFF20..=0xFF26 | 0xFF30..=0xFF3F
+            | 0xFF40..=0xFF4B
+        );
+        // CGB-only mapped registers (when in CGB mode).
+        let cgb_mapped = self.cgb.cgb_mode
+            && matches!(addr, 0xFF4D | 0xFF4F | 0xFF51..=0xFF55 | 0xFF56
+                | 0xFF68 | 0xFF6A | 0xFF6C | 0xFF70 | 0xFF72 | 0xFF73 | 0xFF75..=0xFF77);
+        if mapped || cgb_mapped {
+            raw
+        } else {
+            0xFF
         }
     }
 
@@ -732,6 +784,31 @@ mod tests {
         let mut dmg = Bus::new();
         dmg.poke(0xFF6C, 0x01); // ignored
         assert_eq!(dmg.peek(0xFF6C), 0xFF, "DMG: OPRI reads open-bus 0xFF");
+    }
+
+    #[test]
+    fn io_read_masks_force_unused_bits_high() {
+        // Unused HWIO bits read back as 1 (mooneye unused_hwio). Spot-check a few
+        // registers across the masked-read path.
+        let mut bus = Bus::new();
+        // P1 ($FF00): bits 7-6 read 1.
+        bus.poke(0xFF00, 0x00);
+        assert_eq!(bus.peek(0xFF00) & 0xC0, 0xC0, "P1 bits 7-6 read 1");
+        // NR52 ($FF26): bits 6-4 read 1.
+        bus.poke(0xFF26, 0x00);
+        assert_eq!(bus.peek(0xFF26) & 0x70, 0x70, "NR52 bits 6-4 read 1");
+        // NR30 ($FF1A): bits 6-0 read 1.
+        bus.poke(0xFF1A, 0x00);
+        assert_eq!(bus.peek(0xFF1A) & 0x7F, 0x7F, "NR30 bits 6-0 read 1");
+    }
+
+    #[test]
+    fn unmapped_io_reads_open_bus_ff() {
+        // Truly unmapped HWIO addresses read 0xFF (mooneye test_unmapped).
+        let bus = Bus::new();
+        for addr in [0xFF03u16, 0xFF08, 0xFF15, 0xFF1F, 0xFF27, 0xFF7F] {
+            assert_eq!(bus.peek(addr), 0xFF, "unmapped {addr:#06X} reads 0xFF");
+        }
     }
 
     /// S6: the bus diag seam feeds `diag_record_mcycle!` end-to-end. The CPU
