@@ -16,6 +16,19 @@
 const ROM_BANK_SIZE: usize = 0x4000; // 16 KiB
 const RAM_BANK_SIZE: usize = 0x2000; // 8 KiB
 
+/// True when the cartridge type (header byte `0x0147`) declares battery-backed
+/// storage, i.e. external RAM (or RTC) that survives a power cycle and so must
+/// be persisted to a `.sav` file. Standard cart-type table.
+///
+/// RTC persistence (MBC3 timer state) is OUT OF SCOPE here: only the RAM bytes
+/// are exposed for save/load.
+fn cart_has_battery(cart_type: u8) -> bool {
+    matches!(
+        cart_type,
+        0x03 | 0x06 | 0x09 | 0x0F | 0x10 | 0x13 | 0x1B | 0x1E
+    )
+}
+
 /// A loaded cartridge. Owns the full ROM image and any banking state.
 pub enum Cartridge {
     /// No MBC (MBC0): up to 32 KiB ROM mapped flat, with external RAM ONLY when
@@ -38,6 +51,7 @@ impl Default for Cartridge {
         Cartridge::NoMbc(NoMbc {
             rom: vec![0; 0x8000],
             ram: Vec::new(),
+            battery: false,
         })
     }
 }
@@ -51,17 +65,18 @@ impl Cartridge {
     /// MBC2/3/5 land in `rubc-cgi`.
     pub fn from_rom(rom: &[u8]) -> Self {
         let cart_type = rom.get(0x0147).copied().unwrap_or(0x00);
+        let battery = cart_has_battery(cart_type);
         match cart_type {
             // 0x00 ROM ONLY (no RAM); 0x08/0x09 ROM+RAM(+battery).
-            0x00 | 0x08 | 0x09 => Cartridge::NoMbc(NoMbc::from_rom(rom, cart_type)),
+            0x00 | 0x08 | 0x09 => Cartridge::NoMbc(NoMbc::from_rom(rom, cart_type, battery)),
             // 0x01..=0x03 MBC1 (+RAM/+battery).
-            0x01..=0x03 => Cartridge::Mbc1(Mbc1::from_rom(rom)),
+            0x01..=0x03 => Cartridge::Mbc1(Mbc1::from_rom(rom, battery)),
             // 0x05/0x06 MBC2 (+battery).
-            0x05 | 0x06 => Cartridge::Mbc2(Mbc2::from_rom(rom)),
+            0x05 | 0x06 => Cartridge::Mbc2(Mbc2::from_rom(rom, battery)),
             // 0x0F..=0x13 MBC3 (+timer/+RAM/+battery).
-            0x0F..=0x13 => Cartridge::Mbc3(Mbc3::from_rom(rom)),
+            0x0F..=0x13 => Cartridge::Mbc3(Mbc3::from_rom(rom, battery)),
             // 0x19..=0x1E MBC5 (+RAM/+battery/+rumble).
-            0x19..=0x1E => Cartridge::Mbc5(Mbc5::from_rom(rom)),
+            0x19..=0x1E => Cartridge::Mbc5(Mbc5::from_rom(rom, battery)),
             // Unsupported controller: do NOT pretend it is MBC1. Load a flat
             // 32 KiB view (enough to boot + run bank-0 code) and warn loudly.
             other => {
@@ -69,7 +84,7 @@ impl Cartridge {
                     "unsupported cartridge type {other:#04X}; loading as flat MBC0 \
                      (banking unimplemented -- see rubc-cgi)"
                 );
-                Cartridge::NoMbc(NoMbc::from_rom(rom, 0x00))
+                Cartridge::NoMbc(NoMbc::from_rom(rom, 0x00, false))
             }
         }
     }
@@ -122,6 +137,66 @@ impl Cartridge {
             Cartridge::Mbc5(c) => c.write_reg(addr, value),
         }
     }
+
+    /// True if this cartridge has battery-backed storage that should be
+    /// persisted to a `.sav` file across power cycles.
+    #[inline]
+    pub fn has_battery(&self) -> bool {
+        match self {
+            Cartridge::NoMbc(c) => c.battery,
+            Cartridge::Mbc1(c) => c.battery,
+            Cartridge::Mbc2(c) => c.battery,
+            Cartridge::Mbc3(c) => c.battery,
+            Cartridge::Mbc5(c) => c.battery,
+        }
+    }
+
+    /// The cartridge external-RAM bytes as a flat slice (all banks), for saving
+    /// to disk. MBC2 returns its built-in 512-byte RAM. Returns an empty slice
+    /// when the cart has no external RAM.
+    ///
+    /// Note: RTC (MBC3 timer) registers are NOT included -- RTC persistence is
+    /// out of scope.
+    #[inline]
+    pub fn ram(&self) -> &[u8] {
+        match self {
+            Cartridge::NoMbc(c) => c.ram.as_slice(),
+            Cartridge::Mbc1(c) => c.ram.as_slice(),
+            Cartridge::Mbc2(c) => c.ram.as_slice(),
+            Cartridge::Mbc3(c) => c.ram.as_slice(),
+            Cartridge::Mbc5(c) => c.ram.as_slice(),
+        }
+    }
+
+    /// Restore external-RAM bytes loaded from a `.sav` file. Copies
+    /// `min(data.len(), ram.len())` bytes so a size mismatch (e.g. a save from a
+    /// differently-sized RAM) is tolerated rather than panicking; a mismatch is
+    /// logged. Carts with no RAM ignore the call.
+    ///
+    /// Note: RTC registers are NOT restored -- RTC persistence is out of scope.
+    pub fn load_ram(&mut self, data: &[u8]) {
+        let ram: &mut [u8] = match self {
+            Cartridge::NoMbc(c) => c.ram.as_mut_slice(),
+            Cartridge::Mbc1(c) => c.ram.as_mut_slice(),
+            Cartridge::Mbc2(c) => c.ram.as_mut_slice(),
+            Cartridge::Mbc3(c) => c.ram.as_mut_slice(),
+            Cartridge::Mbc5(c) => c.ram.as_mut_slice(),
+        };
+        if ram.is_empty() {
+            return;
+        }
+        if data.len() != ram.len() {
+            log::warn!(
+                "save RAM size mismatch: file has {} bytes, cart RAM is {} bytes; \
+                 copying {} bytes",
+                data.len(),
+                ram.len(),
+                data.len().min(ram.len()),
+            );
+        }
+        let n = data.len().min(ram.len());
+        ram[..n].copy_from_slice(&data[..n]);
+    }
 }
 
 /// MBC0 / ROM-only. External RAM exists ONLY when the header declares it
@@ -130,10 +205,12 @@ impl Cartridge {
 pub struct NoMbc {
     rom: Vec<u8>,
     ram: Vec<u8>,
+    /// True if this cart has battery-backed RAM (cart type 0x09).
+    battery: bool,
 }
 
 impl NoMbc {
-    fn from_rom(rom: &[u8], cart_type: u8) -> Self {
+    fn from_rom(rom: &[u8], cart_type: u8, battery: bool) -> Self {
         let mut buf = vec![0u8; 0x8000];
         let n = rom.len().min(buf.len());
         buf[..n].copy_from_slice(&rom[..n]);
@@ -143,7 +220,11 @@ impl NoMbc {
         } else {
             Vec::new()
         };
-        Self { rom: buf, ram }
+        Self {
+            rom: buf,
+            ram,
+            battery,
+        }
     }
 
     #[inline]
@@ -185,10 +266,12 @@ pub struct Mbc1 {
     bank_hi: u8,
     /// 0 = simple ROM banking; 1 = advanced (RAM banking / upper bits to 0x0000).
     mode: u8,
+    /// True if this cart has battery-backed RAM (cart type 0x03).
+    battery: bool,
 }
 
 impl Mbc1 {
-    fn from_rom(rom: &[u8]) -> Self {
+    fn from_rom(rom: &[u8], battery: bool) -> Self {
         // ROM size: round the image up to a whole number of 16 KiB banks
         // (>= 2). The header byte at 0x0148 is authoritative on real carts, but
         // sizing from the image length is robust for arbitrary test ROMs.
@@ -217,6 +300,7 @@ impl Mbc1 {
             bank_lo: 1,
             bank_hi: 0,
             mode: 0,
+            battery,
         }
     }
 
@@ -309,10 +393,12 @@ pub struct Mbc2 {
     ram_enabled: bool,
     /// ROM bank for $4000-$7FFF (4 bits; 0 remapped to 1).
     rom_bank: u8,
+    /// True if this cart has battery-backed RAM (cart type 0x06).
+    battery: bool,
 }
 
 impl Mbc2 {
-    fn from_rom(rom: &[u8]) -> Self {
+    fn from_rom(rom: &[u8], battery: bool) -> Self {
         let num_rom_banks = rom.len().div_ceil(ROM_BANK_SIZE).max(2);
         let mut rom_buf = vec![0u8; num_rom_banks * ROM_BANK_SIZE];
         rom_buf[..rom.len()].copy_from_slice(rom);
@@ -322,6 +408,7 @@ impl Mbc2 {
             num_rom_banks,
             ram_enabled: false,
             rom_bank: 1,
+            battery,
         }
     }
 
@@ -389,10 +476,13 @@ pub struct Mbc3 {
     rtc_latched: [u8; 5],
     /// Previous value written to the latch register ($6000-$7FFF).
     latch_prev: u8,
+    /// True if this cart has battery-backed RAM (cart type 0x0F/0x10/0x13).
+    /// NOTE: only the RAM is persisted; RTC persistence is out of scope.
+    battery: bool,
 }
 
 impl Mbc3 {
-    fn from_rom(rom: &[u8]) -> Self {
+    fn from_rom(rom: &[u8], battery: bool) -> Self {
         let num_rom_banks = rom.len().div_ceil(ROM_BANK_SIZE).max(2);
         let mut rom_buf = vec![0u8; num_rom_banks * ROM_BANK_SIZE];
         rom_buf[..rom.len()].copy_from_slice(rom);
@@ -413,6 +503,7 @@ impl Mbc3 {
             rtc: [0; 5],
             rtc_latched: [0; 5],
             latch_prev: 0xFF,
+            battery,
         }
     }
 
@@ -510,10 +601,12 @@ pub struct Mbc5 {
     ram_bank: u8,
     /// True if this cart has a rumble motor (RAM-bank bit 3 drives it).
     has_rumble: bool,
+    /// True if this cart has battery-backed RAM (cart type 0x1B/0x1E).
+    battery: bool,
 }
 
 impl Mbc5 {
-    fn from_rom(rom: &[u8]) -> Self {
+    fn from_rom(rom: &[u8], battery: bool) -> Self {
         let num_rom_banks = rom.len().div_ceil(ROM_BANK_SIZE).max(2);
         let mut rom_buf = vec![0u8; num_rom_banks * ROM_BANK_SIZE];
         rom_buf[..rom.len()].copy_from_slice(rom);
@@ -535,6 +628,7 @@ impl Mbc5 {
             rom_bank: 1,
             ram_bank: 0,
             has_rumble,
+            battery,
         }
     }
 
@@ -849,5 +943,90 @@ mod tests {
         assert_eq!(cart.read_ram(0xA000), 0x9C, "RAM bank 2 round-trips");
         cart.write_reg(0x4000, 0x00);
         assert_eq!(cart.read_ram(0xA000), 0x00, "bank 0 is separate");
+    }
+    // ---- Battery / save-RAM persistence ----------------------------------
+
+    #[test]
+    fn mbc3_battery_cart_reports_has_battery() {
+        // 0x13 = MBC3+RAM+BATTERY -> has_battery() == true.
+        let mut rom = synth(8, 0x13);
+        rom[0x0149] = 0x03; // 4 RAM banks
+        let cart = Cartridge::from_rom(&rom);
+        assert!(cart.has_battery(), "MBC3+RAM+BATTERY has a battery");
+    }
+
+    #[test]
+    fn non_battery_cart_reports_no_battery() {
+        // 0x01 = MBC1 (no battery); 0x00 = ROM ONLY (no battery).
+        let mbc1 = Cartridge::from_rom(&synth_mbc1(4));
+        assert!(!mbc1.has_battery(), "plain MBC1 has no battery");
+        let romonly = Cartridge::from_rom(&synth(2, 0x00));
+        assert!(!romonly.has_battery(), "ROM ONLY has no battery");
+    }
+
+    #[test]
+    fn ram_accessor_reflects_writes() {
+        // After enabling + writing cart RAM, ram() exposes those bytes.
+        let mut rom = synth(8, 0x13); // MBC3+RAM+BATTERY
+        rom[0x0149] = 0x03; // 4 RAM banks
+        let mut cart = Cartridge::from_rom(&rom);
+        cart.write_reg(0x0000, 0x0A); // enable RAM
+        cart.write_reg(0x4000, 0x00); // RAM bank 0
+        cart.write_ram(0xA000, 0xAB);
+        cart.write_ram(0xA001, 0xCD);
+        let ram = cart.ram();
+        assert_eq!(ram[0], 0xAB, "ram() reflects byte 0");
+        assert_eq!(ram[1], 0xCD, "ram() reflects byte 1");
+    }
+
+    #[test]
+    fn load_ram_round_trips_through_ram_accessor() {
+        // save_ram bytes (ram()) loaded into a fresh cart restore exactly.
+        let mut rom = synth(8, 0x13); // MBC3+RAM+BATTERY
+        rom[0x0149] = 0x03; // 4 RAM banks
+        let mut src = Cartridge::from_rom(&rom);
+        src.write_reg(0x0000, 0x0A);
+        src.write_reg(0x4000, 0x01); // bank 1
+        src.write_ram(0xB000, 0x5A);
+        let saved: Vec<u8> = src.ram().to_vec();
+        assert!(!saved.is_empty());
+
+        // Fresh cart of the same type: load the saved bytes and confirm they
+        // are visible both via ram() and via the emulated read path.
+        let mut dst = Cartridge::from_rom(&rom);
+        dst.load_ram(&saved);
+        assert_eq!(dst.ram(), saved.as_slice(), "load_ram round-trips");
+        dst.write_reg(0x0000, 0x0A);
+        dst.write_reg(0x4000, 0x01);
+        assert_eq!(dst.read_ram(0xB000), 0x5A, "restored byte is readable");
+    }
+
+    #[test]
+    fn load_ram_tolerates_size_mismatch_and_empty_ram() {
+        // Oversized save: copy only what fits, no panic.
+        let mut rom = synth(8, 0x13);
+        rom[0x0149] = 0x02; // 1 bank = 8 KiB
+        let mut cart = Cartridge::from_rom(&rom);
+        let too_big = vec![0x77u8; 0x4000]; // 16 KiB
+        cart.load_ram(&too_big); // must not panic
+        cart.write_reg(0x0000, 0x0A);
+        assert_eq!(cart.read_ram(0xA000), 0x77, "min-length copy applied");
+
+        // ROM-only cart has no RAM: load_ram is a harmless no-op.
+        let mut romonly = Cartridge::from_rom(&synth(2, 0x00));
+        romonly.load_ram(&[1, 2, 3]); // must not panic
+        assert!(romonly.ram().is_empty(), "ROM-only has no save RAM");
+    }
+
+    #[test]
+    fn mbc2_ram_accessor_exposes_builtin_512_bytes() {
+        // MBC2+BATTERY (0x06): the built-in 512-byte RAM is the save data.
+        let rom = synth(4, 0x06);
+        let mut cart = Cartridge::from_rom(&rom);
+        assert!(cart.has_battery(), "MBC2+BATTERY has a battery");
+        assert_eq!(cart.ram().len(), 512, "MBC2 exposes 512 RAM bytes");
+        cart.write_reg(0x0000, 0x0A); // enable
+        cart.write_ram(0xA000, 0x0F);
+        assert_eq!(cart.ram()[0] & 0x0F, 0x0F, "MBC2 nibble stored");
     }
 }
