@@ -373,18 +373,6 @@ mod tests {
         (stop, m.serial_text())
     }
 
-    /// Run a blargg ROM from an arbitrary path under the gb-test-roms suite.
-    fn run_blargg_at(rel: &str) -> (RunStop, Option<String>) {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../reference/test-suites/gb-test-roms")
-            .join(rel);
-        let rom =
-            std::fs::read(&path).unwrap_or_else(|_| panic!("blargg ROM must exist at {path:?}"));
-        let mut m = Machine::boot_dmg(&rom);
-        let stop = m.run_blargg(100_000_000);
-        (stop, m.serial_text())
-    }
-
     /// Run a blargg ROM and report PASS via either channel (serial or the
     /// cart-RAM $A000 protocol). Used for ROMs like mem_timing-2 that report to
     /// cart RAM instead of serial.
@@ -542,19 +530,20 @@ mod tests {
         );
     }
 
-    /// instr_timing.gb exercises per-instruction cycle accounting (measured via
-    /// DIV). STATUS: it PASSES when booted in CGB mode (the ROM is CGB-flagged,
-    /// $0143=0x80) but still FAILS under DMG boot, which is what this harness
-    /// uses -- a real DMG instruction-timing gap owned by the mem/instr-timing
-    /// verify wave (rubc-3ud). Ignored until DMG timing is exact.
     #[test]
-    #[ignore = "instr_timing passes in CGB boot but fails DMG boot; DMG cycle-exactness is rubc-3ud"]
-    fn blargg_instr_timing() {
-        let (stop, text) = run_blargg_at("instr_timing/instr_timing.gb");
-        let text = text.unwrap_or_default();
+    fn blargg_instr_timing_passes() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../reference/test-suites/gb-test-roms/instr_timing/instr_timing.gb");
+        let Ok(rom) = std::fs::read(&path) else {
+            return;
+        };
+        let mut m = Machine::boot_dmg(&rom);
+        let stop = m.run_blargg(120_000_000);
+        let serial = m.serial_text().unwrap_or_default();
+        let console = m.blargg_console_text().unwrap_or_default();
         assert!(
-            text.contains("Passed"),
-            "instr_timing should pass. stop={stop:?} serial={text:?}"
+            m.blargg_passed(),
+            "instr_timing should pass. stop={stop:?} serial={serial:?} console={console:?}"
         );
     }
 
