@@ -242,8 +242,23 @@ impl Cpu {
             2 => {
                 self.r.sp = self.r.sp.wrapping_sub(1);
                 bus.write_m(self.r.sp, (self.r.pc >> 8) as u8); // PC high
-                if bus.ie() & (1 << *bit) == 0 {
+                                                                // Re-select the interrupt from the CURRENT (IE & IF) right after
+                                                                // the PC-HIGH push (Oracle ses_164828bc5 + mooneye ie_push). A
+                                                                // push to $FFFF here can rewrite IE; the dispatch then commits to
+                                                                // whatever is pending NOW. If the PC-high write cleared all
+                                                                // pending interrupts, the dispatch is cancelled (PC=$0000, no IF
+                                                                // clear); otherwise the highest-priority pending bit is serviced
+                                                                // -- which may differ from the bit latched at dispatch start.
+                                                                // The later PC-LOW push (phase 3) is too late to re-decide: by
+                                                                // then the serviced interrupt is already committed (ie_push
+                                                                // round 3, where SP=$0001 makes only the LOW byte hit IE).
+                let pending = bus.irq_pending_mask();
+                if pending == 0 {
                     *cancelled = true;
+                } else {
+                    let new_bit = pending.trailing_zeros() as u8;
+                    *bit = new_bit;
+                    *vector = 0x0040 + (new_bit as u16) * 8;
                 }
                 *phase = 3;
             }

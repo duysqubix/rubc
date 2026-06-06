@@ -291,3 +291,36 @@ fn stop_in_dmg_halts_even_after_key1_write() {
     );
     assert!(!bus.cgb.double_speed, "DMG never switches speed");
 }
+
+#[test]
+fn ie_push_reselects_interrupt_when_ie_overwritten_mid_push() {
+    // mooneye ie_push round 4 (Oracle ses_164828bc5): when the PC-high push to
+    // $FFFF overwrites IE mid-dispatch, the serviced interrupt is RE-DERIVED
+    // from the new (IE & IF) after BOTH pushes -- it is NOT simply cancelled if
+    // the originally-latched bit was cleared.
+    //
+    // Setup: IE=IF=$03 (STAT bit1 + VBLANK bit0), PC=$0250 so the PC-high push
+    // writes $02 into IE. Highest-priority pending at dispatch start = VBLANK
+    // (bit0). After the push IE=$02, so (IE & IF)=$02 -> the dispatch re-selects
+    // STAT (bit1): vector $48, clears IF bit1, leaving IF low5 = $01. NOT cancelled.
+    let mut cpu = Cpu::new();
+    let mut bus = Bus::new();
+    cpu.ime = true;
+    cpu.r.pc = 0x0250;
+    cpu.r.sp = 0x0000;
+    set_visible_irq(&mut bus, 0x03);
+
+    let m = run_until_running_boundary(&mut cpu, &mut bus);
+
+    assert_eq!(m, 5, "interrupt dispatch is 5 M-cycles");
+    assert_eq!(bus.interrupts.ie, 0x02, "PC-high push clobbered IE to $02");
+    assert_eq!(
+        cpu.r.pc, 0x0048,
+        "re-selected STAT (bit1) -> vector $48, not cancelled to $0000"
+    );
+    assert_eq!(
+        bus.interrupts.if_ & 0x1F,
+        0x01,
+        "serviced STAT (bit1) cleared its IF bit, leaving VBLANK ($01)"
+    );
+}
