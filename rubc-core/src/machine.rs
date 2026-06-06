@@ -427,6 +427,18 @@ mod tests {
     }
 
     #[test]
+    fn blargg_interrupt_time_passes_cgb() {
+        // interrupt_time.gb is `.define REQUIRE_CGB 1`: it uses cpu_fast /
+        // get_cpu_speed (KEY1 double-speed), so it is a CGB-only test and is
+        // not meant to pass on DMG. It verifies interrupt-dispatch + timer
+        // observation timing in both single and double speed.
+        assert!(
+            blargg_passes_at_cgb("interrupt_time/interrupt_time.gb"),
+            "interrupt_time should pass in CGB mode"
+        );
+    }
+
+    #[test]
     fn blargg_oam_bug_fails_we_do_not_emulate_it() {
         // oam_bug requires the DMG OAM-corruption hardware bug, which we do not
         // emulate; it reports FAIL ($A000 = 0x01) via the cart-RAM protocol. This
