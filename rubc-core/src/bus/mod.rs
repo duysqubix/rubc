@@ -12,8 +12,8 @@
 //!      a write latches late in the cycle. A READ/idle still ticks all 4 T then
 //!      samples (read placement moves to T3 in Step 3, rubc-cu6). The timer
 //!      always advances 4 per M; in CGB double-speed PPU+APU advance every 2nd T.
-//!   3. IRQs raised during the ticks become visible at the NEXT instruction
-//!      boundary (queued in `Interrupts::pending`, settled by `boundary`).
+//!   3. IRQs raised during the ticks latch IF immediately. The CPU still polls
+//!      and dispatches only at instruction boundaries.
 //!
 //! Diagnostics OBSERVE only; nothing here is on a diag hot path that ticks.
 
@@ -55,9 +55,9 @@ pub trait CpuBus {
     /// Settle the CGB double-speed switch after a STOP: toggle the speed and
     /// clear the armed bit.
     fn finish_speed_switch(&mut self);
-    /// Settle queued interrupts into IF at an instruction boundary. The CPU
-    /// (which may be generic over `CpuBus`) calls this before polling
-    /// `irq_pending_mask`, so IRQs raised mid-M-cycle become visible.
+    /// Instruction-boundary hook before the CPU polls `irq_pending_mask`.
+    /// Interrupt requests are already visible in IF; this normalizes IF's
+    /// unused high bits for buses that model them.
     fn boundary(&mut self);
 }
 
@@ -205,8 +205,8 @@ impl Bus {
         Self::default()
     }
 
-    /// Settle queued interrupts into IF. Call at each instruction boundary
-    /// (before the CPU polls `irq_pending_mask`).
+    /// Instruction-boundary hook (before the CPU polls `irq_pending_mask`).
+    /// IF requests are immediate; this normalizes IF's unused high bits.
     pub fn boundary(&mut self) {
         self.interrupts.settle_boundary();
     }
@@ -966,14 +966,62 @@ mod tests {
     }
 
     #[test]
-    fn irq_visible_next_boundary() {
-        // S5: an IRQ requested during a tick is NOT visible until boundary().
+    fn irq_if_latch_is_immediate_but_dispatch_waits_for_boundary() {
+        // S5: IF is a register latch, so an IRQ request is visible immediately;
+        // CPU dispatch remains an instruction-boundary decision.
+        use crate::cpu::{Cpu, CpuMode};
+
         let mut bus = Bus::new();
+        let mut rom = vec![0u8; 0x8000];
+        rom[0] = 0x3E;
+        rom[1] = 0x42;
+        bus.cart = Cartridge::from_rom(&rom);
         bus.interrupts.ie = 0x04; // enable timer interrupt
-        bus.interrupts.request(2); // timer IRQ requested mid-M
-        assert_eq!(bus.irq_pending_mask(), 0x00, "not visible before boundary");
-        bus.boundary();
-        assert_eq!(bus.irq_pending_mask(), 0x04, "visible after boundary");
+
+        let mut cpu = Cpu::new();
+        cpu.ime = true;
+        cpu.r.sp = 0xFFFE;
+
+        cpu.step_m(&mut bus);
+        assert_eq!(cpu.r.pc, 0x0001, "opcode fetch advanced PC");
+
+        bus.interrupts.request(2);
+        assert_eq!(
+            bus.irq_pending_mask(),
+            0x04,
+            "IF latch is visible immediately, before boundary()"
+        );
+
+        for _ in 0..4 {
+            assert!(
+                !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }),
+                "dispatch must not start mid-instruction"
+            );
+            if cpu.exec_is_boundary() {
+                break;
+            }
+            cpu.step_m(&mut bus);
+        }
+
+        assert_eq!(cpu.r.a, 0x42, "current instruction completed normally");
+        assert_eq!(cpu.r.pc, 0x0002, "dispatch did not preempt LD A,d8");
+        assert!(
+            cpu.exec_is_boundary(),
+            "dispatch waits for instruction boundary"
+        );
+
+        cpu.step_m(&mut bus);
+        assert!(
+            matches!(
+                cpu.mode,
+                CpuMode::InterruptDispatch {
+                    bit: 2,
+                    vector: 0x0050,
+                    ..
+                }
+            ),
+            "timer interrupt dispatch starts only from the next boundary"
+        );
     }
 
     #[test]
@@ -1295,16 +1343,14 @@ mod tests {
     }
 
     #[test]
-    fn settled_if_readable_via_read_m() {
-        // request -> boundary -> read_m(FF0F) sees the settled bit.
+    fn requested_if_readable_via_read_m() {
         let mut bus = Bus::new();
         bus.interrupts.ie = 0x1F;
-        bus.interrupts.request(0); // vblank, queued
-        bus.boundary();
+        bus.interrupts.request(0);
         assert_eq!(
             bus.read_m(0xFF0F) & 0x01,
             0x01,
-            "settled IF visible via read_m"
+            "requested IF visible via read_m"
         );
     }
 

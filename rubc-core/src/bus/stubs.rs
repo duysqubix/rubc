@@ -5,29 +5,25 @@
 //! BEFORE the real PPU/APU land in later waves. Each stub counts its ticks so
 //! tests can assert the ordering of the invariant.
 
-/// Interrupt enable / flag registers + a pending queue.
+/// Interrupt enable / flag registers.
 ///
-/// IRQs requested during a tick are queued and only merged into `if_` at the
-/// next instruction boundary, modelling "IRQs raised mid-M-cycle become visible
-/// next boundary".
+/// IRQ sources latch IF immediately on the T-cycle that requests them. The CPU
+/// still decides whether to dispatch only at an instruction boundary.
 #[derive(Default)]
 pub struct Interrupts {
     pub ie: u8,
     pub if_: u8,
-    /// Bits requested during the current M-cycle, surfaced at the next boundary.
-    pending: u8,
 }
 
 impl Interrupts {
-    /// Request an interrupt (by bit 0..=4). Queued until the next boundary.
+    /// Request an interrupt (by bit 0..=4). Latches IF immediately.
     pub fn request(&mut self, bit: u8) {
-        self.pending |= 1 << bit;
+        self.if_ |= 1 << bit;
     }
 
-    /// Merge queued requests into `if_`. Called at the instruction boundary.
+    /// Normalize IF's unused high bits at an instruction boundary.
     pub fn settle_boundary(&mut self) {
-        self.if_ |= self.pending | 0xE0; // top 3 bits read as 1
-        self.pending = 0;
+        self.if_ |= 0xE0; // top 3 bits read as 1
     }
 
     /// Currently visible pending+enabled interrupts (IE & IF, low 5 bits).
