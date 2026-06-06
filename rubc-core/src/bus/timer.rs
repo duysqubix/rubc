@@ -133,11 +133,16 @@ impl Timer {
     }
 
     fn write_div(&mut self) {
+        // Resetting DIV can drop the selected timer-input bit from 1 to 0, a
+        // falling edge that increments TIMA (overflow schedules Reload::Pending,
+        // whose IRQ fires later via the tick-driven countdown).
         self.div = 0;
         self.apply_falling_edge_after_div_or_tac_change();
     }
 
     fn write_tac(&mut self, value: u8) {
+        // Changing TAC (enable/selector) can flip the AND result high->low, a
+        // falling edge that increments TIMA. rapid_toggle relies on this.
         self.tac = value & 0x07;
         self.apply_falling_edge_after_div_or_tac_change();
     }

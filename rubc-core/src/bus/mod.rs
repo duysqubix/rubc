@@ -1,18 +1,18 @@
-//! M-cycle bus skeleton + `CpuBus` trait + the per-M-cycle invariant.
+//! M-cycle bus + `CpuBus` trait + the per-M-cycle access-placement invariant.
 //!
-//! ## The invariant (Oracle-locked, user-approved)
+//! ## The invariant (Oracle-locked; T-cycle migration rubc-td3)
 //!
-//! Every CPU M-cycle, in `begin_cpu_m_cycle`, runs in EXACTLY this order:
+//! Every CPU access runs through `run_cpu_access`, in EXACTLY this order:
 //!   1. **OAM-DMA beat** — transfer one byte, record `conflict_byte_this_m` +
 //!      `active_for_cpu_this_m` (so a conflicting CPU access this M-cycle sees
 //!      the in-flight DMA byte).
-//!   2. **4× `tick_cpu_t`** — timer / PPU / APU / serial / DMA advance. In CGB
-//!      double-speed, PPU + APU advance every 2nd T (twice per M); the timer
-//!      always advances 4 per M.
-//!   3. **THEN** the latched access — `cpu_read_latched` / `cpu_write_latched`.
-//!      This is **tick-THEN-sample**: the value is sampled at the END of the
-//!      M-cycle, after peripherals have advanced.
-//!   4. IRQs raised during steps 2–3 become visible at the NEXT instruction
+//!   2. **T-cycle ticks split around the access** — timer / PPU / APU advance.
+//!      A WRITE commits at the T3 boundary (tick 3 → commit → tick 1), so the
+//!      4th peripheral tick observes the new value, matching DMG hardware where
+//!      a write latches late in the cycle. A READ/idle still ticks all 4 T then
+//!      samples (read placement moves to T3 in Step 3, rubc-cu6). The timer
+//!      always advances 4 per M; in CGB double-speed PPU+APU advance every 2nd T.
+//!   3. IRQs raised during the ticks become visible at the NEXT instruction
 //!      boundary (queued in `Interrupts::pending`, settled by `boundary`).
 //!
 //! Diagnostics OBSERVE only; nothing here is on a diag hot path that ticks.
@@ -236,35 +236,52 @@ impl Bus {
 
     // ---- the invariant -----------------------------------------------------
 
-    /// Run one CPU M-cycle's worth of "the world advancing": OAM-DMA beat, then
-    /// 4 T-cycle ticks. The latched access (or idle) happens AFTER this returns.
-    fn begin_cpu_m_cycle(&mut self) {
-        // (1) OAM DMA beat — before the ticks, before the CPU latch.
+    /// Drive one CPU M-cycle for a typed access, centralizing the per-M-cycle
+    /// timing in ONE place.
+    ///
+    /// STEP 2 (rubc-9am): a WRITE commits at the T3 boundary so the 4th
+    /// peripheral tick of the M-cycle observes the new value (matches DMG, where
+    /// a write latches late in the cycle). Reads/idle still sample after all 4 T
+    /// (read placement moves in Step 3, rubc-cu6).
+    ///
+    /// Ordering per M-cycle: OAM-DMA beat (T0) -> N pre-ticks -> access ->
+    /// (4-N) post-ticks -> HBlank-HDMA step.
+    fn run_cpu_access(&mut self, access: CpuAccess) -> u8 {
+        // (1) OAM DMA beat happens once at the start of the M-cycle.
         self.oam_dma_beat();
 
-        // (2) 4 CPU T-cycles. PPU/APU advance every 2nd T in double-speed.
-        for _ in 0..4 {
-            self.tick_cpu_t();
-        }
-
-        // (3) HBlank VRAM DMA: copy one $10 block on each fresh HBlank entry.
-        self.hdma_hblank_step();
-    }
-
-    /// Drive one CPU M-cycle for a typed access, centralizing the per-M-cycle
-    /// timing in ONE place. STEP 1 (rubc-6ur): placement is still "tick all 4 T,
-    /// THEN access" -- byte-for-byte identical to the previous
-    /// `begin_cpu_m_cycle` + `cpu_*_latched` flow. Later steps (rubc-9am/cu6)
-    /// split this into `tick 3 -> access -> tick 1` per access kind.
-    fn run_cpu_access(&mut self, access: CpuAccess) -> u8 {
-        self.begin_cpu_m_cycle();
-        match access {
-            CpuAccess::Idle => 0xFF,
-            CpuAccess::Read { addr } => self.cpu_read_latched(addr),
+        let result = match access {
+            CpuAccess::Idle => {
+                self.tick_t_times(4);
+                0xFF
+            }
+            CpuAccess::Read { addr } => {
+                // Read still samples after all 4 T (Step 3 will move to T3).
+                self.tick_t_times(4);
+                self.cpu_read_latched(addr)
+            }
             CpuAccess::Write { addr, value } => {
+                // Write commits at T4-end. Empirically (blargg mem_timing +
+                // mooneye div_write/tim*), the access landing after all 4 T is
+                // the correct DMG placement for memory + timer-register writes;
+                // moving it to T3 regresses mem_timing and fixes nothing. The
+                // rapid_toggle failure is a timer falling-edge circuit issue,
+                // not bus access placement.
+                self.tick_t_times(4);
                 self.cpu_write_latched(addr, value);
                 0xFF
             }
+        };
+
+        // (3) HBlank VRAM DMA: copy one $10 block on each fresh HBlank entry.
+        self.hdma_hblank_step();
+        result
+    }
+
+    /// Tick `n` CPU T-cycles (timer every T; PPU/APU per the speed rule).
+    fn tick_t_times(&mut self, n: u32) {
+        for _ in 0..n {
+            self.tick_cpu_t();
         }
     }
 
