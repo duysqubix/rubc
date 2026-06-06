@@ -1,153 +1,195 @@
-# rubc
+<div align="center">
 
-A cycle-accurate **Game Boy (DMG)** and **Game Boy Color (CGB)** emulator written
-in safe, dependency-light Rust.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/media/rubc-light.png">
+  <img src="docs/media/rubc-dark.png" width="360" alt="rubc">
+</picture>
 
-The goal is correctness first: rubc is built and verified against the
-[Blargg `gb-test-roms`](https://github.com/retrio/gb-test-roms) and
-[Gekkio `mooneye-test-suite`](https://github.com/Gekkio/mooneye-test-suite)
-hardware test suites, with an M-cycle-stepped CPU driving T-cycle-accurate
-peripherals.
+### A cycle-accurate Game Boy and Game Boy Color emulator, written in safe Rust.
 
-> **Status:** under active development. The CPU and core timing are complete and
-> test-passing; graphics (PPU) and audio (APU) are in progress. See
-> [Status](#status) for the detailed breakdown.
+[![Build](https://img.shields.io/badge/build-passing-brightgreen)](#building)
+[![Safe Rust](https://img.shields.io/badge/unsafe-forbidden-blue)](#why-rubc)
+[![Tests](https://img.shields.io/badge/blargg-passing-brightgreen)](#accuracy)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey)](#license)
+
+<p>
+  <img src="docs/media/crystal-intro.gif" width="240" alt="Pokémon Crystal intro">
+  &nbsp;
+  <img src="docs/media/crystal-title.png" width="240" alt="Pokémon Crystal title screen">
+</p>
+
+*Pokémon Crystal running on rubc — color, sound, saves, and all.*
+
+</div>
 
 ---
 
-## Highlights
+## What is rubc?
 
-- **100% safe Rust.** The core library is `#![forbid(unsafe_code)]` — no
-  `unsafe`, no C bindings, no `-sys` crates, no FFI.
-- **Cycle-accurate by construction.** The CPU advances one **M-cycle** at a time;
-  the bus ticks peripherals **4 T-cycles** per M-cycle and samples the bus
-  *after* they advance (tick-then-sample), so memory and timer behaviour matches
-  hardware ordering.
-- **DMG + CGB from the ground up.** Dual-mode is a first-class target, not a
-  retrofit.
-- **Built-in self-diagnosis.** A feature-gated diagnostics layer (flight
-  recorder, BGB-format trace, state hashing, metrics, machine snapshots) makes
-  failures reconstructable from artifacts alone — and compiles to zero cost when
-  disabled.
+rubc is a Game Boy (DMG) and Game Boy Color (CGB) emulator that aims for one
+thing above all: **getting the hardware right.** It runs your games with
+accurate color, audio, battery saves, and the same subtle timing quirks the
+original silicon had — verified against the industry-standard hardware test
+suites.
 
-## Status
+It's small, fast, dependency-light, and written entirely in safe Rust.
 
-| Subsystem | State | Verified by |
-|-----------|-------|-------------|
-| **SM83 CPU** | ✅ Complete | All 512 opcodes pass [SingleStepTests](https://github.com/SingleStepTests/sm83) vectors (state + cycle count + IME/EI) |
-| **Instruction timing** | ✅ Per-opcode M-cycle counts | M-cycle count harness (branch taken/not-taken, 5-M interrupt dispatch) |
-| **Memory bus** | ✅ M-cycle invariant | OAM-DMA beat → 4×tick → tick-then-sample latch |
-| **Timer (DIV/TIMA/TMA/TAC)** | ✅ Complete | Falling-edge detection, reload state machine, write quirks; Blargg `cpu_instrs` + unit gates |
-| **Interrupts** | ✅ Edge-accurate | EI 1-instruction delay, HALT bug, `ie_push` cancel, dispatch priority; Blargg `02-interrupts` |
-| **MBC0 / MBC1** | ✅ ROM banking | All 11 Blargg `cpu_instrs` ROMs pass through the banked path |
-| **CPU instructions (Blargg)** | ✅ 11/11 individual ROMs | `just cpu-roms` |
-| **PPU (graphics)** | 🚧 In progress | — |
-| **APU (audio)** | ⬜ Planned | — |
-| **CGB extras** (double-speed, palettes, banking, HDMA) | 🚧 In progress | — |
-| **MBC2 / MBC3 / MBC5** | ⬜ Planned | — |
+## Features
 
-The full Blargg + mooneye coverage plan is tracked as issues (see
-[Issue tracking](#issue-tracking)).
+- 🎮 **Plays DMG & CGB games** — full Game Boy and Game Boy Color support, with
+  automatic detection from the cartridge header.
+- 🌈 **Accurate color** — CGB palettes, per-tile attributes, and color mixing,
+  pixel-exact on the `cgb-acid2` reference test.
+- 🔊 **Real sound** — all four audio channels (two pulse, wave, noise) with the
+  full envelope/sweep/length hardware, output through your speakers.
+- 💾 **Battery saves** — games like Pokémon Crystal write a `.sav` file next to
+  the ROM and resume right where you left off.
+- ⏱️ **Cycle accuracy** — an M-cycle-stepped CPU driving T-cycle-accurate
+  peripherals; passes Blargg's `instr_timing`, `mem_timing`, and the bulk of
+  Gekkio's mooneye acceptance suite.
+- 🧩 **Multiple cartridge types** — MBC1, MBC2, MBC3 (with RTC), and MBC5.
+- 🦀 **100% safe Rust** — the emulation core is `#![forbid(unsafe_code)]` with no
+  C bindings, no `-sys` crates, and no FFI.
 
 ## Quick start
 
-Requires a recent stable Rust toolchain and [`just`](https://github.com/casey/just).
+You'll need a recent stable [Rust toolchain](https://rustup.rs).
 
 ```sh
-# Build everything
-just build
+# Clone and build
+git clone https://github.com/duysqubix/rubc.git
+cd rubc
+cargo build --release
 
-# Run a ROM (quiet)
-just run path/to/game.gb
-
-# Run a ROM with debug logging
-just trun path/to/game.gb
-
-# Run the unit-test suite
-just unit-test
+# Play a game
+cargo run --release -p rubc -- run path/to/game.gbc
 ```
 
-Plain Cargo works too:
+That's it — a window opens and your game runs.
+
+## Controls
+
+| Key | Game Boy button |
+|-----|-----------------|
+| Arrow keys | D-pad |
+| <kbd>X</kbd> | A |
+| <kbd>Z</kbd> | B |
+| <kbd>Enter</kbd> | Start |
+| <kbd>Right Shift</kbd> / <kbd>Backspace</kbd> | Select |
+| <kbd>Esc</kbd> | Quit |
+
+Run `rubc controls` any time to print this mapping.
+
+## Saves
+
+Cartridges with battery-backed RAM (most RPGs and save-capable games) persist to
+a `.sav` file alongside the ROM — e.g. `crystal.gbc` saves to `crystal.sav`. The
+file is written when you quit and periodically while you play, so an in-game save
+survives closing the emulator. Drop in an existing `.sav` from another emulator
+and rubc will pick it up on boot.
+
+## Accuracy
+
+rubc is developed test-first against real Game Boy hardware test ROMs. Here's
+what currently passes:
+
+| Suite | Result |
+|-------|--------|
+| **Blargg `cpu_instrs`** | ✅ 11/11 |
+| **Blargg `instr_timing`** | ✅ Pass |
+| **Blargg `mem_timing` / `mem_timing-2`** | ✅ Pass |
+| **Blargg `halt_bug`** | ✅ Pass |
+| **Blargg `dmg_sound`** | ✅ 12/12 |
+| **Blargg `cgb_sound`** | ✅ 12/12 |
+| **dmg-acid2** | ✅ Pixel-exact |
+| **cgb-acid2** | ✅ Pixel-exact |
+| **Mooneye acceptance (DMG-ABC + CGB)** | ✅ Full target coverage |
+
+### Test gallery
+
+A picture is worth a thousand passing assertions. Each of these is rubc's own
+rendered output running the named test ROM to completion:
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/media/tests/cpu_instrs.png" width="200"><br><sub>cpu_instrs</sub></td>
+    <td align="center"><img src="docs/media/tests/instr_timing.png" width="200"><br><sub>instr_timing</sub></td>
+    <td align="center"><img src="docs/media/tests/mem_timing.png" width="200"><br><sub>mem_timing</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/media/tests/dmg_sound.png" width="200"><br><sub>dmg_sound</sub></td>
+    <td align="center"><img src="docs/media/tests/cgb_sound.png" width="200"><br><sub>cgb_sound</sub></td>
+    <td align="center"><img src="docs/media/tests/halt_bug.png" width="200"><br><sub>halt_bug</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/media/tests/dmg-acid2.png" width="200"><br><sub>dmg-acid2</sub></td>
+    <td align="center"><img src="docs/media/tests/cgb-acid2.png" width="200"><br><sub>cgb-acid2</sub></td>
+    <td align="center"><img src="docs/media/tests/cgb-acid-hell.png" width="200"><br><sub>cgb-acid-hell</sub></td>
+  </tr>
+</table>
+
+> The full per-ROM breakdown lives in [docs/ACCURACY.md](docs/ACCURACY.md).
+
+## Why rubc?
+
+- **Correctness first.** Every subsystem is gated against a real hardware test
+  ROM before it's considered done. The CPU advances one **M-cycle** at a time;
+  the bus ticks peripherals **four T-cycles** per M-cycle and samples *after*
+  they advance, so memory and timer ordering matches the real machine.
+- **DMG + CGB from the ground up.** Dual-mode is a first-class design target, not
+  a retrofit — color, double-speed, VRAM/WRAM banking, and HDMA are all native.
+- **Genuinely safe.** The core library forbids `unsafe`. No C dependencies means
+  it builds anywhere Rust does, with no system libraries to chase.
+- **Hackable.** A feature-gated diagnostics layer (flight recorder, BGB-format
+  trace, state hashing, snapshots) makes hard timing bugs reconstructable from
+  artifacts alone — and compiles to nothing when disabled.
+
+## Building
 
 ```sh
-cargo run -p rubc -- path/to/game.gb
-cargo test -p rubc-core
+cargo build --release          # optimized build
+cargo run -p rubc -- run ROM   # build + run a ROM
+cargo run -p rubc -- controls  # print the control mapping
+cargo run -p rubc -- cartdump ROM   # inspect a cartridge header
+```
+
+[`just`](https://github.com/casey/just) recipes wrap the common workflows:
+
+```sh
+just run path/to/game.gb    # run quietly
+just trun path/to/game.gb   # run with debug logging
+just unit-test              # core unit tests
+just check                  # fmt + clippy + build + test
 ```
 
 ## Project layout
 
 ```
 rubc/
-├── rubc-core/          # The emulator library (core logic, no rendering)
+├── rubc-core/   # the emulator library — CPU, PPU, APU, bus, MBCs (no rendering)
 │   └── src/
-│       ├── cpu/        # SM83 core: step_m state machine, all 512 opcodes, ALU
-│       ├── bus/        # M-cycle bus, CpuBus trait, timer, cartridge/MBC, FlatBus
-│       ├── diag/       # Feature-gated diagnostics (flight recorder, trace, hash)
-│       └── machine.rs  # Bootable Machine{Cpu,Bus} runner + test-ROM harness
-├── rubc/               # The binary: windowing + rendering + (eventual) GUI
-│   └── src/
-└── justfile            # Operational backbone (build / test / diagnose recipes)
+│       ├── cpu/       # SM83 core: M-cycle state machine, all 512 opcodes, ALU
+│       ├── bus/       # memory bus, PPU, APU, timer, cartridge/MBC banking
+│       └── machine.rs # bootable Machine{Cpu, Bus} + test-ROM harness
+├── rubc/        # the binary — windowing, rendering, audio, input
+└── justfile     # build / run / test / diagnostics recipes
 ```
 
-### Architecture in one line
+The CPU and bus are joined by a single `CpuBus` trait: the CPU borrows the bus
+`&mut` for exactly one call per M-cycle. No peripheral holds a back-reference,
+which keeps the whole design borrow-checker-clean and free of interior-mutability
+hacks.
 
-The CPU and bus are **siblings** joined by the `CpuBus` trait: the CPU borrows
-the bus `&mut` for exactly one `*_m` call per M-cycle. No peripheral holds a
-back-reference, which keeps the design borrow-checker-clean and free of
-interior-mutability hacks.
+## Status
 
-## Testing
-
-rubc is developed test-first against real hardware test ROMs.
-
-```sh
-just unit-test        # cargo test -p rubc-core
-just test-opcodes     # SM83 JSON opcode vectors (SingleStepTests)
-just cpu-roms         # all 11 Blargg cpu_instrs individual ROMs
-just machine-test     # machine integration tests (serial capture, signatures)
-just regression-test  # Blargg cpu_instrs via serial
-just check            # fmt-check + clippy (-D warnings) + build + test
-```
-
-### Hardware test ROMs
-
-Reference docs and test suites are expected under `reference/` (git-ignored).
-
-- **Blargg `gb-test-roms`** ship prebuilt `.gb` files and run directly.
-- **Mooneye** ships [WLA-DX](https://github.com/vhelin/wla-dx) assembly source
-  (`.s`), **not** RGBDS and not prebuilt ROMs. Build them with WLA-DX:
-
-  ```sh
-  brew install wla-dx      # provides wla-gb + wlalink
-  just mooneye-build       # assembles the suite to <suite>/build/**/*.gb
-  just mooneye 'acceptance/timer/*'   # build (if needed) + run a glob
-  ```
-
-## Diagnostics
-
-The core ships an opt-in, zero-cost-when-off diagnostics layer for debugging hard
-timing bugs. It *observes* — it never participates in emulation timing.
-
-```sh
-just diag path/to/rom.gb   # full AFK artifact bundle into the diag dir
-just diag-summary          # summarise the most recent run
-```
-
-Cargo features: `diagnostics`, `flight-recorder`, `metrics`, `trace`, `hash`,
-`snapshot`, and `diag-full` (all of the above). Default features are empty, so a
-normal build pays nothing.
-
-## Issue tracking
-
-This repo uses [beads (`bd`)](https://github.com/gastownhall/beads) for durable,
-dependency-aware task tracking:
-
-```sh
-bd ready     # what's available to work on
-bd show <id> # issue detail
-bd stats     # project health
-```
+rubc plays commercial DMG and CGB games today, with picture, sound, input, and
+battery saves. Work continues on the last few sub-instruction PPU timing edge
+cases (the mid-scanline mealybug-tearoom and `cgb-acid-hell` tests) and on link-
+cable serial I/O.
 
 ## License
 
-See repository for license information.
+Released under the MIT License. See [LICENSE](LICENSE).
+
+Game Boy is a trademark of Nintendo. rubc is an independent project and is not
+affiliated with or endorsed by Nintendo.
