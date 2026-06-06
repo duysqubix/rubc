@@ -261,14 +261,27 @@ impl Bus {
                 self.cpu_read_latched(addr)
             }
             CpuAccess::Write { addr, value } => {
-                // Write commits at T4-end. Empirically (blargg mem_timing +
-                // mooneye div_write/tim*), the access landing after all 4 T is
-                // the correct DMG placement for memory + timer-register writes;
-                // moving it to T3 regresses mem_timing and fixes nothing. The
-                // rapid_toggle failure is a timer falling-edge circuit issue,
-                // not bus access placement.
-                self.tick_t_times(4);
-                self.cpu_write_latched(addr, value);
+                // TAC ($FF07) is the edge-producing timer register: a write can
+                // create a falling edge on the selected timer input and start the
+                // overflow->reload->IRQ chain. It commits mid-M (N=2: tick 2 ->
+                // commit+eval -> tick 2) so the reload/IRQ lands at the right
+                // sub-cycle (Oracle ses_164cf0305). rapid_toggle's `ldh (TAC),a`
+                // is immediately followed by `dec bc`; end-of-M gives BC=$FFD8,
+                // N=0 gives $FFDA, and the N=2 midpoint hits the correct $FFD9.
+                //
+                // Every other write -- including DIV ($FF04), which the tim*
+                // suite calibrates against the DIV-reset phase, and TIMA/TMA
+                // ($FF05/$FF06) reload-quirk registers -- commits at end-of-M
+                // (after 4 T), the correct DMG placement for memory writes (keeps
+                // blargg mem_timing + the tim* suite green).
+                if addr == 0xFF07 {
+                    self.tick_t_times(2);
+                    self.cpu_write_latched(addr, value);
+                    self.tick_t_times(2);
+                } else {
+                    self.tick_t_times(4);
+                    self.cpu_write_latched(addr, value);
+                }
                 0xFF
             }
         };
