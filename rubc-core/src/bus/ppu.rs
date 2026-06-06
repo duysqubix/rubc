@@ -446,7 +446,7 @@ impl Ppu {
         }
 
         if self.ly <= LAST_VISIBLE_LINE {
-            if self.line_dot == DOTS_PER_LINE - 4 {
+            if self.line_dot == DOTS_PER_LINE - 4 && self.ly != LAST_VISIBLE_LINE {
                 self.stat_mode2_pulse = true;
             } else if self.line_dot == 4 {
                 self.stat_mode = mode::OAM_SCAN;
@@ -481,6 +481,9 @@ impl Ppu {
             }
             self.set_mode(mode::VBLANK, irq);
             self.stat_mode = mode::VBLANK;
+            if !self.cgb_mode && self.ly == LAST_VISIBLE_LINE + 1 {
+                self.stat_mode2_pulse = true;
+            }
         } else {
             self.set_mode(mode::OAM_SCAN, irq);
             self.stat_mode = mode::HBLANK;
@@ -1248,6 +1251,21 @@ mod tests {
         assert_eq!(p.ly, 144);
         assert_eq!(p.mode, mode::VBLANK);
         assert!(irq & 0x01 != 0, "VBlank IRQ requested");
+    }
+
+    #[test]
+    fn line144_dmg_mode2_pulse_shares_vblank_bucket() {
+        let mut p = ppu_at_line_start();
+        p.ly = LAST_VISIBLE_LINE;
+        p.line_dot = DOTS_PER_LINE - 1;
+        p.mode = mode::HBLANK;
+        p.stat_mode = mode::HBLANK;
+        p.stat_enables = 0x20;
+        let irq = tick(&mut p, 1);
+        assert_eq!(p.ly, LAST_VISIBLE_LINE + 1);
+        assert_eq!(p.read_stat() & 0x03, mode::VBLANK);
+        assert_eq!(irq & 0x03, 0x03);
+        assert_eq!(tick(&mut p, 1) & 0x02, 0);
     }
 
     #[test]
