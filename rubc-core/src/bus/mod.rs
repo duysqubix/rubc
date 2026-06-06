@@ -350,7 +350,14 @@ impl Bus {
     }
 
     fn div_apu_bit_high(&self) -> bool {
-        let mask = if self.cgb.double_speed { 0x20 } else { 0x10 };
+        // DIV-APU clocks on the falling edge of bit 4 (bit 5 in CGB double-
+        // speed) of the VISIBLE DIV byte ($FF04 = div >> 8), i.e. bit 12 (13) of
+        // the 16-bit internal counter -> a 512 Hz frame-sequencer step.
+        let mask = if self.cgb.double_speed {
+            0x2000
+        } else {
+            0x1000
+        };
         self.timer.div_counter() & mask != 0
     }
 
@@ -1512,5 +1519,36 @@ mod tests {
         assert_eq!(bus.peek(0xFF55) & 0x80, 0x00, "active before stop");
         bus.poke(0xFF55, 0x00); // terminate
         assert_eq!(bus.peek(0xFF55) & 0x80, 0x80, "bit 7 set after termination");
+    }
+
+    #[test]
+    fn div_apu_clocks_at_512hz() {
+        // The DIV-APU frame sequencer steps on the falling edge of the visible
+        // DIV bit 4 (bit 12 of the 16-bit counter) = every 8192 T-cycles
+        // (512 Hz). Regression guard for the mask bug that ran it 256x too fast.
+        let mut bus = Bus::new();
+        let mask = 0x1000u16;
+        let mut prev = bus.timer.div_counter() & mask != 0;
+        let mut last = 0u64;
+        let mut t = 0u64;
+        let mut intervals = Vec::new();
+        for _ in 0..60_000 {
+            bus.tick_cpu_t();
+            t += 1;
+            let high = bus.timer.div_counter() & mask != 0;
+            if prev && !high {
+                intervals.push(t - last);
+                last = t;
+                if intervals.len() >= 4 {
+                    break;
+                }
+            }
+            prev = high;
+        }
+        assert_eq!(
+            intervals,
+            vec![8192, 8192, 8192, 8192],
+            "DIV-APU must step every 8192 T-cycles (512 Hz)"
+        );
     }
 }

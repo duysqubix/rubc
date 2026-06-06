@@ -450,6 +450,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn blargg_dmg_sound_passing_subtests() {
+        // Subtests of blargg's dmg_sound suite that we pass. These exercise the
+        // APU register file, the 512 Hz frame sequencer (length + sweep), and
+        // the CH1 frequency-overflow disable on trigger. Locked in after the
+        // DIV-APU mask fix (rubc-8yh) brought the frame sequencer to 512 Hz.
+        for name in [
+            "01-registers.gb",
+            "02-len ctr.gb",
+            "04-sweep.gb",
+            "05-sweep details.gb",
+            "06-overflow on trigger.gb",
+        ] {
+            let rel = format!("dmg_sound/rom_singles/{name}");
+            assert!(blargg_passes_at(&rel), "dmg_sound {name} should pass");
+        }
+    }
+
     /// Run a blargg ROM from an arbitrary path booted in **CGB mode**. Used for
     /// CGB-aware ROMs (header CGB flag bit 7 set) that exercise the KEY1 speed
     /// switch.
