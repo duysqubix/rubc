@@ -397,6 +397,17 @@ impl Bus {
         self.peek(addr)
     }
 
+    /// Whether a CPU access to `addr` targets the SAME bus the OAM DMA is
+    /// currently driving. The DMA drives the bus its source page lives on:
+    /// the video bus ($8000-$9FFF) for sources $80-$9F, else the external bus
+    /// (ROM/SRAM/WRAM). Only same-bus accesses see the in-flight conflict byte;
+    /// the other bus stays usable by the CPU (Pan Docs OAM DMA bus conflicts).
+    fn dma_conflicts_with(&self, addr: u16) -> bool {
+        let dma_on_video_bus = matches!(self.dma.source_hi, 0x80..=0x9F);
+        let addr_on_video_bus = matches!(addr, 0x8000..=0x9FFF);
+        dma_on_video_bus == addr_on_video_bus
+    }
+
     /// Handle a write to HDMA5 ($FF55): start a General-Purpose or HBlank VRAM
     /// DMA, or terminate an in-progress HBlank transfer.
     fn write_hdma5(&mut self, value: u8) {
@@ -491,16 +502,18 @@ impl Bus {
     fn cpu_read_latched(&mut self, addr: u16) -> u8 {
         self.ticks_at_last_sample = self.t_tick_count;
 
-        // OAM DMA bus conflict: the CPU sees the in-flight DMA byte; OAM blocked;
-        // HRAM accessible.
+        // OAM DMA bus conflict (Pan Docs: the CPU can still access the OTHER
+        // bus during DMA). The DMA drives the bus its SOURCE is on -- the
+        // external bus (ROM/SRAM/WRAM, $0000-$7FFF + $A000-$FDFF) or the video
+        // bus ($8000-$9FFF). A CPU access conflicts only if it targets the SAME
+        // bus as the DMA source; OAM is always blocked; HRAM is always free.
         if self.dma.active_for_cpu_this_m {
-            match addr {
-                0xFF80..=0xFFFE => {} // HRAM accessible
-                0xFE00..=0xFE9F => return 0xFF,
-                _ => {
-                    if let Some(b) = self.dma.conflict_byte_this_m {
-                        return b;
-                    }
+            if matches!(addr, 0xFE00..=0xFE9F) {
+                return 0xFF; // OAM always blocked during DMA
+            }
+            if !matches!(addr, 0xFF80..=0xFFFE) && self.dma_conflicts_with(addr) {
+                if let Some(b) = self.dma.conflict_byte_this_m {
+                    return b;
                 }
             }
         }
@@ -519,9 +532,12 @@ impl Bus {
         self.ticks_at_last_sample = self.t_tick_count;
 
         if self.dma.active_for_cpu_this_m {
-            // During OAM DMA the CPU can write ONLY to HRAM; the DMA owns every
-            // other bus, so all other writes (WRAM/VRAM/OAM/IO/IE) are dropped.
-            if !matches!(addr, 0xFF80..=0xFFFE) {
+            // During OAM DMA the CPU can only write to a bus the DMA is NOT
+            // driving (or HRAM). A write to the same bus as the DMA source (or to
+            // OAM) is dropped; writes to the other bus go through.
+            let blocked = matches!(addr, 0xFE00..=0xFE9F)
+                || (!matches!(addr, 0xFF80..=0xFFFE) && self.dma_conflicts_with(addr));
+            if blocked {
                 return;
             }
         }
@@ -1244,36 +1260,42 @@ mod tests {
     }
 
     #[test]
-    fn oam_dma_blocks_all_writes_except_hram() {
-        // P0#2: during DMA only HRAM is writable; WRAM/VRAM/OAM/IO/IE dropped.
+    fn oam_dma_blocks_same_bus_writes_except_hram() {
+        // P0#2: during DMA the CPU can only write to the bus the DMA is NOT
+        // driving (plus HRAM). DMA from 0xC0 (WRAM) drives the EXTERNAL bus, so
+        // WRAM/ROM/SRAM/IO/IE writes are dropped, but the VIDEO bus (VRAM) and
+        // HRAM stay writable (Pan Docs OAM DMA bus conflicts).
         let mut bus = Bus::new();
-        bus.poke(0xFF46, 0xC0); // schedule DMA (start_delay=2)
-        bus.idle_m();
-        bus.idle_m(); // DMA now active
-                      // Pre-seed targets so we can prove writes are dropped.
-                      // (poke bypasses the DMA gate; write_m is the gated path.)
-        bus.write_m(0xC500, 0xAA); // WRAM -> blocked
-        bus.write_m(0x8000, 0xBB); // VRAM -> blocked
-        bus.write_m(0xFE10, 0xCC); // OAM  -> blocked
-        bus.write_m(0xFF40, 0xDD); // IO (LCDC, special PPU reg) -> blocked
-        bus.write_m(0xFF42, 0xEE); // IO (SCY, generic io[]) -> blocked
-        bus.write_m(0xFFFF, 0xEE); // IE  -> blocked
+        bus.poke(0xFF46, 0xC0); // schedule external-bus DMA (source = WRAM)
+        bus.idle_m(); // M=1 setup
+        bus.idle_m(); // M=2: DMA active
+        bus.write_m(0xC500, 0xAA); // WRAM (external bus) -> blocked
+        bus.write_m(0x8000, 0xBB); // VRAM (video bus) -> ALLOWED (other bus)
+        bus.write_m(0xFE10, 0xCC); // OAM -> always blocked
+        bus.write_m(0xFF42, 0xEE); // IO (SCY, external bus) -> blocked
+        bus.write_m(0xFFFF, 0xEE); // IE (external bus) -> blocked
         bus.write_m(0xFF85, 0x99); // HRAM -> allowed
-        assert_eq!(bus.peek(0xC500), 0x00, "WRAM write blocked during DMA");
-        assert_eq!(bus.peek(0x8000), 0x00, "VRAM write blocked during DMA");
-        // LCDC routes through the PPU; a blocked write leaves the default 0x91.
         assert_eq!(
-            bus.peek(0xFF40),
-            0x91,
-            "special IO (LCDC) write blocked during DMA"
+            bus.peek(0xC500),
+            0x00,
+            "WRAM write blocked (same bus as DMA)"
+        );
+        assert_eq!(
+            bus.peek(0x8000),
+            0xBB,
+            "VRAM write allowed (video bus, DMA drives external bus)"
         );
         assert_eq!(
             bus.peek(0xFF42),
             0x00,
-            "generic IO (SCY) write blocked during DMA"
+            "generic IO (SCY) write blocked (external bus)"
         );
-        assert_eq!(bus.peek(0xFFFF), 0x00, "IE write blocked during DMA");
-        assert_eq!(bus.peek(0xFE10), 0x00, "OAM write blocked during DMA");
+        assert_eq!(bus.peek(0xFFFF), 0x00, "IE write blocked (external bus)");
+        assert_eq!(
+            bus.peek(0xFE10),
+            0x00,
+            "OAM write always blocked during DMA"
+        );
         assert_eq!(bus.peek(0xFF85), 0x99, "HRAM write allowed during DMA");
     }
 
