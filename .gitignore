@@ -34,3 +34,6 @@ Cargo.lock
 graph.svg
 # Disassembly dumps produced by `just disasm` / --disassemble.
 *.gb.txt
+.DS_Store
+assets/*.gb
+assets/*.gbc

@@ -86,6 +86,22 @@ struct OamDma {
     active_for_cpu_this_m: bool,
 }
 
+/// CGB VRAM DMA (HDMA1-5, $FF51-$FF55): copies ROM/RAM -> VRAM either all at
+/// once (General-Purpose DMA, CPU halted) or $10 bytes per HBlank (HBlank DMA).
+#[derive(Default)]
+struct Hdma {
+    /// Source address (HDMA1/2), low 4 bits forced to 0.
+    source: u16,
+    /// Destination offset within VRAM (HDMA3/4), masked to $0000-$1FF0.
+    dest: u16,
+    /// Remaining $10-byte blocks to transfer (0 = idle).
+    remaining: u8,
+    /// True while an HBlank-mode transfer is armed and in progress.
+    hblank_active: bool,
+    /// Previous PPU mode, to detect the rising edge into HBlank (mode 0).
+    prev_ppu_mode: u8,
+}
+
 /// The whole non-CPU machine. Owns all memory + tickable peripherals. The CPU
 /// borrows this `&mut` for one `*_m` call at a time; no peripheral holds a
 /// reference back, so the borrow checker stays happy.
@@ -120,6 +136,7 @@ pub struct Bus {
     pub apu: ApuStub,
     pub cgb: CgbState,
     dma: OamDma,
+    hdma: Hdma,
 
     /// Test/diagnostic hook: total `tick_cpu_t` calls so far this run.
     t_tick_count: u64,
@@ -153,6 +170,7 @@ impl Default for Bus {
             apu: ApuStub::default(),
             cgb: CgbState::default(),
             dma: OamDma::default(),
+            hdma: Hdma::default(),
             t_tick_count: 0,
             ticks_at_last_sample: 0,
             serial_out: Vec::new(),
@@ -212,6 +230,9 @@ impl Bus {
         for _ in 0..4 {
             self.tick_cpu_t();
         }
+
+        // (3) HBlank VRAM DMA: copy one $10 block on each fresh HBlank entry.
+        self.hdma_hblank_step();
     }
 
     fn tick_cpu_t(&mut self) {
@@ -302,6 +323,75 @@ impl Bus {
     /// Side-effect-free read of the DMA source (no ticking).
     fn read_dma_source(&self, addr: u16) -> u8 {
         self.peek(addr)
+    }
+
+    /// Handle a write to HDMA5 ($FF55): start a General-Purpose or HBlank VRAM
+    /// DMA, or terminate an in-progress HBlank transfer.
+    fn write_hdma5(&mut self, value: u8) {
+        let blocks = (value & 0x7F) + 1;
+        if value & 0x80 == 0 {
+            // Bit 7 = 0. If an HBlank transfer is active, this terminates it.
+            // Otherwise it is a General-Purpose DMA: copy everything at once.
+            if self.hdma.hblank_active {
+                self.hdma.hblank_active = false;
+                // remaining stays as-is so reads report the leftover length.
+                return;
+            }
+            self.hdma.remaining = blocks;
+            self.hdma_run_gdma();
+        } else {
+            // Bit 7 = 1: arm an HBlank DMA. Blocks transfer $10 at a time, one
+            // per HBlank, starting on the next HBlank entry.
+            self.hdma.remaining = blocks;
+            self.hdma.hblank_active = true;
+        }
+    }
+
+    /// General-Purpose DMA: copy all remaining blocks at once. The CPU is halted
+    /// for the duration; we model that by ticking the bus 8 M-cycles per block
+    /// (the hardware transfer time) so peripherals advance correctly.
+    fn hdma_run_gdma(&mut self) {
+        while self.hdma.remaining > 0 {
+            self.hdma_copy_block();
+            // 8 M-cycles per $10-byte block (Transfer Timings, Pan Docs).
+            for _ in 0..8 {
+                for _ in 0..4 {
+                    self.tick_cpu_t();
+                }
+            }
+        }
+    }
+
+    /// Copy a single $10-byte block from source -> VRAM dest, advancing both
+    /// pointers and decrementing the remaining-block count.
+    fn hdma_copy_block(&mut self) {
+        for _ in 0..0x10 {
+            let byte = self.peek(self.hdma.source);
+            // Dest is always within VRAM ($8000-$9FFF); wrap within the 8 KiB
+            // bank. The running low bits advance per byte (unlike the start
+            // address, whose low 4 bits were forced to 0 at register-write time).
+            let off = (self.hdma.dest & 0x1FFF) as usize;
+            self.vram[self.vbk as usize][off] = byte;
+            self.hdma.source = self.hdma.source.wrapping_add(1);
+            self.hdma.dest = self.hdma.dest.wrapping_add(1);
+        }
+        self.hdma.remaining = self.hdma.remaining.saturating_sub(1);
+    }
+
+    /// Drive HBlank DMA: copy one $10 block on the rising edge into PPU mode 0
+    /// (HBlank) while a transfer is armed. Called once per M-cycle after the
+    /// PPU has advanced.
+    fn hdma_hblank_step(&mut self) {
+        let mode = self.ppu.mode;
+        let entered_hblank = mode == ppu::mode::HBLANK && self.hdma.prev_ppu_mode != ppu::mode::HBLANK;
+        self.hdma.prev_ppu_mode = mode;
+
+        if self.hdma.hblank_active && self.hdma.remaining > 0 && entered_hblank && self.ppu.lcd_enabled() {
+            self.hdma_copy_block();
+            if self.hdma.remaining == 0 {
+                self.hdma.hblank_active = false;
+            }
+        }
     }
 
     /// Map a WRAM address (0xC000-0xDFFF or its 0xE000-0xFDFF echo) to a
@@ -401,6 +491,19 @@ impl Bus {
             0xFF70 => 0xFF, // SVBK in DMG mode: open-bus (no WRAM banking)
             0xFF6C if self.cgb.cgb_mode => (self.io[0x6C] & 0x01) | 0xFE, // OPRI bit0
             0xFF6C => 0xFF, // OPRI in DMG mode: open-bus
+            0xFF55 if self.cgb.cgb_mode => {
+                // HDMA5: bit 7 = 0 while an HBlank transfer is active, 1 when
+                // idle / completed / manually stopped. bits 6-0 = remaining
+                // length in $10-blocks, minus 1; a completed transfer reads 0xFF.
+                if self.hdma.remaining == 0 {
+                    0xFF
+                } else if self.hdma.hblank_active {
+                    (self.hdma.remaining - 1) & 0x7F // active: bit 7 clear
+                } else {
+                    0x80 | ((self.hdma.remaining - 1) & 0x7F) // stopped: bit 7 set
+                }
+            }
+            0xFF51..=0xFF55 => 0xFF, // HDMA in DMG mode / write-only HDMA1-4
             0xFF68 if self.cgb.cgb_mode => self.bcps | 0x40, // BCPS: bit6 reads 1
             0xFF6A if self.cgb.cgb_mode => self.ocps | 0x40, // OCPS: bit6 reads 1
             0xFF69 if self.cgb.cgb_mode => {
@@ -511,6 +614,36 @@ impl Bus {
                 if self.cgb.cgb_mode {
                     let b = value & 0x07;
                     self.svbk = if b == 0 { 1 } else { b };
+                }
+            }
+            0xFF51 => {
+                // HDMA1: VRAM DMA source high byte (CGB only, write-only).
+                if self.cgb.cgb_mode {
+                    self.hdma.source = (self.hdma.source & 0x00FF) | ((value as u16) << 8);
+                }
+            }
+            0xFF52 => {
+                // HDMA2: source low byte; low 4 bits are forced to 0.
+                if self.cgb.cgb_mode {
+                    self.hdma.source = (self.hdma.source & 0xFF00) | ((value as u16) & 0xF0);
+                }
+            }
+            0xFF53 => {
+                // HDMA3: dest high byte; only bits 12-8 matter (dest is VRAM).
+                if self.cgb.cgb_mode {
+                    self.hdma.dest = (self.hdma.dest & 0x00FF) | (((value as u16) & 0x1F) << 8);
+                }
+            }
+            0xFF54 => {
+                // HDMA4: dest low byte; low 4 bits forced to 0.
+                if self.cgb.cgb_mode {
+                    self.hdma.dest = (self.hdma.dest & 0xFF00) | ((value as u16) & 0xF0);
+                }
+            }
+            0xFF55 => {
+                // HDMA5: start/stop a VRAM DMA transfer (CGB only).
+                if self.cgb.cgb_mode {
+                    self.write_hdma5(value);
                 }
             }
             0xFF6C => {
@@ -1116,5 +1249,96 @@ mod tests {
             !trace.contains(&0x99),
             "M-granular bus cannot observe the mid-reload TMA-copy quirk. trace={trace:?}"
         );
+    }
+
+    #[test]
+    fn hdma_general_purpose_copies_all_blocks_at_once() {
+        // GDMA (HDMA5 bit 7 = 0): copy the whole length immediately, then HDMA5
+        // reads back 0xFF (idle/complete).
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        // Source data in WRAM ($C000..). Fill 0x20 bytes (2 blocks).
+        for i in 0..0x20u16 {
+            bus.poke(0xC000 + i, (i as u8).wrapping_add(1));
+        }
+        // Source = $C000, dest = VRAM $8000 (offset 0).
+        bus.poke(0xFF51, 0xC0);
+        bus.poke(0xFF52, 0x00);
+        bus.poke(0xFF53, 0x00);
+        bus.poke(0xFF54, 0x00);
+        // Length = 2 blocks ($20 bytes): value (len/0x10 - 1) = 1, bit 7 = 0.
+        bus.poke(0xFF55, 0x01);
+        // Transfer is immediate: HDMA5 reports complete.
+        assert_eq!(bus.peek(0xFF55), 0xFF, "GDMA completes immediately");
+        // VRAM bank 0 now holds the copied bytes.
+        for i in 0..0x20u16 {
+            assert_eq!(
+                bus.vram[0][i as usize],
+                (i as u8).wrapping_add(1),
+                "GDMA byte {i} copied to VRAM"
+            );
+        }
+    }
+
+    #[test]
+    fn hdma_general_purpose_is_inert_in_dmg_mode() {
+        // DMG has no VRAM DMA: HDMA writes are ignored, HDMA5 reads open-bus.
+        let mut bus = Bus::new(); // cgb_mode = false
+        bus.poke(0xC000, 0xAB);
+        bus.poke(0xFF51, 0xC0);
+        bus.poke(0xFF52, 0x00);
+        bus.poke(0xFF53, 0x00);
+        bus.poke(0xFF54, 0x00);
+        bus.poke(0xFF55, 0x00);
+        assert_eq!(bus.peek(0xFF55), 0xFF, "DMG: HDMA5 reads open-bus");
+        assert_eq!(bus.vram[0][0], 0x00, "DMG: no VRAM DMA occurred");
+    }
+
+    #[test]
+    fn hdma_hblank_copies_one_block_per_hblank() {
+        // HBlank DMA (HDMA5 bit 7 = 1): one $10 block transfers per HBlank entry.
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        // Source data: 0x20 bytes in WRAM.
+        for i in 0..0x20u16 {
+            bus.poke(0xC000 + i, (i as u8).wrapping_add(0x40));
+        }
+        bus.poke(0xFF51, 0xC0);
+        bus.poke(0xFF52, 0x00);
+        bus.poke(0xFF53, 0x00);
+        bus.poke(0xFF54, 0x00);
+        // Arm HBlank DMA, 2 blocks (value 1, bit 7 = 1).
+        bus.poke(0xFF55, 0x81);
+        // Nothing copied until an HBlank entry.
+        assert_eq!(bus.vram[0][0], 0x00, "no copy before first HBlank");
+        assert_eq!(bus.peek(0xFF55) & 0x80, 0x00, "transfer is active");
+
+        // Drive M-cycles until the LCD reaches HBlank, then a block copies.
+        let mut copied = false;
+        for _ in 0..200 {
+            bus.idle_m();
+            if bus.vram[0][0] != 0 {
+                copied = true;
+                break;
+            }
+        }
+        assert!(copied, "one block copied on entering HBlank");
+        assert_eq!(bus.vram[0][0], 0x40, "first HBlank block byte copied");
+    }
+
+    #[test]
+    fn hdma_hblank_can_be_terminated() {
+        // Writing HDMA5 with bit 7 = 0 during an active HBlank transfer stops it;
+        // HDMA5 then reads bit 7 = 1 with the remaining-block count in bits 6-0.
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        bus.poke(0xFF51, 0xC0);
+        bus.poke(0xFF52, 0x00);
+        bus.poke(0xFF53, 0x00);
+        bus.poke(0xFF54, 0x00);
+        bus.poke(0xFF55, 0x84); // arm HBlank DMA, 5 blocks
+        assert_eq!(bus.peek(0xFF55) & 0x80, 0x00, "active before stop");
+        bus.poke(0xFF55, 0x00); // terminate
+        assert_eq!(bus.peek(0xFF55) & 0x80, 0x80, "bit 7 set after termination");
     }
 }

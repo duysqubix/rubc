@@ -1073,6 +1073,12 @@ impl Ppu {
 
     // ---- VRAM / OAM access gating -------------------------------------------
 
+    /// Whether the LCD is currently enabled (LCDC bit 7). HBlank DMA only
+    /// advances while the display is on.
+    pub fn lcd_enabled(&self) -> bool {
+        self.enabled
+    }
+
     /// VRAM (`$8000-$9FFF`) is inaccessible during mode 3 (returns 0xFF / writes
     /// dropped). When the LCD is off, VRAM is always accessible.
     pub fn vram_blocked(&self) -> bool {
