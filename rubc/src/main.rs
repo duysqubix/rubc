@@ -12,7 +12,7 @@
 use crate::gui::Framework;
 
 use clap::{Parser, Subcommand};
-use rubc_core::bus::ppu::{FramePixel, SCREEN_HEIGHT, SCREEN_WIDTH};
+use rubc_core::bus::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use rubc_core::logger;
 use rubc_core::machine::{Machine, RunStop};
 use std::time;
@@ -23,6 +23,7 @@ use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
 mod audio;
+mod capture;
 mod gui;
 
 const WIDTH: u32 = SCREEN_WIDTH as u32;
@@ -86,6 +87,53 @@ enum Command {
         output: Option<String>,
     },
     /// Print the keyboard -> Game Boy control mapping.
+    /// Boot a ROM headlessly and write a single-frame PNG screenshot.
+    Screenshot {
+        /// Path to the `.gb` / `.gbc` ROM image.
+        rom: String,
+        /// Output PNG path.
+        #[arg(long, value_name = "PNG")]
+        out: String,
+        /// Frames to run before capturing (test ROMs need enough to reach
+        /// their result screen; games need enough for a stable frame).
+        #[arg(long, default_value_t = 600)]
+        frames: u32,
+        /// Nearest-neighbour upscale factor (1 = native 160x144).
+        #[arg(long, default_value_t = 1)]
+        scale: u32,
+        /// Force DMG mode regardless of the cartridge CGB flag.
+        #[arg(long, conflicts_with = "force_cgb")]
+        force_dmg: bool,
+        /// Force CGB mode regardless of the cartridge CGB flag.
+        #[arg(long)]
+        force_cgb: bool,
+    },
+    /// Boot a ROM headlessly and record an animated, looping GIF.
+    Gif {
+        /// Path to the `.gb` / `.gbc` ROM image.
+        rom: String,
+        /// Output GIF path.
+        #[arg(long, value_name = "GIF")]
+        out: String,
+        /// Number of GIF frames to capture.
+        #[arg(long, default_value_t = 120)]
+        frames: u32,
+        /// Capture one GIF frame every M emulator frames (2 = ~30fps).
+        #[arg(long, default_value_t = 2)]
+        every: u32,
+        /// Nearest-neighbour upscale factor.
+        #[arg(long, default_value_t = 3)]
+        scale: u32,
+        /// Skip this many warm-up frames (boot logos) before recording.
+        #[arg(long, default_value_t = 0)]
+        skip: u32,
+        /// Force DMG mode regardless of the cartridge CGB flag.
+        #[arg(long, conflicts_with = "force_cgb")]
+        force_dmg: bool,
+        /// Force CGB mode regardless of the cartridge CGB flag.
+        #[arg(long)]
+        force_cgb: bool,
+    },
     Controls,
 }
 
@@ -128,6 +176,43 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Command::Run { rom, opts }) => run(&rom, &opts),
         Some(Command::Cartdump { rom, raw, output }) => cartdump(&rom, raw, output.as_deref()),
+        Some(Command::Screenshot {
+            rom,
+            out,
+            frames,
+            scale,
+            force_dmg,
+            force_cgb,
+        }) => {
+            let mut machine = boot(&rom, force_dmg, force_cgb)?;
+            capture::capture_screenshot(&mut machine, std::path::Path::new(&out), frames, scale)?;
+            println!("wrote screenshot to {out} ({frames} frames, scale {scale})");
+            Ok(())
+        }
+        Some(Command::Gif {
+            rom,
+            out,
+            frames,
+            every,
+            scale,
+            skip,
+            force_dmg,
+            force_cgb,
+        }) => {
+            let mut machine = boot(&rom, force_dmg, force_cgb)?;
+            capture::capture_gif(
+                &mut machine,
+                std::path::Path::new(&out),
+                frames,
+                every,
+                scale,
+                skip,
+            )?;
+            println!(
+                "wrote gif to {out} ({frames} frames, every {every}, scale {scale}, skip {skip})"
+            );
+            Ok(())
+        }
         Some(Command::Controls) => {
             print!("{CONTROLS_HELP}");
             Ok(())
@@ -143,13 +228,13 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Build a `Machine` from a ROM file, honoring the DMG/CGB boot override.
-fn boot(rom_path: &str, opts: &RunOpts) -> anyhow::Result<Machine> {
+fn boot(rom_path: &str, force_dmg: bool, force_cgb: bool) -> anyhow::Result<Machine> {
     let rom = std::fs::read(rom_path)
         .map_err(|e| anyhow::anyhow!("failed to read ROM {rom_path:?}: {e}"))?;
     let cgb_flag = rom.get(0x0143).is_some_and(|f| f & 0x80 != 0);
-    let cgb = if opts.force_dmg {
+    let cgb = if force_dmg {
         false
-    } else if opts.force_cgb {
+    } else if force_cgb {
         true
     } else {
         cgb_flag
@@ -162,7 +247,7 @@ fn boot(rom_path: &str, opts: &RunOpts) -> anyhow::Result<Machine> {
 }
 
 fn run(rom_path: &str, opts: &RunOpts) -> anyhow::Result<()> {
-    let mut machine = boot(rom_path, opts)?;
+    let mut machine = boot(rom_path, opts.force_dmg, opts.force_cgb)?;
     if opts.no_gui {
         // Headless test-ROM runs never touch the filesystem for saves.
         return run_headless(&mut machine, opts);
@@ -447,37 +532,13 @@ fn run_windowed(mut machine: Machine, save_path: std::path::PathBuf) -> anyhow::
     });
 }
 
-/// The 4 DMG shades (lightest -> darkest) as RGBA.
-const DMG_SHADES: [[u8; 4]; 4] = [
-    [0xE0, 0xF8, 0xD0, 0xFF], // 0: lightest
-    [0x88, 0xC0, 0x70, 0xFF], // 1
-    [0x34, 0x68, 0x56, 0xFF], // 2
-    [0x08, 0x18, 0x20, 0xFF], // 3: darkest
-];
-
-/// Map the PPU's resolved framebuffer into the RGBA `pixels` buffer. The PPU has
-/// already applied BGP/OBP at emission time, so each pixel is a display-ready
-/// shade -- the frontend only maps shade -> RGB.
+/// Map the PPU's resolved framebuffer into the RGBA `pixels` buffer. Shares the
+/// per-pixel shade->RGB mapping with the headless capture path so the window and
+/// screenshots/GIFs render identically.
 fn draw_framebuffer(machine: &Machine, frame: &mut [u8]) {
     let fb = &machine.bus.ppu.framebuffer;
     for (px, &pixel) in frame.chunks_exact_mut(4).zip(fb.iter()) {
-        match pixel {
-            FramePixel::DmgShade(shade) => {
-                px.copy_from_slice(&DMG_SHADES[shade as usize]);
-            }
-            FramePixel::CgbRgb555(rgb) => {
-                // CGB color path: expand each 5-bit channel to 8-bit with
-                // (x<<3)|(x>>2) so full intensity (31) maps to 255 (not 248).
-                let expand = |c: u16| -> u8 {
-                    let c = (c & 0x1F) as u8;
-                    (c << 3) | (c >> 2)
-                };
-                let r = expand(rgb);
-                let g = expand(rgb >> 5);
-                let b = expand(rgb >> 10);
-                px.copy_from_slice(&[r, g, b, 0xFF]);
-            }
-        }
+        px.copy_from_slice(&capture::frame_pixel_rgba(pixel));
     }
 }
 

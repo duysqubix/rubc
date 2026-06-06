@@ -8,6 +8,10 @@ anyhow = "1.0.79"
 clap = { version = "4.5.0", features = ["derive"] }
 cpal = "0.17"
 egui = "0.23"
+# Pure-Rust image encoders for headless capture (screenshot/gif). Both pull only
+# Rust deps (miniz_oxide/fdeflate for PNG, weezl LZW for GIF) -- no C / -sys / FFI.
+gif = "0.13"
+png = "0.17"
 egui-wgpu = "0.23"
 egui-winit = { version = "0.23", default-features = false, features = ["links"] }
 log = "0.4.20"
