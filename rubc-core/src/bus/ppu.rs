@@ -446,7 +446,8 @@ impl Ppu {
         }
 
         if self.ly <= LAST_VISIBLE_LINE {
-            if self.line_dot == DOTS_PER_LINE - 4 && self.ly != LAST_VISIBLE_LINE {
+            if self.line_dot == DOTS_PER_LINE - 4 && (self.ly != LAST_VISIBLE_LINE || self.cgb_mode)
+            {
                 self.stat_mode2_pulse = true;
             } else if self.line_dot == 4 {
                 self.stat_mode = mode::OAM_SCAN;
@@ -1199,6 +1200,23 @@ mod tests {
         tick_with(p, n, &zero_vram(), &zero_oam())
     }
 
+    fn tick_cgb(p: &mut Ppu, n: u32) -> u8 {
+        let mut irq = Interrupts::default();
+        let banks = [[0u8; 0x2000]; 2];
+        let oam = zero_oam();
+        let zero = [0u8; 64];
+        let cgb = CgbRenderState {
+            enabled: true,
+            bg_palette_ram: &zero,
+            obj_palette_ram: &zero,
+        };
+        for _ in 0..n {
+            p.tick_dot(&mut irq, &banks, &oam, IDENTITY_PALETTES, cgb);
+        }
+        irq.settle_boundary();
+        irq.if_ & 0x1F
+    }
+
     fn mode3_len(p: &mut Ppu, vram: &[u8; 0x2000], oam: &[u8; 0xA0]) -> u32 {
         tick_with(p, MODE2_DOTS, vram, oam);
         assert_eq!(p.mode, mode::DRAWING);
@@ -1266,6 +1284,22 @@ mod tests {
         assert_eq!(p.read_stat() & 0x03, mode::VBLANK);
         assert_eq!(irq & 0x03, 0x03);
         assert_eq!(tick(&mut p, 1) & 0x02, 0);
+    }
+
+    #[test]
+    fn line144_cgb_mode2_pulse_precedes_vblank_bucket() {
+        let mut p = ppu_at_line_start();
+        p.ly = LAST_VISIBLE_LINE;
+        p.line_dot = DOTS_PER_LINE - 5;
+        p.mode = mode::HBLANK;
+        p.stat_mode = mode::HBLANK;
+        p.stat_enables = 0x20;
+        p.cgb_mode = true;
+        assert_eq!(tick_cgb(&mut p, 1) & 0x03, 0x02);
+        assert_eq!(tick_cgb(&mut p, 3) & 0x03, 0);
+        let irq = tick_cgb(&mut p, 1);
+        assert_eq!(p.ly, LAST_VISIBLE_LINE + 1);
+        assert_eq!(irq & 0x03, 0x01);
     }
 
     #[test]
