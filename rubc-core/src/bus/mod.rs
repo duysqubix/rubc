@@ -634,7 +634,7 @@ impl Bus {
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupts.if_ | 0xE0, // IF lives in interrupts, not io[]
-            0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.read(addr),
+            0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.read_for_model(addr, self.cgb.cgb_mode),
             0xFF40 => self.ppu.read_lcdc(),
             0xFF41 => self.ppu.read_stat(),
             0xFF42 => self.ppu.read_scy(),
