@@ -258,18 +258,23 @@ is the tiebreaker for any timing disagreement.
 | Color palettes | `Palettes.md`, `CGB_Registers.md` | ch. "Video" | — |
 | CGB VBlank/STAT intr | — | — | `misc/ppu/vblank_stat_intr-C.s` |
 
-## Existing Foundation (state as of Phase A)
+## Current State
 
-- **rubc-core/** (library): SM83 CPU **complete** (all 256 main + 256 CB opcodes,
-  `opcodes.rs` / `opcodes_cb.rs`, `phf` dispatch maps); memory bus complete;
-  `bits.rs` ALU macros. **Partial:** MBC (only MBC0+MBC1), timer (no obscure
-  edge behavior), interrupts (no halt-bug / IME-timing edge cases).
-  **Stub:** PPU (`LY` hardcoded `0x90`), APU (none), CGB (flags only).
-- **rubc/** (binary): `winit 0.28` + `pixels` + `egui 0.23`. `draw()` is a dummy
-  pattern, NOT wired to a PPU framebuffer yet.
-- **Tests:** `rubc-core/tests/opcode_test.rs` runs SingleStepTests/sm83 JSON
-  vectors (`assets/sm83/v1/`). `just regression-test` runs blargg `cpu_instrs.gb`
-  via serial. No mooneye/blargg-ROM harness yet.
+- **rubc-core/** (library): SM83 CPU **complete** (all 256 main + 256 CB
+  opcodes, `phf` dispatch); memory bus complete; timer, interrupts (EI delay,
+  HALT bug, dispatch priority) complete. **PPU complete** (FIFO renderer,
+  per-dot mode scheduler, STAT/IRQ timing, dmg/cgb-acid2 pixel-exact, mooneye
+  PPU 13/13). **APU complete** (4 channels + frame sequencer + stereo sample
+  output; blargg dmg_sound 12/12, cgb_sound 12/12). **CGB complete** (color,
+  double-speed, VRAM/WRAM banking, HDMA, palettes). **MBC0/1/2/3+RTC/5.**
+  Battery-backed `.sav` persistence.
+- **rubc/** (binary): `winit` + `pixels` + `egui` window, framebuffer wired to
+  the PPU output, keyboard joypad input, and `cpal` audio. `screenshot` / `gif`
+  capture subcommands.
+- **Tests:** `opcode_test.rs` (SingleStepTests/sm83 vectors), `mooneye_test.rs`
+  (WLA-DX-built suite, 93/115), `acid2_test.rs` (acid2 + mealybug + cgb-acid-
+  hell pixel diffs), plus blargg gates in `machine.rs`. `just check` runs the
+  full gate.
 
 ## Build / Test Commands (justfile)
 
