@@ -569,7 +569,7 @@ impl Bus {
         // side-effect-free diagnostics via `peek` are unaffected.)
         match addr {
             0x8000..=0x9FFF if self.ppu.vram_blocked() => return 0xFF,
-            0xFE00..=0xFE9F if self.ppu.oam_blocked() => return 0xFF,
+            0xFE00..=0xFE9F if self.ppu.oam_read_blocked() => return 0xFF,
             _ => {}
         }
         self.peek(addr)
@@ -591,8 +591,8 @@ impl Bus {
         // PPU mode blocking: writes to VRAM (mode 3) / OAM (modes 2-3) are
         // dropped while the PPU owns them.
         match addr {
-            0x8000..=0x9FFF if self.ppu.vram_blocked() => return,
-            0xFE00..=0xFE9F if self.ppu.oam_blocked() => return,
+            0x8000..=0x9FFF if self.ppu.vram_write_blocked() => return,
+            0xFE00..=0xFE9F if self.ppu.oam_write_blocked() => return,
             _ => {}
         }
         self.poke(addr, value);

@@ -28,8 +28,11 @@ const DOTS_PER_LINE: u32 = 456;
 /// Mode 2 (OAM scan) duration in dots.
 const MODE2_DOTS: u32 = 80;
 /// Baseline mode 3 length: 12-dot fetch startup + 160 visible pixels.
-#[cfg(test)]
 const BASE_MODE3_DOTS: u32 = 172;
+const LCD_ON_FIRST_LINE_DOTS: u32 = DOTS_PER_LINE - 4;
+const LCD_ON_FIRST_MODE3_START: u32 = MODE2_DOTS;
+const LCD_ON_FIRST_MODE3_PUBLIC_START: u32 = LCD_ON_FIRST_MODE3_START;
+const LCD_ON_FIRST_MODE3_PUBLIC_END: u32 = LCD_ON_FIRST_MODE3_START + BASE_MODE3_DOTS - 1;
 /// Last visible scanline (LY 0..=143 are visible; 144..=153 are VBlank).
 const LAST_VISIBLE_LINE: u8 = 143;
 /// Last scanline before LY wraps back to 0.
@@ -317,6 +320,9 @@ pub struct Ppu {
 
     /// LCD master enable (LCDC bit 7).
     enabled: bool,
+    first_line_after_lcd_on: bool,
+    lcd_on_line1_coincidence_delay: bool,
+    lcd_on_line1_delayed_mode2: bool,
     /// Full LCDC register (`$FF40`).
     lcdc: u8,
     /// Dot counter within the current scanline (0..456).
@@ -378,6 +384,9 @@ impl Default for Ppu {
             cgb_obj_palette_ram: [0xFF; 64],
             // LCD starts enabled with the post-boot LCDC ($91 = on, BG on, ...).
             enabled: true,
+            first_line_after_lcd_on: false,
+            lcd_on_line1_coincidence_delay: false,
+            lcd_on_line1_delayed_mode2: false,
             lcdc: 0x91,
             line_dot: 0,
             lyc: 0,
@@ -443,13 +452,18 @@ impl Ppu {
         }
 
         self.line_dot += 1;
-        if self.line_dot >= DOTS_PER_LINE {
+        if self.line_dot >= self.dots_this_line() {
             self.start_next_scanline(irq);
             self.update_stat_line(irq);
             return;
         }
 
         if self.ly <= LAST_VISIBLE_LINE {
+            if self.lcd_on_line1_coincidence_delay && self.line_dot >= 4 {
+                self.update_coincidence();
+                self.lcd_on_line1_coincidence_delay = false;
+            }
+
             self.update_visible_stat_read_mode();
 
             if self.line_dot == DOTS_PER_LINE - 4 && self.ly == LAST_VISIBLE_LINE && self.cgb_mode {
@@ -460,10 +474,25 @@ impl Ppu {
                 mode::OAM_SCAN => {
                     self.tick_oam_scan(oam);
                     if self.line_dot >= MODE2_DOTS {
+                        self.lcd_on_line1_delayed_mode2 = false;
                         self.enter_drawing(irq);
                     }
                 }
                 mode::DRAWING => self.tick_drawing(vram, irq),
+                mode::HBLANK => {
+                    if self.lcd_on_line1_delayed_mode2 && self.line_dot >= 4 {
+                        self.begin_oam_scan();
+                        self.set_mode(mode::OAM_SCAN, irq);
+                        self.stat_read_mode = mode::OAM_SCAN;
+                        self.stat_mode2_pulse = true;
+                    } else if self.first_line_after_lcd_on
+                        && self.ly == 0
+                        && self.line_dot >= LCD_ON_FIRST_MODE3_START
+                        && self.lcd_x == 0
+                    {
+                        self.enter_drawing(irq);
+                    }
+                }
                 _ => {}
             }
         }
@@ -471,11 +500,27 @@ impl Ppu {
         self.update_stat_line(irq);
     }
 
+    fn dots_this_line(&self) -> u32 {
+        if self.first_line_after_lcd_on && self.ly == 0 {
+            LCD_ON_FIRST_LINE_DOTS
+        } else {
+            DOTS_PER_LINE
+        }
+    }
+
     fn start_next_scanline(&mut self, irq: &mut Interrupts) {
+        let was_lcd_on_first_line = self.first_line_after_lcd_on && self.ly == 0;
         self.line_dot = 0;
         self.ly = if self.ly >= LAST_LINE { 0 } else { self.ly + 1 };
+        self.first_line_after_lcd_on = false;
+        self.lcd_on_line1_delayed_mode2 = false;
         self.stat_mode0_level = false;
-        self.update_coincidence();
+        if was_lcd_on_first_line {
+            self.coincidence = false;
+            self.lcd_on_line1_coincidence_delay = true;
+        } else {
+            self.update_coincidence();
+        }
 
         if self.ly > LAST_VISIBLE_LINE {
             if self.ly == LAST_VISIBLE_LINE + 1 {
@@ -487,6 +532,10 @@ impl Ppu {
             if !self.cgb_mode && self.ly == LAST_VISIBLE_LINE + 1 {
                 self.stat_mode2_pulse = true;
             }
+        } else if was_lcd_on_first_line {
+            self.set_mode(mode::HBLANK, irq);
+            self.stat_read_mode = mode::HBLANK;
+            self.lcd_on_line1_delayed_mode2 = true;
         } else {
             self.set_mode(mode::OAM_SCAN, irq);
             self.stat_read_mode = mode::HBLANK;
@@ -495,17 +544,50 @@ impl Ppu {
     }
 
     fn update_visible_stat_read_mode(&mut self) {
-        if self.mode == mode::HBLANK && self.line_dot < MODE2_DOTS {
-            self.stat_read_mode = mode::HBLANK;
+        if self.first_line_after_lcd_on && self.ly == 0 {
+            self.stat_read_mode = match self.line_dot {
+                0..=79 => mode::HBLANK,
+                LCD_ON_FIRST_MODE3_PUBLIC_START..=LCD_ON_FIRST_MODE3_PUBLIC_END => mode::DRAWING,
+                _ => mode::HBLANK,
+            };
             return;
         }
 
-        self.stat_read_mode = match self.line_dot {
-            0..=3 => mode::HBLANK,
-            4..=83 => mode::OAM_SCAN,
-            84..=255 => mode::DRAWING,
-            _ => mode::HBLANK,
+        self.stat_read_mode = if self.line_dot < 4 {
+            mode::HBLANK
+        } else if self.line_dot < MODE2_DOTS + 4 {
+            mode::OAM_SCAN
+        } else if self.line_dot <= self.public_mode3_end_dot() {
+            mode::DRAWING
+        } else {
+            mode::HBLANK
         };
+    }
+
+    fn public_mode3_end_dot(&self) -> u32 {
+        let mut len = BASE_MODE3_DOTS + u32::from(self.scx & 0x07);
+        let mut seen_tiles = [false; 32];
+        let mut sprite_penalty = 0u32;
+        for sprite in self.scanline_sprites[..self.scanline_sprite_count]
+            .iter()
+            .copied()
+        {
+            if self.lcdc & 0x02 == 0 {
+                break;
+            }
+            if sprite.x >= 168 {
+                continue;
+            }
+            sprite_penalty += 6;
+            let left = sprite.x.wrapping_sub(8).wrapping_add(self.scx);
+            let tile = ((left / 8) & 0x1F) as usize;
+            if !seen_tiles[tile] {
+                seen_tiles[tile] = true;
+                sprite_penalty += u32::from(5u8.saturating_sub(left & 0x07));
+            }
+        }
+        len += sprite_penalty / 4 * 4;
+        MODE2_DOTS + 3 + len
     }
 
     fn set_mode(&mut self, new_mode: u8, irq: &mut Interrupts) {
@@ -776,9 +858,6 @@ impl Ppu {
             return false;
         }
 
-        // Sprites are sorted by (x, oam_index). Skip any leading off-screen
-        // sprites (X==0; they consumed a scan slot but are never drawn), then
-        // the next sprite is ready iff its X reaches the current pixel.
         while self.next_sprite < self.scanline_sprite_count
             && self.scanline_sprites[self.next_sprite].x == 0
         {
@@ -809,9 +888,6 @@ impl Ppu {
 
         if let Some(sprite) = self.pending_sprite.take() {
             self.load_sprite_fifo(vram, sprite);
-            // TODO(rubc-fde sprite-timing): calibrate the exact dot where OBJ
-            // push and LCD shift overlap. The coarse GBEDG 6-remaining-pixel
-            // idle penalty is modelled here.
             let remaining = self.bg_fifo.len().min(6) as u8;
             self.sprite_idle_ticks = 6 - remaining;
         }
@@ -1016,9 +1092,14 @@ impl Ppu {
             self.ly = 0;
             self.line_dot = 0;
             self.mode = mode::HBLANK;
+            self.first_line_after_lcd_on = false;
+            self.lcd_on_line1_coincidence_delay = false;
+            self.lcd_on_line1_delayed_mode2 = false;
             self.stat_read_mode = mode::HBLANK;
             self.stat_mode0_level = false;
             self.stat_mode2_pulse = false;
+            self.lcd_x = 0;
+            self.drawing_dots = 0;
             self.bg_fifo.clear();
             self.sprite_fifo.clear();
         } else if !was_on && self.enabled {
@@ -1029,9 +1110,14 @@ impl Ppu {
             self.ly = 0;
             self.line_dot = 0;
             self.mode = mode::HBLANK;
+            self.first_line_after_lcd_on = true;
+            self.lcd_on_line1_coincidence_delay = false;
+            self.lcd_on_line1_delayed_mode2 = false;
             self.stat_read_mode = mode::HBLANK;
             self.stat_mode0_level = false;
             self.stat_mode2_pulse = false;
+            self.lcd_x = 0;
+            self.drawing_dots = 0;
             self.window_y_condition = false;
             self.window_line_counter = 0;
             self.bg_fifo.clear();
@@ -1134,13 +1220,36 @@ impl Ppu {
     /// VRAM (`$8000-$9FFF`) is inaccessible during mode 3 (returns 0xFF / writes
     /// dropped). When the LCD is off, VRAM is always accessible.
     pub fn vram_blocked(&self) -> bool {
-        self.enabled && self.mode == mode::DRAWING
+        self.enabled && self.drawing_access_blocked()
+    }
+
+    pub fn vram_write_blocked(&self) -> bool {
+        self.vram_blocked()
+            && !(self.mode == mode::DRAWING
+                && !self.first_line_after_lcd_on
+                && self.drawing_dots < 4)
     }
 
     /// OAM (`$FE00-$FE9F`) is inaccessible during modes 2 and 3. When the LCD is
     /// off, OAM is always accessible.
     pub fn oam_blocked(&self) -> bool {
-        self.enabled && (self.mode == mode::OAM_SCAN || self.mode == mode::DRAWING)
+        self.enabled && (self.mode == mode::OAM_SCAN || self.drawing_access_blocked())
+    }
+
+    pub fn oam_read_blocked(&self) -> bool {
+        self.oam_blocked() || (self.enabled && self.lcd_on_line1_delayed_mode2)
+    }
+
+    pub fn oam_write_blocked(&self) -> bool {
+        self.oam_blocked()
+            && !(self.mode == mode::OAM_SCAN && self.line_dot < 4)
+            && !(self.mode == mode::DRAWING
+                && !self.first_line_after_lcd_on
+                && self.drawing_dots < 4)
+    }
+
+    fn drawing_access_blocked(&self) -> bool {
+        self.mode == mode::DRAWING || self.stat_read_mode == mode::DRAWING
     }
 
     /// CGB palette RAM (BCPD/OCPD, `$FF69`/`$FF6B`) is inaccessible during mode 3
@@ -1405,6 +1514,11 @@ mod tests {
         assert!(p.vram_blocked());
         tick(&mut p, BASE_MODE3_DOTS);
         assert_eq!(p.mode, mode::HBLANK);
+        assert_eq!(p.read_stat() & 0x03, mode::DRAWING);
+        assert!(p.oam_blocked(), "access follows public mode 3 tail");
+        assert!(p.vram_blocked(), "access follows public mode 3 tail");
+        tick(&mut p, 4);
+        assert_eq!(p.read_stat() & 0x03, mode::HBLANK);
         assert!(!p.oam_blocked());
         assert!(!p.vram_blocked());
     }
