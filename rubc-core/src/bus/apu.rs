@@ -13,11 +13,11 @@ pub struct Apu {
     /// Stereo output samples (interleaved L,R as f32 in [-1.0, 1.0]) collected
     /// at the target output rate via the downsample accumulator below.
     sample_buffer: Vec<f32>,
-    /// Fractional accumulator for downsampling the ~1.048576 MHz T-cycle rate
+    /// Fractional accumulator for downsampling the 4.194304 MHz APU tick rate
     /// down to `t_per_sample`. When it crosses `t_per_sample` a stereo sample
     /// is emitted.
     sample_accum: f32,
-    /// T-cycles per output sample = 1_048_576 / output_sample_rate. 0 disables
+    /// Ticks per output sample = 4_194_304 / output_sample_rate. 0 disables
     /// sample collection (e.g. headless test runs that only check registers).
     t_per_sample: f32,
 }
@@ -48,13 +48,14 @@ impl Apu {
     }
 
     /// Enable audio sample collection at `rate` Hz (e.g. 48000). Pass 0 to
-    /// disable (headless/test runs). The GB master clock is 4_194_304 Hz but the
-    /// APU is ticked once per T-cycle here at 1_048_576 Hz (4_194_304 / 4).
+    /// disable (headless/test runs). `tick_t` runs once per T-cycle = the full
+    /// 4_194_304 Hz GameBoy clock (in CGB double-speed the APU is gated to every
+    /// 2nd T, the same wall-clock rate).
     pub fn set_sample_rate(&mut self, rate: u32) {
         self.t_per_sample = if rate == 0 {
             0.0
         } else {
-            1_048_576.0 / rate as f32
+            4_194_304.0 / rate as f32
         };
         self.sample_accum = 0.0;
         self.sample_buffer.clear();
@@ -1101,6 +1102,27 @@ mod tests {
             apu.buffered_frames(),
             0,
             "samples collected with rate disabled"
+        );
+    }
+
+    #[test]
+    fn sample_rate_calibrated_to_full_gameboy_clock() {
+        // tick_t runs once per T-cycle = 4_194_304 Hz. At 48 kHz exactly one
+        // stereo sample must be emitted every 4_194_304/48_000 ~= 87.38 ticks.
+        // Run exactly 4_194_304 ticks (1 emulated second) and assert ~48_000
+        // stereo frames (within 1%). Guards the divisor (regression: was 4x off).
+        let mut apu = Apu::default();
+        apu.set_sample_rate(48_000);
+        apu.write(0xFF26, 0x80, false);
+        for _ in 0..4_194_304u32 {
+            apu.tick_t();
+        }
+        let frames = apu.buffered_frames();
+        let lo = 48_000 - 480;
+        let hi = 48_000 + 480;
+        assert!(
+            (lo..=hi).contains(&frames),
+            "expected ~48000 stereo frames per emulated second, got {frames}"
         );
     }
 }

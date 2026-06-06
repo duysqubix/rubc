@@ -22,8 +22,8 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
-mod gui;
 mod audio;
+mod gui;
 
 const WIDTH: u32 = SCREEN_WIDTH as u32;
 const HEIGHT: u32 = SCREEN_HEIGHT as u32;

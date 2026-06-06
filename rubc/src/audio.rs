@@ -53,9 +53,7 @@ impl AudioOutput {
         let sample_format = supported.sample_format();
         let config: cpal::StreamConfig = supported.config();
 
-        log::info!(
-            "audio: rate={sample_rate}Hz channels={channels} format={sample_format:?}"
-        );
+        log::info!("audio: rate={sample_rate}Hz channels={channels} format={sample_format:?}");
 
         let ring: Arc<Mutex<VecDeque<f32>>> =
             Arc::new(Mutex::new(VecDeque::with_capacity(MAX_BUFFERED_FRAMES * 2)));
