@@ -31,7 +31,8 @@ pub use flat::FlatBus;
 pub use ppu::{CgbRenderState, DmgPalettes, Ppu};
 
 use apu::Apu;
-use stubs::{CgbState, Interrupts};
+pub use stubs::Button;
+use stubs::{CgbState, Interrupts, Joypad};
 use timer::Timer;
 
 /// What the CPU calls each M-cycle. Each `*_m` method runs the full invariant.
@@ -154,6 +155,7 @@ pub struct Bus {
     pub io: [u8; 0x80],
 
     pub interrupts: Interrupts,
+    pub joypad: Joypad,
     pub timer: Timer,
     pub ppu: Ppu,
     pub apu: Apu,
@@ -188,6 +190,7 @@ impl Default for Bus {
             oam: [0; 0xA0],
             io: [0; 0x80],
             interrupts: Interrupts::default(),
+            joypad: Joypad::default(),
             timer: Timer::power_on(),
             ppu: Ppu::default(),
             apu: Apu::default(),
@@ -204,6 +207,14 @@ impl Default for Bus {
 impl Bus {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Set a joypad button's pressed state. A fresh press of a selected-line
+    /// button raises the joypad interrupt (IF bit 4).
+    pub fn set_button(&mut self, button: Button, pressed: bool) {
+        if self.joypad.set_button(button, pressed) {
+            self.interrupts.request(4); // joypad interrupt
+        }
     }
 
     /// Instruction-boundary hook (before the CPU polls `irq_pending_mask`).
@@ -682,12 +693,10 @@ impl Bus {
         let or_mask: u8 = match addr {
             // P1/JOYP ($FF00): bits 7-6 always read 1; bits 5-4 are the writable
             // line-select; bits 3-0 report the selected line's buttons, active
-            // LOW (1 = not pressed). With no joypad input wired, nothing is
-            // pressed, so the low nibble always reads 1111. Returning the raw
-            // io byte for the low nibble (0 after a select write) would signal
-            // "all buttons held", which stalls games that wait for no-input.
-            0xFF00 => return (raw & 0x30) | 0xCF, // bits 7-6 + low nibble = 1 (idle)
-            0xFF01 => 0x00,                       // SB: full
+            // LOW (1 = pressed). The Joypad synthesizes the full register from
+            // the logical button state + the selected line.
+            0xFF00 => return self.joypad.read_p1(),
+            0xFF01 => 0x00,                            // SB: full
             0xFF02 => 0x7E, // SC: bit7 + bit0 valid, 6-1 read 1 (DMG); CGB adds bit0
             0xFF42 | 0xFF43 | 0xFF4A | 0xFF4B => 0x00, // SCY/SCX/WY/WX: full (but PPU-owned)
             0xFF47..=0xFF49 => 0x00, // BGP/OBP0/OBP1: full
@@ -733,6 +742,7 @@ impl Bus {
                 self.wram[bank][off] = value;
             }
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
+            0xFF00 => self.joypad.write_p1(value), // P1/JOYP: only bits 5-4 (line select) writable
             0xFF04 => {
                 let div_apu_before = self.div_apu_bit_high();
                 self.timer.write(addr, value, &mut self.interrupts);
@@ -853,7 +863,9 @@ impl Bus {
                     self.io[0x02] = value;
                 }
             }
-            0xFF00..=0xFF7F => self.io[(addr - 0xFF00) as usize] = value,
+            // $FF00 (P1/JOYP) is handled by the joypad arm above; the rest of
+            // the IO page falls through to the raw backing store.
+            0xFF01..=0xFF7F => self.io[(addr - 0xFF00) as usize] = value,
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             0xFFFF => self.interrupts.ie = value,
             0x0000..=0x7FFF => self.cart.write_reg(addr, value), // MBC control regs
@@ -1638,5 +1650,36 @@ mod tests {
         // Neither line selected (both bits high): low nibble still 1111.
         bus.poke(0xFF00, 0x30);
         assert_eq!(bus.peek(0xFF00), 0xFF, "no line selected, all bits 1");
+    }
+
+    #[test]
+    fn joypad_reads_pressed_buttons_and_raises_irq() {
+        let mut bus = Bus::new();
+        bus.interrupts.ie = 0x10; // enable joypad interrupt (bit 4)
+
+        // Select the action-button line (bit 5 = 0 selects action).
+        bus.poke(0xFF00, 0x10); // bit5=0 (action selected), bit4=1 (dpad not)
+                                // Press A -> action line bit 0 reads 0 (active-low). Fresh press of a
+                                // selected-line button raises the joypad IRQ (IF bit 4).
+        bus.set_button(Button::A, true);
+        assert_eq!(bus.peek(0xFF00) & 0x0F, 0x0E, "A pressed -> bit0 low");
+        assert_ne!(bus.interrupts.if_ & 0x10, 0, "joypad IRQ raised on press");
+
+        // While the action line is selected, a d-pad press is NOT visible.
+        bus.set_button(Button::Right, true);
+        assert_eq!(
+            bus.peek(0xFF00) & 0x0F,
+            0x0E,
+            "dpad press invisible while action line selected"
+        );
+
+        // Switch to the d-pad line (bit 4 = 0): Right now reads low, A hidden.
+        bus.poke(0xFF00, 0x20); // bit4=0 (dpad selected), bit5=1 (action not)
+        assert_eq!(bus.peek(0xFF00) & 0x0F, 0x0E, "Right pressed -> bit0 low");
+
+        // Release everything -> idle.
+        bus.set_button(Button::A, false);
+        bus.set_button(Button::Right, false);
+        assert_eq!(bus.peek(0xFF00) & 0x0F, 0x0F, "all released -> idle");
     }
 }

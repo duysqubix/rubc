@@ -271,6 +271,24 @@ fn run_windowed(mut machine: Machine) -> anyhow::Result<()> {
                 framework.resize(size.width, size.height);
             }
 
+            // Map keyboard -> Game Boy joypad. Z=B X=A Enter=Start RShift/
+            // Backspace=Select, arrow keys=d-pad. key_held drives the active-low
+            // register; key_pressed edges raise the joypad interrupt in core.
+            use rubc_core::bus::Button;
+            for (key, button) in [
+                (VirtualKeyCode::Up, Button::Up),
+                (VirtualKeyCode::Down, Button::Down),
+                (VirtualKeyCode::Left, Button::Left),
+                (VirtualKeyCode::Right, Button::Right),
+                (VirtualKeyCode::X, Button::A),
+                (VirtualKeyCode::Z, Button::B),
+                (VirtualKeyCode::Return, Button::Start),
+                (VirtualKeyCode::RShift, Button::Select),
+                (VirtualKeyCode::Back, Button::Select),
+            ] {
+                machine.set_button(button, input.key_held(key));
+            }
+
             // One full frame: emulate, draw, and PRESENT inline so the render
             // cost is inside the pacing budget (the old split RedrawRequested
             // render leaked ~1ms past the target and capped FPS at ~56).

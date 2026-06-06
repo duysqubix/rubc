@@ -125,6 +125,12 @@ impl Machine {
         }
     }
 
+    /// Set a joypad button's pressed state (true = pressed). A fresh press
+    /// raises the joypad interrupt. Call from the frontend on key events.
+    pub fn set_button(&mut self, button: crate::bus::Button, pressed: bool) {
+        self.bus.set_button(button, pressed);
+    }
+
     fn at_boundary(&self) -> bool {
         self.cpu.exec_is_boundary()
     }
