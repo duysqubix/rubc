@@ -7,12 +7,12 @@
 //!      `active_for_cpu_this_m` (so a conflicting CPU access this M-cycle sees
 //!      the in-flight DMA byte).
 //!   2. **T-cycle ticks split around the access** — timer / PPU / APU advance.
-//!      A WRITE commits at the T3 boundary (tick 3 → commit → tick 1), so the
-//!      4th peripheral tick observes the new value, matching DMG hardware where
-//!      a write latches late in the cycle. A READ/idle ticks all 4 T then
-//!      samples at end-of-M (the correct DMG placement; Oracle ses_16262cca4
-//!      confirmed reads must NOT move to T3). The timer
-//!      always advances 4 per M; in CGB double-speed PPU+APU advance every 2nd T.
+//!      TAC commits mid-M (tick 2 → commit → tick 2), PPU-visible IO writes
+//!      commit late-M (tick 3 → commit → tick 1), and every other write commits
+//!      at end-of-M. A READ/idle ticks all 4 T then samples at end-of-M (the
+//!      correct DMG placement; Oracle ses_16262cca4 confirmed reads must NOT
+//!      move to T3). The timer always advances 4 per M; in CGB double-speed
+//!      PPU+APU advance every 2nd T.
 //!   3. IRQs raised during the ticks latch IF immediately. The CPU still polls
 //!      and dispatches only at instruction boundaries.
 //!
@@ -65,10 +65,8 @@ pub trait CpuBus {
 
 /// A single CPU bus access, used to drive the per-M-cycle timing in one place.
 /// The CPU describes WHAT it wants (fetch/read/write/idle); the bus owns WHEN
-/// the access lands within the M-cycle's 4 T-cycles. Step 1 of the T-cycle
-/// migration (rubc-td3): this is a pure refactor -- the placement is still
-/// "tick all 4 T, THEN access", identical to the previous behavior. Later steps
-/// move the access to its correct sub-M T-offset.
+/// the access lands within the M-cycle's 4 T-cycles. Some register classes land
+/// before end-of-M when hardware-observable edges require sub-M placement.
 enum CpuAccess {
     /// Burn one M-cycle with no memory access.
     Idle,
@@ -77,6 +75,16 @@ enum CpuAccess {
     Read { addr: u16 },
     /// Memory write.
     Write { addr: u16, value: u8 },
+}
+
+fn is_ppu_visible_write(addr: u16) -> bool {
+    matches!(
+        addr,
+        0xFF40..=0xFF43 // LCDC, STAT, SCY, SCX
+            | 0xFF45 // LYC
+            | 0xFF47..=0xFF4B // BGP, OBP0, OBP1, WY, WX
+            | 0xFF68..=0xFF6B // CGB BCPS/BCPD/OCPS/OCPD
+    )
 }
 
 /// Bus-observable fields the CPU merges into a flight record after an M-cycle.
@@ -257,10 +265,10 @@ impl Bus {
     /// Drive one CPU M-cycle for a typed access, centralizing the per-M-cycle
     /// timing in ONE place.
     ///
-    /// STEP 2 (rubc-9am): a WRITE commits at the T3 boundary so the 4th
-    /// peripheral tick of the M-cycle observes the new value (matches DMG, where
-    /// a write latches late in the cycle). Reads/idle sample after all 4 T
-    /// (end-of-M; reads stay there -- Oracle ses_16262cca4).
+    /// Writes land at the earliest timing required by the register class: TAC at
+    /// T2 for timer-edge semantics, PPU-visible IO at T3 so the final dot of the
+    /// M-cycle observes it, and all other writes at end-of-M. Reads/idle sample
+    /// after all 4 T (end-of-M; Oracle ses_16262cca4).
     ///
     /// Ordering per M-cycle: OAM-DMA beat (T0) -> N pre-ticks -> access ->
     /// (4-N) post-ticks -> HBlank-HDMA step.
@@ -291,15 +299,19 @@ impl Bus {
                 // is immediately followed by `dec bc`; end-of-M gives BC=$FFD8,
                 // N=0 gives $FFDA, and the N=2 midpoint hits the correct $FFD9.
                 //
-                // Every other write -- including DIV ($FF04), which the tim*
-                // suite calibrates against the DIV-reset phase, and TIMA/TMA
-                // ($FF05/$FF06) reload-quirk registers -- commits at end-of-M
-                // (after 4 T), the correct DMG placement for memory writes (keeps
-                // blargg mem_timing + the tim* suite green).
+                // PPU-visible IO commits at T3 so the final dot of the M-cycle
+                // sees mid-mode-3 register changes. Every other write --
+                // including DIV ($FF04), TIMA/TMA ($FF05/$FF06), VRAM/OAM, DMA,
+                // HDMA, WRAM, HRAM, and VBK ($FF4F) -- stays end-of-M to keep the
+                // memory/timer timing contracts intact.
                 if addr == 0xFF07 {
                     self.tick_t_times(2);
                     self.cpu_write_latched(addr, value);
                     self.tick_t_times(2);
+                } else if is_ppu_visible_write(addr) {
+                    self.tick_t_times(3);
+                    self.cpu_write_latched(addr, value);
+                    self.tick_t_times(1);
                 } else {
                     self.tick_t_times(4);
                     self.cpu_write_latched(addr, value);
@@ -931,6 +943,37 @@ mod tests {
         assert_eq!(v, 0x42, "value reads back from WRAM");
         // Exactly 4 ticks happened during this M-cycle, BEFORE the sample.
         assert_eq!(bus.ticks_at_last_sample(), before + 4);
+        assert_eq!(bus.total_ticks(), before + 4);
+    }
+
+    #[test]
+    fn ppu_visible_io_write_commits_at_t3() {
+        let mut bus = Bus::new();
+        let before = bus.total_ticks();
+        bus.write_m(0xFF42, 0x37);
+        assert_eq!(bus.ppu.read_scy(), 0x37);
+        assert_eq!(bus.ticks_at_last_sample(), before + 3);
+        assert_eq!(bus.total_ticks(), before + 4);
+    }
+
+    #[test]
+    fn vbk_write_stays_end_of_m() {
+        let mut bus = Bus::new();
+        bus.cgb.cgb_mode = true;
+        let before = bus.total_ticks();
+        bus.write_m(0xFF4F, 0x01);
+        assert_eq!(bus.vbk, 0x01);
+        assert_eq!(bus.ticks_at_last_sample(), before + 4);
+        assert_eq!(bus.total_ticks(), before + 4);
+    }
+
+    #[test]
+    fn tac_write_keeps_midpoint_commit() {
+        let mut bus = Bus::new();
+        let before = bus.total_ticks();
+        bus.write_m(0xFF07, 0x05);
+        assert_eq!(bus.peek(0xFF07) & 0x07, 0x05);
+        assert_eq!(bus.ticks_at_last_sample(), before + 2);
         assert_eq!(bus.total_ticks(), before + 4);
     }
 
