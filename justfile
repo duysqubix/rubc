@@ -224,6 +224,43 @@ acid-hell-build:
     cp -f "{{acidhell}}/cgb-acid-hell.gbc" assets/cgb-acid-hell.gbc
     @echo "assets/cgb-acid-hell.gbc ready"
 
+# ---- gallery: generate README / docs visual assets -------------------------
+#
+# Renders the project's screenshots + GIFs headlessly into docs/media/ using the
+# `screenshot` / `gif` subcommands. Deterministic (fixed frame counts, no input)
+# and re-runnable: every output is a freshly-rendered frame, never a placeholder.
+# Test-ROM screenshots are run to their "Passed" result screen; gameplay assets
+# capture a stable/animated frame. Uses the release binary for speed.
+gallery:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release -q -p rubc
+    bin="./target/release/rubc"
+    blargg="{{blargg}}"
+    acid2="{{ref}}/acid2"
+    mkdir -p docs/media/tests
+    echo "== gallery: gameplay GIF + hero screenshot =="
+    # Pokemon Crystal (CGB): colourful scrolling intro (skip the boot logos) +
+    # the title screen as the hero still.
+    "$bin" gif assets/crystal.gbc --out docs/media/crystal-intro.gif \
+        --frames 36 --every 3 --scale 3 --skip 1385 --force-cgb
+    "$bin" screenshot assets/crystal.gbc --out docs/media/crystal-title.png \
+        --frames 3400 --scale 3 --force-cgb
+    echo "== gallery: acid2 PPU conformance stills =="
+    "$bin" screenshot "$acid2/dmg-acid2.gb"  --out docs/media/tests/dmg-acid2.png     --frames 120 --scale 3 --force-dmg
+    "$bin" screenshot "$acid2/cgb-acid2.gbc" --out docs/media/tests/cgb-acid2.png     --frames 120 --scale 3 --force-cgb
+    "$bin" screenshot assets/cgb-acid-hell.gbc --out docs/media/tests/cgb-acid-hell.png --frames 200 --scale 3 --force-cgb
+    echo "== gallery: blargg test-ROM PASS screens =="
+    "$bin" screenshot "$blargg/cpu_instrs/cpu_instrs.gb"   --out docs/media/tests/cpu_instrs.png   --frames 4000 --scale 3 --force-dmg
+    "$bin" screenshot "$blargg/instr_timing/instr_timing.gb" --out docs/media/tests/instr_timing.png --frames 400  --scale 3 --force-dmg
+    "$bin" screenshot "$blargg/mem_timing/mem_timing.gb"   --out docs/media/tests/mem_timing.png   --frames 1500 --scale 3 --force-dmg
+    "$bin" screenshot "$blargg/mem_timing-2/mem_timing.gb" --out docs/media/tests/mem_timing-2.png --frames 1500 --scale 3 --force-dmg
+    "$bin" screenshot "$blargg/halt_bug.gb"               --out docs/media/tests/halt_bug.png     --frames 800  --scale 3 --force-cgb
+    "$bin" screenshot "$blargg/dmg_sound/dmg_sound.gb"     --out docs/media/tests/dmg_sound.png     --frames 4000 --scale 3 --force-dmg
+    "$bin" screenshot "$blargg/cgb_sound/cgb_sound.gb"     --out docs/media/tests/cgb_sound.png     --frames 4000 --scale 3 --force-cgb
+    echo "== gallery: done =="
+    ls -l docs/media docs/media/tests
+
 # ---- quality gates ---------------------------------------------------------
 
 # Format the whole workspace.
