@@ -463,6 +463,9 @@ mod tests {
             "04-sweep.gb",
             "05-sweep details.gb",
             "06-overflow on trigger.gb",
+            "07-len sweep period sync.gb",
+            "08-len ctr during power.gb",
+            "11-regs after power.gb",
         ] {
             let rel = format!("dmg_sound/rom_singles/{name}");
             assert!(blargg_passes_at(&rel), "dmg_sound {name} should pass");

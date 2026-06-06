@@ -718,7 +718,7 @@ impl Bus {
             0xFF05..=0xFF07 => self.timer.write(addr, value, &mut self.interrupts),
             0xFF46 => self.start_oam_dma(value),
             0xFF0F => self.interrupts.if_ = value | 0xE0, // IF lives in interrupts
-            0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.write(addr, value),
+            0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.write(addr, value, self.cgb.cgb_mode),
             0xFF40 => self.ppu.write_lcdc(value, &mut self.interrupts),
             0xFF41 => self.ppu.write_stat(value, &mut self.interrupts),
             0xFF42 => self.ppu.write_scy(value),

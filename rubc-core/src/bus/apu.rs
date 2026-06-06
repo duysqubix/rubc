@@ -64,18 +64,31 @@ impl Apu {
         }
     }
 
-    pub fn write(&mut self, addr: u16, value: u8) {
+    pub fn write(&mut self, addr: u16, value: u8, cgb: bool) {
         if (0xFF30..=0xFF3F).contains(&addr) {
             self.wave_ram[(addr - 0xFF30) as usize] = value;
             return;
         }
 
         if addr == 0xFF26 {
-            self.write_nr52(value);
+            self.write_nr52(value, cgb);
             return;
         }
 
         if !self.powered {
+            // On monochrome (DMG) models the length-load registers (NRx1)
+            // remain writable while the APU is powered off; only the length
+            // value (low 6 bits, or all 8 for wave) is honoured. All other
+            // registers ignore writes while off. On CGB everything is locked.
+            if !cgb {
+                match addr {
+                    0xFF11 => self.ch1.pulse.write_length_only(value),
+                    0xFF16 => self.ch2.write_length_only(value),
+                    0xFF1B => self.ch3.write_length(value),
+                    0xFF20 => self.ch4.write_length(value),
+                    _ => {}
+                }
+            }
             return;
         }
 
@@ -168,33 +181,40 @@ impl Apu {
             | ((self.ch4.enabled as u8) << 3)
     }
 
-    fn write_nr52(&mut self, value: u8) {
+    fn write_nr52(&mut self, value: u8, cgb: bool) {
         let new_power = value & 0x80 != 0;
         match (self.powered, new_power) {
-            (true, false) => self.power_off(),
-            (false, true) => self.power_on(),
+            (true, false) => self.power_off(cgb),
+            (false, true) => self.power_on(cgb),
             _ => {}
         }
     }
 
-    fn power_off(&mut self) {
+    fn power_off(&mut self, cgb: bool) {
         self.powered = false;
         self.nr50 = 0;
         self.nr51 = 0;
-        self.ch1.power_off();
-        self.ch2.power_off();
-        self.ch3.power_off();
-        self.ch4.power_off();
+        // On monochrome (DMG) models the length timers (NRx1) are NOT cleared
+        // by powering the APU off; on CGB they are. (Pan Docs Audio_Registers.)
+        let preserve_length = !cgb;
+        self.ch1.power_off(preserve_length);
+        self.ch2.power_off(preserve_length);
+        self.ch3.power_off(preserve_length);
+        self.ch4.power_off(preserve_length);
     }
 
-    fn power_on(&mut self) {
+    fn power_on(&mut self, cgb: bool) {
         self.powered = true;
         self.nr50 = 0;
         self.nr51 = 0;
-        self.ch1.power_off();
-        self.ch2.power_off();
-        self.ch3.power_off();
-        self.ch4.power_off();
+        self.frame_step = 0;
+        // On DMG the length timers (NRx1) survive a power cycle; on CGB they
+        // are cleared. Everything else is reset.
+        let preserve_length = !cgb;
+        self.ch1.power_off(preserve_length);
+        self.ch2.power_off(preserve_length);
+        self.ch3.power_off(preserve_length);
+        self.ch4.power_off(preserve_length);
     }
 
     fn write_nr10(&mut self, value: u8) {
@@ -266,8 +286,8 @@ impl Channel1 {
         }
     }
 
-    fn power_off(&mut self) {
-        self.pulse.power_off();
+    fn power_off(&mut self, preserve_length: bool) {
+        self.pulse.power_off(preserve_length);
         self.sweep = Sweep::default();
     }
 }
@@ -334,6 +354,13 @@ impl PulseChannel {
 
     fn write_duty_length(&mut self, value: u8) {
         self.duty_length = value;
+        self.length_counter = 64 - u16::from(value & 0x3F);
+    }
+
+    /// Write only the length value (low 6 bits), leaving the duty bits
+    /// untouched. Used for NRx1 writes while the APU is powered off on DMG,
+    /// where the length-load register stays writable but duty does not.
+    fn write_length_only(&mut self, value: u8) {
         self.length_counter = 64 - u16::from(value & 0x3F);
     }
 
@@ -418,8 +445,14 @@ impl PulseChannel {
         (2048 - self.frequency()) * 4
     }
 
-    fn power_off(&mut self) {
+    fn power_off(&mut self, preserve_length: bool) {
+        let length = self.length_counter;
         *self = Self::default();
+        if preserve_length {
+            // Only the internal length-timer value survives; the readable
+            // register bytes (duty) are zeroed like every other register.
+            self.length_counter = length;
+        }
     }
 }
 
@@ -574,8 +607,12 @@ impl WaveChannel {
         (2048 - self.frequency()) * 2
     }
 
-    fn power_off(&mut self) {
+    fn power_off(&mut self, preserve_length: bool) {
+        let length = self.length_counter;
         *self = Self::default();
+        if preserve_length {
+            self.length_counter = length;
+        }
     }
 }
 
@@ -680,8 +717,12 @@ impl NoiseChannel {
         divisor << (self.nr43 >> 4)
     }
 
-    fn power_off(&mut self) {
+    fn power_off(&mut self, preserve_length: bool) {
+        let length = self.length_counter;
         *self = Self::default();
+        if preserve_length {
+            self.length_counter = length;
+        }
     }
 }
 
@@ -699,27 +740,27 @@ mod tests {
     fn register_read_masks_match_dmg_bits() {
         let mut apu = Apu::default();
 
-        apu.write(0xFF10, 0x7F);
-        apu.write(0xFF11, 0x80);
-        apu.write(0xFF12, 0xA5);
-        apu.write(0xFF13, 0x12);
-        apu.write(0xFF14, 0x47);
-        apu.write(0xFF16, 0x40);
-        apu.write(0xFF17, 0x5A);
-        apu.write(0xFF18, 0x34);
-        apu.write(0xFF19, 0x00);
-        apu.write(0xFF1A, 0x80);
-        apu.write(0xFF1B, 0x56);
-        apu.write(0xFF1C, 0x20);
-        apu.write(0xFF1D, 0x78);
-        apu.write(0xFF1E, 0x40);
-        apu.write(0xFF20, 0x3F);
-        apu.write(0xFF21, 0xC3);
-        apu.write(0xFF22, 0x2D);
-        apu.write(0xFF23, 0x40);
-        apu.write(0xFF24, 0x77);
-        apu.write(0xFF25, 0xF3);
-        apu.write(0xFF30, 0xAC);
+        apu.write(0xFF10, 0x7F, false);
+        apu.write(0xFF11, 0x80, false);
+        apu.write(0xFF12, 0xA5, false);
+        apu.write(0xFF13, 0x12, false);
+        apu.write(0xFF14, 0x47, false);
+        apu.write(0xFF16, 0x40, false);
+        apu.write(0xFF17, 0x5A, false);
+        apu.write(0xFF18, 0x34, false);
+        apu.write(0xFF19, 0x00, false);
+        apu.write(0xFF1A, 0x80, false);
+        apu.write(0xFF1B, 0x56, false);
+        apu.write(0xFF1C, 0x20, false);
+        apu.write(0xFF1D, 0x78, false);
+        apu.write(0xFF1E, 0x40, false);
+        apu.write(0xFF20, 0x3F, false);
+        apu.write(0xFF21, 0xC3, false);
+        apu.write(0xFF22, 0x2D, false);
+        apu.write(0xFF23, 0x40, false);
+        apu.write(0xFF24, 0x77, false);
+        apu.write(0xFF25, 0xF3, false);
+        apu.write(0xFF30, 0xAC, false);
 
         assert_eq!(apu.read(0xFF10), 0xFF);
         assert_eq!(apu.read(0xFF11), 0xBF);
@@ -749,10 +790,10 @@ mod tests {
     fn power_off_clears_registers_ignores_nr_writes_and_preserves_wave_ram() {
         let mut apu = Apu::default();
 
-        apu.write(0xFF12, 0xF3);
-        apu.write(0xFF24, 0x77);
-        apu.write(0xFF30, 0xA5);
-        apu.write(0xFF26, 0x00);
+        apu.write(0xFF12, 0xF3, false);
+        apu.write(0xFF24, 0x77, false);
+        apu.write(0xFF30, 0xA5, false);
+        apu.write(0xFF26, 0x00, false);
 
         assert!(!apu.power());
         assert_eq!(apu.read(0xFF12), 0x00);
@@ -760,14 +801,14 @@ mod tests {
         assert_eq!(apu.read(0xFF26), 0x70);
         assert_eq!(apu.read(0xFF30), 0xA5);
 
-        apu.write(0xFF12, 0xF3);
-        apu.write(0xFF30, 0x5A);
+        apu.write(0xFF12, 0xF3, false);
+        apu.write(0xFF30, 0x5A, false);
 
         assert_eq!(apu.read(0xFF12), 0x00);
         assert_eq!(apu.read(0xFF30), 0x5A);
 
-        apu.write(0xFF26, 0x80);
-        apu.write(0xFF12, 0xF3);
+        apu.write(0xFF26, 0x80, false);
+        apu.write(0xFF12, 0xF3, false);
 
         assert!(apu.power());
         assert_eq!(apu.read(0xFF12), 0xF3);
@@ -777,9 +818,9 @@ mod tests {
     fn length_counter_decrements_and_disables_channel() {
         let mut apu = Apu::default();
 
-        apu.write(0xFF21, 0xF0);
-        apu.write(0xFF20, 0x3F);
-        apu.write(0xFF23, 0xC0);
+        apu.write(0xFF21, 0xF0, false);
+        apu.write(0xFF20, 0x3F, false);
+        apu.write(0xFF23, 0xC0, false);
 
         assert_eq!(apu.read(0xFF26) & 0x08, 0x08);
         assert_eq!(apu.ch4.length_counter, 1);
@@ -794,8 +835,8 @@ mod tests {
     fn trigger_reloads_expired_length_and_sets_status_when_dac_is_on() {
         let mut apu = Apu::default();
 
-        apu.write(0xFF17, 0xF0);
-        apu.write(0xFF19, 0x80);
+        apu.write(0xFF17, 0xF0, false);
+        apu.write(0xFF19, 0x80, false);
 
         assert_eq!(apu.ch2.length_counter, 64);
         assert_eq!(apu.read(0xFF26) & 0x02, 0x02);
@@ -806,10 +847,10 @@ mod tests {
         let mut apu = Apu::default();
         apu.frame_step = 1;
 
-        apu.write(0xFF17, 0xF0);
-        apu.write(0xFF16, 0x3F);
-        apu.write(0xFF19, 0x80);
-        apu.write(0xFF19, 0x40);
+        apu.write(0xFF17, 0xF0, false);
+        apu.write(0xFF16, 0x3F, false);
+        apu.write(0xFF19, 0x80, false);
+        apu.write(0xFF19, 0x40, false);
 
         assert_eq!(apu.ch2.length_counter, 0);
         assert_eq!(apu.read(0xFF26) & 0x02, 0x00);
@@ -819,8 +860,8 @@ mod tests {
     fn envelope_clocks_on_steps_five_and_seven() {
         let mut apu = Apu::default();
 
-        apu.write(0xFF17, 0x19);
-        apu.write(0xFF19, 0x80);
+        apu.write(0xFF17, 0x19, false);
+        apu.write(0xFF19, 0x80, false);
 
         assert_eq!(apu.ch2.envelope.volume, 1);
 
@@ -837,10 +878,10 @@ mod tests {
     fn ch1_sweep_overflow_on_trigger_disables_channel_even_with_zero_pace() {
         let mut apu = Apu::default();
 
-        apu.write(0xFF10, 0x01);
-        apu.write(0xFF12, 0xF0);
-        apu.write(0xFF13, 0xDC);
-        apu.write(0xFF14, 0x85);
+        apu.write(0xFF10, 0x01, false);
+        apu.write(0xFF12, 0xF0, false);
+        apu.write(0xFF13, 0xDC, false);
+        apu.write(0xFF14, 0x85, false);
 
         assert_eq!(apu.read(0xFF26) & 0x01, 0x00);
         assert!(!apu.ch1.pulse.enabled);
@@ -850,18 +891,18 @@ mod tests {
     fn nr52_reports_channel_status_bits() {
         let mut apu = Apu::default();
 
-        apu.write(0xFF12, 0xF0);
-        apu.write(0xFF14, 0x80);
-        apu.write(0xFF17, 0xF0);
-        apu.write(0xFF19, 0x80);
-        apu.write(0xFF1A, 0x80);
-        apu.write(0xFF1E, 0x80);
-        apu.write(0xFF21, 0xF0);
-        apu.write(0xFF23, 0x80);
+        apu.write(0xFF12, 0xF0, false);
+        apu.write(0xFF14, 0x80, false);
+        apu.write(0xFF17, 0xF0, false);
+        apu.write(0xFF19, 0x80, false);
+        apu.write(0xFF1A, 0x80, false);
+        apu.write(0xFF1E, 0x80, false);
+        apu.write(0xFF21, 0xF0, false);
+        apu.write(0xFF23, 0x80, false);
 
         assert_eq!(apu.read(0xFF26), 0xFF);
 
-        apu.write(0xFF17, 0x00);
+        apu.write(0xFF17, 0x00, false);
 
         assert_eq!(apu.read(0xFF26) & 0x0F, 0x0D);
     }
