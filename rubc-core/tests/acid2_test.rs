@@ -69,6 +69,26 @@ fn render(rom_rel: &str, cgb: bool) -> Option<Vec<u8>> {
     }
 }
 
+fn render_dmg_with_bootrom(rom_rel: &str) -> Option<Vec<u8>> {
+    let path = suites_dir().join(rom_rel);
+    let rom = std::fs::read(&path).ok()?;
+    let mut m = Machine::boot_dmg_with_bootrom(&rom);
+    match m.run_mooneye(MAX_INSTRUCTIONS) {
+        RunStop::MooneyeBreakpoint => Some(
+            m.bus
+                .ppu
+                .framebuffer
+                .iter()
+                .map(|p| match p {
+                    FramePixel::DmgShade(s) => *s,
+                    FramePixel::CgbRgb555(_) => 0,
+                })
+                .collect(),
+        ),
+        _ => None,
+    }
+}
+
 /// Run a CGB ROM to the `LD B,B` breakpoint and return its framebuffer as
 /// RGB555 values (one u16 per pixel). The PPU emits resolved `CgbRgb555` pixels
 /// in CGB mode; we compare these against the hardware-native RGB555 reference
@@ -198,7 +218,7 @@ fn mealybug_report() {
         else {
             continue;
         };
-        let Some(frame) = render(&format!("mealybug/{name}.gb"), false) else {
+        let Some(frame) = render_dmg_with_bootrom(&format!("mealybug/{name}.gb")) else {
             println!("mealybug {name}: no breakpoint");
             continue;
         };

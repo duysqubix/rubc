@@ -11,6 +11,8 @@
 use crate::bus::Bus;
 use crate::cpu::{Cpu, CpuMode};
 
+const DMG_BOOT_ROM: &[u8; 256] = include_bytes!("boot/dmg_boot.bin");
+
 /// Why a run stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RunStop {
@@ -63,6 +65,15 @@ impl Machine {
         m.cpu.r.l = 0x4D;
         m.cpu.r.sp = 0xFFFE;
         m.cpu.r.pc = 0x0100;
+        m
+    }
+
+    /// Boot through the bundled open-source SameBoy DMG bootstrap ROM.
+    pub fn boot_dmg_with_bootrom(rom: &[u8]) -> Self {
+        let mut m = Self::new();
+        m.load_rom(rom);
+        m.bus.boot_rom = Some(Box::new(*DMG_BOOT_ROM));
+        m.bus.boot_rom_mapped = true;
         m
     }
 

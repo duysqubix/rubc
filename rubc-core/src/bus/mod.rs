@@ -201,6 +201,10 @@ struct Hdma {
 pub struct Bus {
     // Memory regions (flat placeholders; banking lands in MBC/CGB waves).
     pub cart: Cartridge,
+    /// Optional 256-byte DMG boot ROM overlay. When mapped, reads from
+    /// $0000-$00FF come from this ROM until the cartridge writes $FF50 bit 0.
+    pub boot_rom: Option<Box<[u8; 256]>>,
+    pub boot_rom_mapped: bool,
     /// WRAM: 8 banks of 4 KiB. DMG uses banks 0-1 flat; CGB fixes bank 0 at
     /// C000-CFFF and selects banks 1-7 at D000-DFFF via SVBK ($FF70).
     pub wram: [[u8; 0x1000]; 8],
@@ -248,6 +252,8 @@ impl Default for Bus {
     fn default() -> Self {
         Self {
             cart: Cartridge::default(),
+            boot_rom: None,
+            boot_rom_mapped: false,
             wram: [[0; 0x1000]; 8],
             svbk: 1,
             hram: [0; 0x7F],
@@ -773,6 +779,11 @@ impl Bus {
     /// banking/IO-side-effects land in later waves.
     pub fn peek(&self, addr: u16) -> u8 {
         match addr {
+            0x0000..=0x00FF if self.boot_rom_mapped => self
+                .boot_rom
+                .as_ref()
+                .map(|boot_rom| boot_rom[addr as usize])
+                .unwrap_or_else(|| self.cart.read(addr)),
             0x0000..=0x7FFF => self.cart.read(addr),
             0x8000..=0x9FFF => self.vram[self.vbk as usize][(addr - 0x8000) as usize],
             0xC000..=0xFDFF => {
@@ -930,6 +941,12 @@ impl Bus {
             0xFF45 => self.ppu.write_lyc(value, &mut self.interrupts),
             0xFF4A => self.ppu.write_wy(value),
             0xFF4B => self.ppu.write_wx(value),
+            0xFF50 => {
+                if value & 0x01 != 0 {
+                    self.boot_rom_mapped = false;
+                }
+                self.io[0x50] = value;
+            }
             0xFF4F => {
                 // VBK (CGB only): bit 0 selects the active 8 KiB VRAM bank.
                 if self.cgb.cgb_mode {
