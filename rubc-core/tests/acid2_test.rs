@@ -11,11 +11,11 @@
 //!   mid-mode-3 writes, no CGB palette), which our PPU FIFO can render exactly.
 //!   The DMG palette at the breakpoint is the identity BGP=0xE4, so our raw
 //!   2-bit framebuffer indices map 1:1 onto the reference shade indices.
-//! - **mealybug-tearoom** and **cgb-acid2** are REPORTED, not gated: mealybug
-//!   needs T-cycle-accurate mid-mode-3 register writes (our bus is M-cycle;
-//!   tracked by rubc-7ks), and cgb-acid2 needs CGB color palettes (rubc-5a0).
-//!   The harness prints their pixel-diff so progress is visible, but does not
-//!   fail on them.
+//! - **mealybug-tearoom** remains partly reporting, partly gated: it prints every
+//!   ROM diff and asserts the current minimum pixel-exact count so mid-mode-3
+//!   timing work cannot regress silently.
+//! - **cgb-acid2** is a hard RGB555 gate; **cgb-acid-hell** is gated only against
+//!   the current tiny residual until the last CGB mid-line race is resolved.
 //!
 //! Skips cleanly when the (git-ignored) reference material is absent, so a
 //! fresh checkout still passes `cargo test`.
@@ -25,6 +25,8 @@ use rubc_core::machine::{Machine, RunStop};
 use std::path::{Path, PathBuf};
 
 const MAX_INSTRUCTIONS: u64 = 20_000_000;
+const MIN_MEALYBUG_DMG_EXACT: usize = 2;
+const MAX_CGB_ACID_HELL_DIFF: usize = 2;
 
 fn suites_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../reference/test-suites")
@@ -161,9 +163,8 @@ fn cgb_acid2_renders_exactly() {
     );
 }
 
-/// Reporting harness for the mealybug-tearoom suite: these need T-cycle-accurate
-/// mid-mode-3 register writes (rubc-7ks). Prints the per-ROM pixel diff vs the
-/// DMG reference so progress toward sub-M-cycle timing is visible; never fails.
+/// Reporting harness for the mealybug-tearoom suite. It prints every per-ROM
+/// DMG diff and gates the current minimum exact-pass count.
 #[test]
 fn mealybug_report() {
     let raw_dir = suites_dir().join("mealybug/expected/DMG-raw");
@@ -204,12 +205,15 @@ fn mealybug_report() {
         "mealybug DMG: {exact}/{total} pixel-exact \
          (mid-mode-3 timing needs sub-M-cycle bus -- rubc-7ks)"
     );
+    assert!(
+        exact >= MIN_MEALYBUG_DMG_EXACT,
+        "mealybug DMG must keep at least {MIN_MEALYBUG_DMG_EXACT}/{total} pixel-exact ROMs (got {exact})"
+    );
 }
 
-/// Reporting harness for cgb-acid-hell: an extremely demanding CGB PPU test
-/// (mid-scanline LCDC/palette/VRAM-bank changes). Prints the RGB555 pixel diff
-/// vs the reference so progress is visible; never fails (it needs T-cycle-
-/// accurate mid-mode-3 register writes -- rubc-1cu / rubc-7ks).
+/// cgb-acid-hell is an extremely demanding CGB PPU test (mid-scanline
+/// LCDC/palette/VRAM-bank changes). Keep the current residual gated so it cannot
+/// grow while rubc-bqi remains open.
 #[test]
 fn cgb_acid_hell_report() {
     let Some(frame) = render_cgb("cgb-acid-hell/cgb-acid-hell.gbc") else {
@@ -226,5 +230,9 @@ fn cgb_acid_hell_report() {
     println!(
         "cgb-acid-hell: {diff} / {FRAMEBUFFER_PIXELS} RGB555 pixels differ \
          (mid-mode-3 CGB timing -- rubc-1cu)"
+    );
+    assert!(
+        diff <= MAX_CGB_ACID_HELL_DIFF,
+        "cgb-acid-hell must not regress past {MAX_CGB_ACID_HELL_DIFF} RGB555 pixels ({diff} differ)"
     );
 }

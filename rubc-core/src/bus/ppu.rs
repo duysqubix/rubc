@@ -232,6 +232,22 @@ impl PixelFifo {
         self.pixels[self.len] = FifoPixel::default();
         Some(pixel)
     }
+
+    fn push_front_bg_zero(&mut self) {
+        let old_len = self.len.min(FIFO_CAPACITY - 1);
+        for i in (0..old_len).rev() {
+            self.pixels[i + 1] = self.pixels[i];
+        }
+        self.pixels[0] = FifoPixel {
+            color: 0,
+            bg_priority: false,
+            occupied: true,
+            palette: DmgPaletteSource::Bg,
+            cgb_palette: 0,
+            oam_index: 0,
+        };
+        self.len = (self.len + 1).min(FIFO_CAPACITY);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -264,10 +280,9 @@ struct BgFetcher {
     high: u8,
     dummy_fetch_done: bool,
     window: bool,
-    /// BG map Y coordinate (ly + scy, or window_line_counter) latched at the
-    /// TileNo fetch step. Reused for the tile-data row so a mid-tile-fetch SCY
-    /// write does not split the tilemap row from the tile-data row (CGB-D+
-    /// reads SCY only at the fetcher B stage). cgb-acid-hell relies on this.
+    /// BG map Y coordinate latched at the TileNo fetch step. Window activations
+    /// set this from the window line counter before incrementing it for a later
+    /// same-scanline reactivation.
     y: u8,
 }
 
@@ -371,6 +386,8 @@ pub struct Ppu {
     window_line_counter: u8,
     window_active: bool,
     window_started_this_line: bool,
+    window_glitch_x: Option<usize>,
+    window_disable_pending: bool,
     drawing_dots: u32,
 }
 
@@ -421,6 +438,8 @@ impl Default for Ppu {
             window_line_counter: 0,
             window_active: false,
             window_started_this_line: false,
+            window_glitch_x: None,
+            window_disable_pending: false,
             drawing_dots: 0,
         }
     }
@@ -660,6 +679,8 @@ impl Ppu {
         self.sprite_fifo.clear();
         self.window_active = false;
         self.window_started_this_line = false;
+        self.window_glitch_x = None;
+        self.window_disable_pending = false;
         if self.ly == self.wy {
             self.window_y_condition = true;
         }
@@ -685,6 +706,8 @@ impl Ppu {
         self.scx_discard = self.scx & 0x07;
         self.window_active = false;
         self.window_started_this_line = false;
+        self.window_glitch_x = None;
+        self.window_disable_pending = false;
         self.drawing_dots = 0;
         self.set_mode(mode::DRAWING, irq);
     }
@@ -704,6 +727,7 @@ impl Ppu {
         }
 
         self.maybe_start_window();
+        self.maybe_push_window_glitch_pixel();
         if self.try_start_sprite_fetch() {
             self.advance_sprite_fetch(vram);
             return;
@@ -716,19 +740,26 @@ impl Ppu {
     }
 
     fn finish_drawing(&mut self, irq: &mut Interrupts) {
-        if self.window_started_this_line {
-            self.window_line_counter = self.window_line_counter.wrapping_add(1);
-        }
         self.bg_fifo.clear();
         self.sprite_fifo.clear();
         self.pending_sprite = None;
         self.sprite_fetch_ticks = 0;
         self.sprite_idle_ticks = 0;
+        self.window_glitch_x = None;
+        self.window_disable_pending = false;
         self.stat_mode0_level = true;
         self.set_mode(mode::HBLANK, irq);
     }
 
     fn clock_bg_fetcher(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        if self.window_disable_pending && self.bg_fifo.is_empty() {
+            if self.lcdc & 0x20 == 0 {
+                self.stop_window_fetcher_for_bg_resume();
+            } else {
+                self.window_disable_pending = false;
+            }
+        }
+
         if self.bg_fetcher.step == FetchStep::Push {
             if self.bg_fifo.is_empty() {
                 let x_flip = self.cgb_mode && self.bg_fetcher.attr & 0x20 != 0;
@@ -759,11 +790,10 @@ impl Ppu {
 
         match self.bg_fetcher.step {
             FetchStep::TileNo => {
-                // Latch the BG map Y (ly+scy, or window line) at the TileNo
-                // fetch so the tile-data row uses the SAME Y even if a
-                // mid-tile-fetch SCY write lands before the data fetch.
+                // Latch map/window Y at TileNo; DMG data fetches may resample
+                // SCY later for low/high row-mixing, while CGB-D+ keeps this Y.
                 self.bg_fetcher.y = if self.bg_fetcher.window {
-                    self.window_line_counter
+                    self.bg_fetcher.y
                 } else {
                     self.ly.wrapping_add(self.scy)
                 };
@@ -822,7 +852,7 @@ impl Ppu {
             self.bg_fetcher.fetcher_x.wrapping_add(self.scx / 8) & 0x1F
         };
         let y_offset = if self.bg_fetcher.window {
-            32 * ((self.window_line_counter as usize / 8) & 0x1F)
+            32 * ((self.bg_fetcher.y as usize / 8) & 0x1F)
         } else {
             // Use the Y latched at TileNo (set just before this call).
             32 * ((self.bg_fetcher.y as usize / 8) & 0x1F)
@@ -839,10 +869,16 @@ impl Ppu {
     }
 
     fn fetch_bg_tile_data_addr(&self) -> usize {
-        // Use the Y latched at the TileNo fetch step, so a mid-tile-fetch SCY
-        // write does not split the tilemap row from the tile-data row (CGB-D+
-        // samples SCY only at the fetcher B stage). cgb-acid-hell relies on it.
-        let mut row = (self.bg_fetcher.y & 0x07) as usize;
+        // DMG samples SCY during the B/0/1 fetcher stages, so data low/high can
+        // come from different tile rows after a mid-mode-3 SCY write. CGB-D+
+        // samples SCY only at B; keep the existing TileNo latch for CGB so
+        // cgb-acid-hell's sub-dot SCY race remains stable.
+        let y = if self.bg_fetcher.window || self.cgb_mode {
+            self.bg_fetcher.y
+        } else {
+            self.ly.wrapping_add(self.scy)
+        };
+        let mut row = (y & 0x07) as usize;
         // CGB BG attr bit 6 = vertical flip within the 8-pixel tile row.
         if self.cgb_mode && self.bg_fetcher.attr & 0x40 != 0 {
             row = 7 - row;
@@ -857,7 +893,7 @@ impl Ppu {
     }
 
     fn maybe_start_window(&mut self) {
-        if self.window_active || self.window_started_this_line {
+        if self.window_active {
             return;
         }
         if self.lcdc & 0x20 == 0 || self.lcdc & 0x01 == 0 || !self.window_y_condition {
@@ -865,14 +901,33 @@ impl Ppu {
         }
 
         let window_x = self.wx.saturating_sub(7) as usize;
-        if self.lcd_x < window_x {
+        if self.lcd_x != window_x {
             return;
         }
 
         self.window_active = true;
         self.window_started_this_line = true;
+        self.window_glitch_x = None;
         self.bg_fifo.clear();
         self.bg_fetcher.reset(true, true);
+        self.bg_fetcher.y = self.window_line_counter;
+        self.window_line_counter = self.window_line_counter.wrapping_add(1);
+    }
+
+    fn stop_window_fetcher_for_bg_resume(&mut self) {
+        let bg_x = (self.lcd_x as u8).wrapping_add(self.scx);
+        self.window_active = false;
+        self.window_disable_pending = false;
+        self.bg_fetcher.reset(false, true);
+        self.bg_fetcher.fetcher_x = (bg_x / 8) & 0x1F;
+    }
+
+    fn maybe_push_window_glitch_pixel(&mut self) {
+        if self.window_glitch_x != Some(self.lcd_x) {
+            return;
+        }
+        self.bg_fifo.push_front_bg_zero();
+        self.window_glitch_x = None;
     }
 
     fn try_start_sprite_fetch(&mut self) -> bool {
@@ -1102,8 +1157,17 @@ impl Ppu {
     /// Write LCDC (`$FF40`). Toggling bit 7 turns the LCD on/off.
     pub fn write_lcdc(&mut self, value: u8, irq: &mut Interrupts) {
         let was_on = self.enabled;
+        let old_lcdc = self.lcdc;
         self.lcdc = value;
         self.enabled = value & 0x80 != 0;
+
+        if self.mode == mode::DRAWING && (old_lcdc ^ value) & 0x20 != 0 {
+            if old_lcdc & 0x20 != 0 && value & 0x20 == 0 && self.bg_fetcher.window {
+                self.window_disable_pending = true;
+            } else if value & 0x20 != 0 {
+                self.window_disable_pending = false;
+            }
+        }
 
         if was_on && !self.enabled {
             // LCD off: PPU stops, LY resets, mode -> 0, dot counter resets.
@@ -1229,6 +1293,11 @@ impl Ppu {
 
     pub fn write_wx(&mut self, value: u8) {
         self.wx = value;
+        if self.mode == mode::DRAWING && self.window_started_this_line {
+            let window_x = self.wx.saturating_sub(7) as usize;
+            self.window_glitch_x =
+                (window_x > self.lcd_x && window_x < SCREEN_WIDTH).then_some(window_x);
+        }
     }
 
     // ---- VRAM / OAM access gating -------------------------------------------
