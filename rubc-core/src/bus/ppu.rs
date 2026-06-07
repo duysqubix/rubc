@@ -429,6 +429,7 @@ pub struct Ppu {
     sprite_fifo: PixelFifo,
     dmg_output_pipe: DmgOutputPipe,
     bg_fetcher: BgFetcher,
+    tile_sel_glitch: bool,
     scanline_sprites: [ScanlineSprite; MAX_SPRITES_PER_LINE],
     scanline_sprite_count: usize,
     next_sprite: usize,
@@ -482,6 +483,7 @@ impl Default for Ppu {
             sprite_fifo: PixelFifo::default(),
             dmg_output_pipe: DmgOutputPipe::default(),
             bg_fetcher: BgFetcher::default(),
+            tile_sel_glitch: false,
             scanline_sprites: [ScanlineSprite::default(); MAX_SPRITES_PER_LINE],
             scanline_sprite_count: 0,
             next_sprite: 0,
@@ -537,6 +539,7 @@ impl Ppu {
         self.cgb_obj_palette_ram = *cgb.obj_palette_ram;
         self.dot_ticks += 1;
         if !self.enabled {
+            self.tile_sel_glitch = false;
             return;
         }
 
@@ -869,12 +872,12 @@ impl Ppu {
                     self.bg_fetcher.attr = attr;
                 }
                 let addr = self.fetch_bg_tile_data_addr();
-                self.bg_fetcher.low = read_vram(&vram[self.bg_tile_bank()], addr);
+                self.bg_fetcher.low = self.fetch_bg_tile_data_byte(vram, addr);
                 self.bg_fetcher.step = FetchStep::TileDataHigh;
             }
             FetchStep::TileDataHigh => {
                 let addr = self.fetch_bg_tile_data_addr() + 1;
-                self.bg_fetcher.high = read_vram(&vram[self.bg_tile_bank()], addr);
+                self.bg_fetcher.high = self.fetch_bg_tile_data_byte(vram, addr);
                 if self.bg_fetcher.dummy_fetch_done {
                     self.bg_fetcher.step = FetchStep::Push;
                 } else {
@@ -953,6 +956,25 @@ impl Ppu {
         } else {
             let signed_tile = self.bg_fetcher.tile as i8 as i16;
             (0x1000i16 + signed_tile * 16 + (row * 2) as i16) as usize
+        }
+    }
+
+    fn fetch_bg_tile_data_byte(&mut self, vram: &[[u8; 0x2000]; 2], addr: usize) -> u8 {
+        // CGB-A/B/C TILE_SEL conflict: if LCDC.4 is reset on the same dot as a
+        // BG bitplane fetch, unsigned tile IDs can appear on the data bus. This
+        // is the remaining cgb-acid-hell center-pixel quirk; normal reads cover
+        // CGB-D+/DMG behavior and signed tile IDs.
+        let glitched = self.cgb_mode
+            && self.tile_sel_glitch
+            && self.bg_fetcher.step == FetchStep::TileDataHigh
+            && self.bg_fetcher.tile & 0x80 == 0;
+        if self.tile_sel_glitch && self.bg_fetcher.step == FetchStep::TileDataHigh {
+            self.tile_sel_glitch = false;
+        }
+        if glitched {
+            self.bg_fetcher.tile
+        } else {
+            read_vram(&vram[self.bg_tile_bank()], addr)
         }
     }
 
@@ -1274,6 +1296,11 @@ impl Ppu {
         let old_lcdc = self.lcdc;
         self.lcdc = value;
         self.enabled = value & 0x80 != 0;
+
+        if self.cgb_mode && self.mode == mode::DRAWING && old_lcdc & 0x10 != 0 && value & 0x10 == 0
+        {
+            self.tile_sel_glitch = true;
+        }
 
         if self.mode == mode::DRAWING && (old_lcdc ^ value) & 0x20 != 0 {
             if old_lcdc & 0x20 != 0 && value & 0x20 == 0 && self.bg_fetcher.window {

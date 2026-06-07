@@ -44,7 +44,7 @@ const MAX_MEALYBUG_M3_LCDC_TILE_SEL_CHANGE_DIFF: usize = 1755;
 const MAX_MEALYBUG_M3_LCDC_TILE_SEL_WIN_CHANGE_DIFF: usize = 2755;
 const MAX_MEALYBUG_M3_LCDC_WIN_MAP_CHANGE_DIFF: usize = 1925;
 const MAX_MEALYBUG_M3_LCDC_BG_MAP_CHANGE_DIFF: usize = 845;
-const MAX_CGB_ACID_HELL_DIFF: usize = 2;
+const MAX_CGB_ACID_HELL_DIFF: usize = 0;
 
 fn suites_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../reference/test-suites")
@@ -339,8 +339,8 @@ fn cgb_acid_hell_report() {
         "cgb-acid-hell: {diff} / {FRAMEBUFFER_PIXELS} RGB555 pixels differ \
          (mid-mode-3 CGB timing -- rubc-1cu)"
     );
-    assert!(
-        diff <= MAX_CGB_ACID_HELL_DIFF,
-        "cgb-acid-hell must not regress past {MAX_CGB_ACID_HELL_DIFF} RGB555 pixels ({diff} differ)"
+    assert_eq!(
+        diff, MAX_CGB_ACID_HELL_DIFF,
+        "cgb-acid-hell must remain pixel-exact ({diff} RGB555 pixels differ)"
     );
 }
