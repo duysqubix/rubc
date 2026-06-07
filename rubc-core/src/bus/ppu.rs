@@ -29,10 +29,12 @@ const DOTS_PER_LINE: u32 = 456;
 const MODE2_DOTS: u32 = 80;
 /// Baseline mode 3 length: 12-dot fetch startup + 160 visible pixels.
 const BASE_MODE3_DOTS: u32 = 172;
+const MODE3_PIPELINE_DELAY_DOTS: u8 = 7;
+const EFFECTIVE_BASE_MODE3_DOTS: u32 = BASE_MODE3_DOTS + MODE3_PIPELINE_DELAY_DOTS as u32;
 const LCD_ON_FIRST_LINE_DOTS: u32 = DOTS_PER_LINE - 4;
 const LCD_ON_FIRST_MODE3_START: u32 = MODE2_DOTS;
 const LCD_ON_FIRST_MODE3_PUBLIC_START: u32 = LCD_ON_FIRST_MODE3_START;
-const LCD_ON_FIRST_MODE3_PUBLIC_END: u32 = LCD_ON_FIRST_MODE3_START + BASE_MODE3_DOTS - 1;
+const LCD_ON_FIRST_MODE3_PUBLIC_END: u32 = LCD_ON_FIRST_MODE3_START + EFFECTIVE_BASE_MODE3_DOTS - 1;
 /// Last visible scanline (LY 0..=143 are visible; 144..=153 are VBlank).
 const LAST_VISIBLE_LINE: u8 = 143;
 /// Last scanline before LY wraps back to 0.
@@ -232,6 +234,22 @@ impl PixelFifo {
         self.pixels[self.len] = FifoPixel::default();
         Some(pixel)
     }
+
+    fn push_front_bg_zero(&mut self) {
+        let old_len = self.len.min(FIFO_CAPACITY - 1);
+        for i in (0..old_len).rev() {
+            self.pixels[i + 1] = self.pixels[i];
+        }
+        self.pixels[0] = FifoPixel {
+            color: 0,
+            bg_priority: false,
+            occupied: true,
+            palette: DmgPaletteSource::Bg,
+            cgb_palette: 0,
+            oam_index: 0,
+        };
+        self.len = (self.len + 1).min(FIFO_CAPACITY);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -264,10 +282,9 @@ struct BgFetcher {
     high: u8,
     dummy_fetch_done: bool,
     window: bool,
-    /// BG map Y coordinate (ly + scy, or window_line_counter) latched at the
-    /// TileNo fetch step. Reused for the tile-data row so a mid-tile-fetch SCY
-    /// write does not split the tilemap row from the tile-data row (CGB-D+
-    /// reads SCY only at the fetcher B stage). cgb-acid-hell relies on this.
+    /// BG map Y coordinate latched at the TileNo fetch step. Window activations
+    /// set this from the window line counter before incrementing it for a later
+    /// same-scanline reactivation.
     y: u8,
 }
 
@@ -371,6 +388,8 @@ pub struct Ppu {
     window_line_counter: u8,
     window_active: bool,
     window_started_this_line: bool,
+    window_glitch_x: Option<usize>,
+    drawing_start_delay: u8,
     drawing_dots: u32,
 }
 
@@ -421,6 +440,8 @@ impl Default for Ppu {
             window_line_counter: 0,
             window_active: false,
             window_started_this_line: false,
+            window_glitch_x: None,
+            drawing_start_delay: 0,
             drawing_dots: 0,
         }
     }
@@ -578,7 +599,7 @@ impl Ppu {
     }
 
     fn public_mode3_end_dot(&self) -> u32 {
-        let mut len = BASE_MODE3_DOTS + u32::from(self.scx & 0x07);
+        let mut len = EFFECTIVE_BASE_MODE3_DOTS + u32::from(self.scx & 0x07);
         let mut seen_tiles = [false; 32];
         let mut sprite_penalty = 0u32;
         for sprite in self.scanline_sprites[..self.scanline_sprite_count]
@@ -660,6 +681,7 @@ impl Ppu {
         self.sprite_fifo.clear();
         self.window_active = false;
         self.window_started_this_line = false;
+        self.window_glitch_x = None;
         if self.ly == self.wy {
             self.window_y_condition = true;
         }
@@ -685,12 +707,19 @@ impl Ppu {
         self.scx_discard = self.scx & 0x07;
         self.window_active = false;
         self.window_started_this_line = false;
+        self.window_glitch_x = None;
+        self.drawing_start_delay = MODE3_PIPELINE_DELAY_DOTS;
         self.drawing_dots = 0;
         self.set_mode(mode::DRAWING, irq);
     }
 
     fn tick_drawing(&mut self, vram: &[[u8; 0x2000]; 2], irq: &mut Interrupts) {
         self.drawing_dots += 1;
+
+        if self.drawing_start_delay > 0 {
+            self.drawing_start_delay -= 1;
+            return;
+        }
 
         if self.sprite_idle_ticks > 0 {
             self.clock_bg_fetcher(vram);
@@ -704,6 +733,7 @@ impl Ppu {
         }
 
         self.maybe_start_window();
+        self.maybe_push_window_glitch_pixel();
         if self.try_start_sprite_fetch() {
             self.advance_sprite_fetch(vram);
             return;
@@ -716,14 +746,13 @@ impl Ppu {
     }
 
     fn finish_drawing(&mut self, irq: &mut Interrupts) {
-        if self.window_started_this_line {
-            self.window_line_counter = self.window_line_counter.wrapping_add(1);
-        }
         self.bg_fifo.clear();
         self.sprite_fifo.clear();
         self.pending_sprite = None;
         self.sprite_fetch_ticks = 0;
         self.sprite_idle_ticks = 0;
+        self.window_glitch_x = None;
+        self.drawing_start_delay = 0;
         self.stat_mode0_level = true;
         self.set_mode(mode::HBLANK, irq);
     }
@@ -747,6 +776,12 @@ impl Ppu {
                 self.bg_fetcher.fetcher_x = self.bg_fetcher.fetcher_x.wrapping_add(1);
                 self.bg_fetcher.step = FetchStep::TileNo;
                 self.bg_fetcher.step_ticks = 0;
+                if self.bg_fetcher.window && self.lcdc & 0x20 == 0 {
+                    let fetcher_x = (self.lcd_x as u8).wrapping_add(self.scx) / 8;
+                    self.window_active = false;
+                    self.bg_fetcher.reset(false, true);
+                    self.bg_fetcher.fetcher_x = fetcher_x & 0x1F;
+                }
             }
             return;
         }
@@ -759,11 +794,10 @@ impl Ppu {
 
         match self.bg_fetcher.step {
             FetchStep::TileNo => {
-                // Latch the BG map Y (ly+scy, or window line) at the TileNo
-                // fetch so the tile-data row uses the SAME Y even if a
-                // mid-tile-fetch SCY write lands before the data fetch.
+                // Latch map/window Y at TileNo; DMG data fetches may resample
+                // SCY later for low/high row-mixing, while CGB-D+ keeps this Y.
                 self.bg_fetcher.y = if self.bg_fetcher.window {
-                    self.window_line_counter
+                    self.bg_fetcher.y
                 } else {
                     self.ly.wrapping_add(self.scy)
                 };
@@ -822,7 +856,7 @@ impl Ppu {
             self.bg_fetcher.fetcher_x.wrapping_add(self.scx / 8) & 0x1F
         };
         let y_offset = if self.bg_fetcher.window {
-            32 * ((self.window_line_counter as usize / 8) & 0x1F)
+            32 * ((self.bg_fetcher.y as usize / 8) & 0x1F)
         } else {
             // Use the Y latched at TileNo (set just before this call).
             32 * ((self.bg_fetcher.y as usize / 8) & 0x1F)
@@ -839,10 +873,16 @@ impl Ppu {
     }
 
     fn fetch_bg_tile_data_addr(&self) -> usize {
-        // Use the Y latched at the TileNo fetch step, so a mid-tile-fetch SCY
-        // write does not split the tilemap row from the tile-data row (CGB-D+
-        // samples SCY only at the fetcher B stage). cgb-acid-hell relies on it.
-        let mut row = (self.bg_fetcher.y & 0x07) as usize;
+        // DMG samples SCY during the B/0/1 fetcher stages, so data low/high can
+        // come from different tile rows after a mid-mode-3 SCY write. CGB-D+
+        // samples SCY only at B; keep the existing TileNo latch for CGB so
+        // cgb-acid-hell's sub-dot SCY race remains stable.
+        let y = if self.bg_fetcher.window || self.cgb_mode {
+            self.bg_fetcher.y
+        } else {
+            self.ly.wrapping_add(self.scy)
+        };
+        let mut row = (y & 0x07) as usize;
         // CGB BG attr bit 6 = vertical flip within the 8-pixel tile row.
         if self.cgb_mode && self.bg_fetcher.attr & 0x40 != 0 {
             row = 7 - row;
@@ -857,7 +897,7 @@ impl Ppu {
     }
 
     fn maybe_start_window(&mut self) {
-        if self.window_active || self.window_started_this_line {
+        if self.window_active {
             return;
         }
         if self.lcdc & 0x20 == 0 || self.lcdc & 0x01 == 0 || !self.window_y_condition {
@@ -865,14 +905,25 @@ impl Ppu {
         }
 
         let window_x = self.wx.saturating_sub(7) as usize;
-        if self.lcd_x < window_x {
+        if self.lcd_x != window_x {
             return;
         }
 
         self.window_active = true;
         self.window_started_this_line = true;
+        self.window_glitch_x = None;
         self.bg_fifo.clear();
         self.bg_fetcher.reset(true, true);
+        self.bg_fetcher.y = self.window_line_counter;
+        self.window_line_counter = self.window_line_counter.wrapping_add(1);
+    }
+
+    fn maybe_push_window_glitch_pixel(&mut self) {
+        if self.window_glitch_x != Some(self.lcd_x) {
+            return;
+        }
+        self.bg_fifo.push_front_bg_zero();
+        self.window_glitch_x = None;
     }
 
     fn try_start_sprite_fetch(&mut self) -> bool {
@@ -1229,6 +1280,11 @@ impl Ppu {
 
     pub fn write_wx(&mut self, value: u8) {
         self.wx = value;
+        if self.mode == mode::DRAWING && self.window_started_this_line {
+            let window_x = self.wx.saturating_sub(7) as usize;
+            self.window_glitch_x =
+                (window_x > self.lcd_x && window_x < SCREEN_WIDTH).then_some(window_x);
+        }
     }
 
     // ---- VRAM / OAM access gating -------------------------------------------
@@ -1402,10 +1458,10 @@ mod tests {
         assert_eq!(p.mode, mode::OAM_SCAN, "still OAM scan at dot 79");
         tick(&mut p, 1);
         assert_eq!(p.mode, mode::DRAWING, "mode 3 at dot 80");
-        tick(&mut p, BASE_MODE3_DOTS - 1);
-        assert_eq!(p.mode, mode::DRAWING, "still drawing at dot 251");
+        tick(&mut p, EFFECTIVE_BASE_MODE3_DOTS - 1);
+        assert_eq!(p.mode, mode::DRAWING, "still drawing at dot 258");
         tick(&mut p, 1);
-        assert_eq!(p.mode, mode::HBLANK, "HBlank at dot 252");
+        assert_eq!(p.mode, mode::HBLANK, "HBlank at dot 259");
     }
 
     #[test]
@@ -1462,7 +1518,7 @@ mod tests {
     fn stat_mode0_rising_edge_fires_once() {
         let mut p = ppu_at_line_start();
         p.stat_enables = 0x08;
-        let irq = tick(&mut p, MODE2_DOTS + BASE_MODE3_DOTS);
+        let irq = tick(&mut p, MODE2_DOTS + EFFECTIVE_BASE_MODE3_DOTS);
         assert_eq!(p.mode, mode::HBLANK);
         assert!(irq & 0x02 != 0, "STAT fires entering mode 0");
         let irq2 = tick(&mut p, 10);
@@ -1534,7 +1590,7 @@ mod tests {
         assert_eq!(p.mode, mode::DRAWING);
         assert!(p.oam_blocked());
         assert!(p.vram_blocked());
-        tick(&mut p, BASE_MODE3_DOTS);
+        tick(&mut p, EFFECTIVE_BASE_MODE3_DOTS);
         assert_eq!(p.mode, mode::HBLANK);
         assert_eq!(p.read_stat() & 0x03, mode::DRAWING);
         assert!(p.oam_blocked(), "access follows public mode 3 tail");
@@ -1615,7 +1671,7 @@ mod tests {
         let mut p = ppu_at_line_start();
         p.write_scx(3);
         let len = mode3_len(&mut p, &zero_vram(), &zero_oam());
-        assert_eq!(len, BASE_MODE3_DOTS + 3);
+        assert_eq!(len, EFFECTIVE_BASE_MODE3_DOTS + 3);
     }
 
     #[test]
@@ -1725,10 +1781,13 @@ mod tests {
         }
 
         assert_eq!(counts[mode::OAM_SCAN as usize], MODE2_DOTS);
-        assert_eq!(counts[mode::DRAWING as usize], BASE_MODE3_DOTS + 3);
+        assert_eq!(
+            counts[mode::DRAWING as usize],
+            EFFECTIVE_BASE_MODE3_DOTS + 3
+        );
         assert_eq!(
             counts[mode::HBLANK as usize],
-            DOTS_PER_LINE - MODE2_DOTS - BASE_MODE3_DOTS - 3
+            DOTS_PER_LINE - MODE2_DOTS - EFFECTIVE_BASE_MODE3_DOTS - 3
         );
         assert_eq!(p.ly, 1);
         assert_eq!(p.line_dot, 0);
