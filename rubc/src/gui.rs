@@ -1,46 +1,37 @@
 //! egui UI for the rubc window, driven by `eframe`.
 //!
-//! [`Gui`] owns the immediate-mode UI: the File menu (Debug / About), the About
-//! window, and the embedded live VRAM debug viewer ([`crate::vramview`]). Under
-//! the old manual `pixels` + `egui-wgpu` backend this lived behind a `Framework`
-//! glue type; with `eframe` the windowing/rendering is handled by the framework
-//! and the app simply calls [`Gui::ui`] from `eframe::App::ui`.
+//! [`Gui`] owns the immediate-mode UI: the File menu (Debug / About) and the
+//! embedded "About" window. The live VRAM debug viewer ([`crate::vramview`]) is
+//! no longer embedded here -- it now lives in its OWN detachable OS window, a
+//! deferred multi-viewport spawned from `RubcApp::logic` (which holds the egui
+//! `Context`). The File -> Debug menu entry just flips the shared
+//! [`std::sync::atomic::AtomicBool`] that gates that viewport on/off, keeping
+//! the menu and the OS close button in sync.
 
-use crate::vramview::{VramDebugSnapshot, VramView};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 /// The egui UI state for the rubc window.
 pub(crate) struct Gui {
     /// Only show the egui "About" window when true.
     window_open: bool,
-    /// File -> Debug VRAM viewer.
-    vram_view: VramView,
+    /// Shared File -> Debug toggle for the detached VRAM viewport. Flipped by
+    /// the menu; also cleared by the viewport's OS close button (in `logic`).
+    debug_open: Arc<AtomicBool>,
 }
 
 impl Gui {
-    /// Create a `Gui`.
-    pub(crate) fn new() -> Self {
+    /// Create a `Gui`, sharing the detached-debug-viewport toggle with the app.
+    pub(crate) fn new(debug_open: Arc<AtomicBool>) -> Self {
         Self {
             window_open: false,
-            vram_view: VramView::new(),
+            debug_open,
         }
-    }
-
-    /// Hand this frame's read-only VRAM snapshot to the debug viewer. Called
-    /// before [`Gui::ui`], so the viewer never borrows the `Machine` across the
-    /// egui closure.
-    pub(crate) fn set_vram_snapshot(&mut self, snapshot: VramDebugSnapshot) {
-        self.vram_view.set_snapshot(snapshot);
-    }
-
-    /// Whether the debug window is currently open (lets the caller skip the
-    /// per-frame snapshot copy when it is closed).
-    pub(crate) fn debug_open(&self) -> bool {
-        self.vram_view.open
     }
 
     /// Create the UI using egui.
     pub(crate) fn ui(&mut self, ui: &mut egui::Ui) {
-        // Cheap (Arc) clone so the floating windows below can borrow the egui
+        // Cheap (Arc) clone so the floating window below can borrow the egui
         // context after the menubar panel has finished borrowing `ui`.
         let ctx = ui.ctx().clone();
 
@@ -48,7 +39,10 @@ impl Gui {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
                     if ui.button("Debug...").clicked() {
-                        self.vram_view.toggle();
+                        // Toggle the detached VRAM viewport. `logic` spawns the
+                        // deferred viewport while this is true and drops it when
+                        // false; the OS close button flips it back off.
+                        self.debug_open.fetch_xor(true, Ordering::Relaxed);
                         ui.close();
                     }
                     if ui.button("About...").clicked() {
@@ -65,10 +59,7 @@ impl Gui {
             .resizable(false)
             .show(&ctx, |ui| {
                 ui.label("rubc -- a safe-Rust Game Boy (DMG/CGB) emulator.");
-                ui.label("File -> Debug opens the live VRAM viewer.");
+                ui.label("File -> Debug opens the live VRAM viewer in its own window.");
             });
-
-        // Live VRAM debug viewer (File -> Debug).
-        self.vram_view.ui(&ctx);
     }
 }
