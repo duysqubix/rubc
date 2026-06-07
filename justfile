@@ -120,6 +120,65 @@ trun *args:
 trace-run *args:
     LOG_LEVEL=trace cargo run -- {{args}}
 
+# Visually tour test ROMs in the GUI, auto-advancing after a timeout.
+#   group   = acid2 | mealybug | acid-hell | blargg | sound | ppu | all  (default: ppu)
+#             ppu = acid2 + mealybug + acid-hell (the visual PPU conformance set)
+#   seconds = how long to show each ROM before auto-advancing (default: 6)
+# Esc / close window = skip to next ROM early. Ctrl-C = abort the whole tour.
+# Cycle test ROMs in the GUI with auto-timeout. Usage: just tour [group] [seconds]
+tour group="ppu" seconds="6":
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cargo build --release -q -p rubc
+    bin="./target/release/rubc"
+    ref="{{ref}}"
+    timeout_bin="$(command -v gtimeout || command -v timeout)"
+    if [ -z "$timeout_bin" ]; then echo "need 'timeout' (brew install coreutils)"; exit 1; fi
+    secs="{{seconds}}"
+
+    # Build the ROM list for the requested group.
+    roms=()
+    add() { for f in "$@"; do [ -f "$f" ] && roms+=("$f"); done; }
+    case "{{group}}" in
+      acid2)     add "$ref"/acid2/dmg-acid2.gb "$ref"/acid2/cgb-acid2.gbc ;;
+      mealybug)  add "$ref"/mealybug/*.gb ;;
+      acid-hell) add "$ref"/cgb-acid-hell/cgb-acid-hell.gbc ;;
+      blargg)    add "$ref"/gb-test-roms/cpu_instrs/cpu_instrs.gb \
+                     "$ref"/gb-test-roms/instr_timing/instr_timing.gb \
+                     "$ref"/gb-test-roms/mem_timing/mem_timing.gb \
+                     "$ref"/gb-test-roms/halt_bug.gb \
+                     "$ref"/gb-test-roms/oam_bug/oam_bug.gb ;;
+      sound)     add "$ref"/gb-test-roms/dmg_sound/dmg_sound.gb \
+                     "$ref"/gb-test-roms/cgb_sound/cgb_sound.gb ;;
+      ppu)       add "$ref"/acid2/dmg-acid2.gb "$ref"/acid2/cgb-acid2.gbc \
+                     "$ref"/cgb-acid-hell/cgb-acid-hell.gbc \
+                     "$ref"/mealybug/*.gb ;;
+      all)       add "$ref"/acid2/*.gb* "$ref"/cgb-acid-hell/*.gbc \
+                     "$ref"/mealybug/*.gb \
+                     "$ref"/gb-test-roms/cpu_instrs/cpu_instrs.gb \
+                     "$ref"/gb-test-roms/instr_timing/instr_timing.gb \
+                     "$ref"/gb-test-roms/mem_timing/mem_timing.gb \
+                     "$ref"/gb-test-roms/halt_bug.gb \
+                     "$ref"/gb-test-roms/oam_bug/oam_bug.gb \
+                     "$ref"/gb-test-roms/dmg_sound/dmg_sound.gb \
+                     "$ref"/gb-test-roms/cgb_sound/cgb_sound.gb ;;
+      *)         echo "unknown group '{{group}}' (acid2|mealybug|acid-hell|blargg|sound|ppu|all)"; exit 1 ;;
+    esac
+
+    n=${#roms[@]}
+    if [ "$n" -eq 0 ]; then echo "no ROMs found for group '{{group}}' (is reference/ present?)"; exit 1; fi
+    echo "== tour: {{group}} -- $n ROM(s), ${secs}s each. Esc=skip, Ctrl-C=abort =="
+    # Abort the whole tour on Ctrl-C instead of just skipping a ROM.
+    trap 'echo; echo "tour aborted"; exit 130' INT
+    i=0
+    for rom in "${roms[@]}"; do
+        i=$((i+1))
+        echo "[$i/$n] $(basename "$rom")  (${secs}s)"
+        # timeout sends SIGTERM after $secs; the window closes and we advance.
+        LOG_LEVEL=warn "$timeout_bin" --foreground "${secs}" "$bin" run "$rom" || true
+    done
+    echo "== tour complete =="
+
 # ---- diagnose -------------------------------------------------------------
 #
 # The diagnostics layer (flight recorder, trace, hash, metrics, snapshot) lives
