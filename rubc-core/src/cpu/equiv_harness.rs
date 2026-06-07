@@ -118,6 +118,13 @@ pub fn trace_b2_step_t_supported_instruction(
     trace_b2_step_t_supported_instruction_inner(&mut cpu, &mut bus)
 }
 
+pub fn trace_b3_step_t_supported_instruction(
+    mut cpu: Cpu,
+    mut bus: FlatBus,
+) -> Result<Vec<CpuSnapshot>, TraceError> {
+    trace_b3_step_t_supported_instruction_inner(&mut cpu, &mut bus)
+}
+
 fn trace_b2_step_t_supported_instruction_inner(
     cpu: &mut Cpu,
     bus: &mut FlatBus,
@@ -144,6 +151,32 @@ fn trace_b2_step_t_supported_instruction_inner(
     })
 }
 
+fn trace_b3_step_t_supported_instruction_inner(
+    cpu: &mut Cpu,
+    bus: &mut FlatBus,
+) -> Result<Vec<CpuSnapshot>, TraceError> {
+    let mut trace = Vec::new();
+
+    for step in 0..DEFAULT_MAX_STEPS {
+        if !cpu.step_b3_supported_m_via_t(bus) {
+            return Err(TraceError::UnsupportedB1Opcode {
+                exec: cpu.equiv_exec(),
+            });
+        }
+        trace.push(CpuSnapshot::capture(cpu, bus));
+        if cpu.exec_is_boundary() && !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }) {
+            return Ok(trace);
+        }
+        if step + 1 == DEFAULT_MAX_STEPS {
+            break;
+        }
+    }
+
+    Err(TraceError::MaxStepsExceeded {
+        max_steps: DEFAULT_MAX_STEPS,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TraceError {
     MaxStepsExceeded { max_steps: usize },
@@ -151,19 +184,15 @@ pub enum TraceError {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TraceMismatch {
-    Length {
-        legacy_len: usize,
-        new_len: usize,
-    },
-    Snapshot {
-        index: usize,
-        legacy: CpuSnapshot,
-        new: CpuSnapshot,
-    },
+pub enum TraceMismatch<T = CpuSnapshot> {
+    Length { legacy_len: usize, new_len: usize },
+    Snapshot { index: usize, legacy: T, new: T },
 }
 
-pub fn compare_traces(legacy: &[CpuSnapshot], new: &[CpuSnapshot]) -> Result<(), TraceMismatch> {
+pub fn compare_traces<T>(legacy: &[T], new: &[T]) -> Result<(), TraceMismatch<T>>
+where
+    T: Clone + PartialEq,
+{
     if legacy.len() != new.len() {
         return Err(TraceMismatch::Length {
             legacy_len: legacy.len(),
@@ -474,6 +503,186 @@ fn fnv_mix_u8(mut hash: u64, byte: u8) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bus::CpuBus;
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct DispatchSnapshot {
+        sp: u16,
+        pc: u16,
+        ime: bool,
+        mode: CpuMode,
+        exec: Exec,
+        m_cycles: u64,
+        ie: u8,
+        if_: u8,
+        stack_hi: u8,
+        stack_lo: u8,
+        oam_idu_glitches: u8,
+    }
+
+    impl DispatchSnapshot {
+        fn capture(cpu: &Cpu, bus: &DispatchBus) -> Self {
+            Self {
+                sp: cpu.r.sp,
+                pc: cpu.r.pc,
+                ime: cpu.ime,
+                mode: cpu.mode,
+                exec: cpu.equiv_exec(),
+                m_cycles: bus.m_cycles,
+                ie: bus.ie,
+                if_: bus.if_,
+                stack_hi: bus.mem[0xFFFF],
+                stack_lo: bus.mem[0xFFFE],
+                oam_idu_glitches: bus.oam_idu_glitches,
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct DispatchBus {
+        mem: Box<[u8; 0x1_0000]>,
+        m_cycles: u64,
+        ie: u8,
+        if_: u8,
+        oam_idu_glitches: u8,
+    }
+
+    impl DispatchBus {
+        fn new(ie: u8, if_: u8) -> Self {
+            Self {
+                mem: Box::new([0; 0x1_0000]),
+                m_cycles: 0,
+                ie,
+                if_,
+                oam_idu_glitches: 0,
+            }
+        }
+    }
+
+    impl CpuBus for DispatchBus {
+        fn read_m(&mut self, addr: u16) -> u8 {
+            self.m_cycles += 1;
+            self.mem[usize::from(addr)]
+        }
+
+        fn write_m(&mut self, addr: u16, value: u8) {
+            self.write_latched(addr, value);
+            self.m_cycles += 1;
+        }
+
+        fn idle_m(&mut self) {
+            self.m_cycles += 1;
+        }
+
+        fn oam_bug_idu_m(&mut self, addr: u16) {
+            self.oam_bug_idu_glitch(addr);
+            self.m_cycles += 1;
+        }
+
+        fn oam_bug_idu_glitch(&mut self, _addr: u16) {
+            self.oam_idu_glitches = self.oam_idu_glitches.wrapping_add(1);
+        }
+
+        fn irq_pending_mask(&self) -> u8 {
+            self.ie & self.if_ & 0x1F
+        }
+
+        fn ie(&self) -> u8 {
+            self.ie
+        }
+
+        fn clear_if_bit(&mut self, bit: u8) {
+            self.if_ &= !(1 << bit);
+        }
+
+        fn speed_switch_armed(&self) -> bool {
+            false
+        }
+
+        fn finish_speed_switch(&mut self) {}
+
+        fn boundary(&mut self) {}
+
+        fn begin_cpu_cycle(&mut self) {}
+
+        fn tick_cpu_t(&mut self) {}
+
+        fn read_latched(&mut self, addr: u16) -> u8 {
+            self.mem[usize::from(addr)]
+        }
+
+        fn write_latched(&mut self, addr: u16, value: u8) {
+            self.mem[usize::from(addr)] = value;
+            match addr {
+                0xFFFF => self.ie = value,
+                0xFF0F => self.if_ = value,
+                _ => {}
+            }
+        }
+
+        fn end_cpu_cycle(&mut self) {
+            self.m_cycles += 1;
+        }
+    }
+
+    fn dispatch_fixture(pc: u16, sp: u16, ie: u8, if_: u8) -> (Cpu, DispatchBus) {
+        let mut cpu = seeded_cpu();
+        cpu.r.pc = pc;
+        cpu.r.sp = sp;
+        cpu.ime = true;
+        (cpu, DispatchBus::new(ie, if_))
+    }
+
+    fn trace_dispatch_legacy(
+        mut cpu: Cpu,
+        mut bus: DispatchBus,
+    ) -> Result<Vec<DispatchSnapshot>, TraceError> {
+        let mut trace = Vec::new();
+        for step in 0..DEFAULT_MAX_STEPS {
+            cpu.step_m(&mut bus);
+            trace.push(DispatchSnapshot::capture(&cpu, &bus));
+            if cpu.exec_is_boundary() && !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }) {
+                return Ok(trace);
+            }
+            if step + 1 == DEFAULT_MAX_STEPS {
+                break;
+            }
+        }
+        Err(TraceError::MaxStepsExceeded {
+            max_steps: DEFAULT_MAX_STEPS,
+        })
+    }
+
+    fn trace_dispatch_b3(
+        mut cpu: Cpu,
+        mut bus: DispatchBus,
+    ) -> Result<Vec<DispatchSnapshot>, TraceError> {
+        let mut trace = Vec::new();
+        for step in 0..DEFAULT_MAX_STEPS {
+            if !cpu.step_b3_supported_m_via_t(&mut bus) {
+                return Err(TraceError::UnsupportedB1Opcode {
+                    exec: cpu.equiv_exec(),
+                });
+            }
+            trace.push(DispatchSnapshot::capture(&cpu, &bus));
+            if cpu.exec_is_boundary() && !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }) {
+                return Ok(trace);
+            }
+            if step + 1 == DEFAULT_MAX_STEPS {
+                break;
+            }
+        }
+        Err(TraceError::MaxStepsExceeded {
+            max_steps: DEFAULT_MAX_STEPS,
+        })
+    }
+
+    fn compare_dispatch_fixture(pc: u16, sp: u16, ie: u8, if_: u8) {
+        let (cpu, bus) = dispatch_fixture(pc, sp, ie, if_);
+        let legacy = trace_dispatch_legacy(cpu.clone(), bus.clone()).unwrap();
+        let b3 = trace_dispatch_b3(cpu, bus).unwrap();
+        compare_traces(&legacy, &b3).unwrap();
+    }
 
     #[test]
     fn legacy_trace_is_deterministic() {
@@ -586,5 +795,23 @@ mod tests {
         let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
         let b2 = trace_b2_step_t_supported_instruction(cpu, bus).unwrap();
         compare_traces(&legacy, &b2).unwrap();
+    }
+
+    #[test]
+    fn b3_step_t_dispatch_matches_legacy_normal_vblank() {
+        let (cpu, bus) = interrupt_fixture();
+        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let b3 = trace_b3_step_t_supported_instruction(cpu, bus).unwrap();
+        compare_traces(&legacy, &b3).unwrap();
+    }
+
+    #[test]
+    fn b3_step_t_dispatch_matches_legacy_ie_push_cancel() {
+        compare_dispatch_fixture(0x1200, 0x0000, 0x01, 0x01);
+    }
+
+    #[test]
+    fn b3_step_t_dispatch_matches_legacy_ie_push_reselect_changed_bit() {
+        compare_dispatch_fixture(0x0250, 0x0000, 0x03, 0x03);
     }
 }

@@ -54,6 +54,11 @@ pub enum CpuCycleCompletion {
         increment_pc: bool,
         finish: bool,
     },
+    DispatchIdleToSpDec,
+    DispatchSpDec,
+    DispatchPushPcHigh,
+    DispatchPushPcLow,
+    DispatchFinish,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,7 +182,7 @@ impl Cpu {
 
         bus.end_cpu_cycle();
         self.active_cycle = None;
-        self.apply_cycle_completion(state.cycle.completion(), result);
+        self.apply_cycle_completion(bus, state.cycle.completion(), result);
         true
     }
 
@@ -234,6 +239,93 @@ impl Cpu {
             },
             _ => false,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn step_b3_supported_m_via_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
+        match self.mode {
+            CpuMode::InterruptDispatch { .. } => {
+                self.step_dispatch_via_t(bus);
+                true
+            }
+            CpuMode::Running => match self.exec {
+                Exec::Boundary => {
+                    if self.ime_pending {
+                        if self.ime_delay_boundary == 0 {
+                            self.ime = true;
+                            self.ime_pending = false;
+                        } else {
+                            self.ime_delay_boundary -= 1;
+                        }
+                    }
+                    bus.boundary();
+                    if self.try_dispatch_interrupt(bus) {
+                        self.step_dispatch_via_t(bus);
+                        return true;
+                    }
+                    self.start_cpu_cycle(ActiveCpuCycle::Fetch {
+                        addr: self.r.pc,
+                        completion: CpuCycleCompletion::FetchOpcode,
+                    });
+                    self.finish_active_cycle_for_b1_test(bus);
+                    true
+                }
+                Exec::Execute { op: 0x00, phase: 0 } => {
+                    self.finish();
+                    true
+                }
+                Exec::Execute { op: 0x06, phase: 0 } => {
+                    self.next_phase(0x06, 1);
+                    true
+                }
+                Exec::Execute { op: 0x06, phase: 1 } => {
+                    self.start_cpu_cycle(ActiveCpuCycle::Read {
+                        addr: self.r.pc,
+                        completion: CpuCycleCompletion::ReadReg8 {
+                            target: CpuReg8Target::B,
+                            increment_pc: true,
+                            finish: true,
+                        },
+                    });
+                    self.finish_active_cycle_for_b1_test(bus);
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    #[cfg(test)]
+    fn step_dispatch_via_t<B: CpuBus>(&mut self, bus: &mut B) {
+        let CpuMode::InterruptDispatch { phase, .. } = self.mode else {
+            unreachable!();
+        };
+
+        match phase {
+            0 => self.start_cpu_cycle(ActiveCpuCycle::Idle {
+                completion: CpuCycleCompletion::DispatchIdleToSpDec,
+            }),
+            1 => self.start_cpu_cycle(ActiveCpuCycle::OamBugIdu {
+                addr: self.r.sp,
+                completion: CpuCycleCompletion::DispatchSpDec,
+            }),
+            2 => self.start_cpu_cycle(ActiveCpuCycle::Write {
+                addr: self.r.sp,
+                value: (self.r.pc >> 8) as u8,
+                completion: CpuCycleCompletion::DispatchPushPcHigh,
+            }),
+            3 => self.start_cpu_cycle(ActiveCpuCycle::Write {
+                addr: self.r.sp,
+                value: self.r.pc as u8,
+                completion: CpuCycleCompletion::DispatchPushPcLow,
+            }),
+            _ => self.start_cpu_cycle(ActiveCpuCycle::Idle {
+                completion: CpuCycleCompletion::DispatchFinish,
+            }),
+        }
+
+        self.finish_active_cycle_for_b1_test(bus);
     }
 
     #[cfg(test)]
@@ -517,7 +609,12 @@ impl Cpu {
         bus_m_at(bus) - start
     }
 
-    fn apply_cycle_completion(&mut self, completion: CpuCycleCompletion, value: u8) {
+    fn apply_cycle_completion<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        completion: CpuCycleCompletion,
+        value: u8,
+    ) {
         match completion {
             CpuCycleCompletion::None => {}
             CpuCycleCompletion::FetchOpcode => {
@@ -543,6 +640,66 @@ impl Cpu {
                 if finish {
                     self.finish();
                 }
+            }
+            CpuCycleCompletion::DispatchIdleToSpDec => {
+                let CpuMode::InterruptDispatch { phase, .. } = &mut self.mode else {
+                    unreachable!();
+                };
+                *phase = 1;
+            }
+            CpuCycleCompletion::DispatchSpDec => {
+                let CpuMode::InterruptDispatch { phase, .. } = &mut self.mode else {
+                    unreachable!();
+                };
+                self.r.sp = self.r.sp.wrapping_sub(1);
+                *phase = 2;
+            }
+            CpuCycleCompletion::DispatchPushPcHigh => {
+                let CpuMode::InterruptDispatch {
+                    phase,
+                    bit,
+                    vector,
+                    cancelled,
+                } = &mut self.mode
+                else {
+                    unreachable!();
+                };
+
+                let pending = bus.irq_pending_mask();
+                if pending == 0 {
+                    *cancelled = true;
+                } else {
+                    let new_bit = pending.trailing_zeros() as u8;
+                    *bit = new_bit;
+                    *vector = 0x0040 + (new_bit as u16) * 8;
+                }
+                self.r.sp = self.r.sp.wrapping_sub(1);
+                *phase = 3;
+            }
+            CpuCycleCompletion::DispatchPushPcLow => {
+                let CpuMode::InterruptDispatch { phase, .. } = &mut self.mode else {
+                    unreachable!();
+                };
+                *phase = 4;
+            }
+            CpuCycleCompletion::DispatchFinish => {
+                let CpuMode::InterruptDispatch {
+                    bit,
+                    vector,
+                    cancelled,
+                    ..
+                } = self.mode
+                else {
+                    unreachable!();
+                };
+                if cancelled {
+                    self.r.pc = 0x0000;
+                } else {
+                    bus.clear_if_bit(bit);
+                    self.r.pc = vector;
+                }
+                self.mode = CpuMode::Running;
+                self.exec = Exec::Boundary;
             }
         }
     }
