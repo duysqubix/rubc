@@ -961,6 +961,12 @@ impl Ppu {
         self.window_active = true;
         self.window_started_this_line = true;
         self.window_glitch_x = None;
+        // WX<7 means the window compare fired before the first visible pixel.
+        // Keep the normal x=0 restart timing, but discard the off-screen window
+        // pixels so visible output starts from the same internal window X phase.
+        if self.lcd_x == 0 && self.wx < 6 {
+            self.scx_discard = 7 - self.wx;
+        }
         self.bg_fifo.clear();
         self.bg_fetcher.reset(true, true);
         self.bg_fetcher.y = self.window_line_counter;
@@ -1383,8 +1389,11 @@ impl Ppu {
         self.wx = value;
         if self.mode == mode::DRAWING && self.window_started_this_line {
             let window_x = self.wx.saturating_sub(7) as usize;
-            self.window_glitch_x =
-                (window_x > self.lcd_x && window_x < SCREEN_WIDTH).then_some(window_x);
+            if window_x > self.lcd_x && window_x < SCREEN_WIDTH {
+                self.window_glitch_x = Some(window_x);
+            } else {
+                self.window_glitch_x = None;
+            }
         }
     }
 

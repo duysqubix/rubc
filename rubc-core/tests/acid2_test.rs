@@ -27,6 +27,13 @@ use std::path::{Path, PathBuf};
 const MAX_INSTRUCTIONS: u64 = 20_000_000;
 const MIN_MEALYBUG_DMG_EXACT: usize = 2;
 const MAX_MEALYBUG_M3_BGP_CHANGE_DIFF: usize = 820;
+const MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_DIFF: usize = 0;
+const MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_WX_DIFF: usize = 1085;
+const MAX_MEALYBUG_M3_WINDOW_TIMING_DIFF: usize = 103;
+const MAX_MEALYBUG_M3_WINDOW_TIMING_WX_0_DIFF: usize = 1346;
+const MAX_MEALYBUG_M3_WX_4_CHANGE_DIFF: usize = 3077;
+const MAX_MEALYBUG_M3_WX_5_CHANGE_DIFF: usize = 3267;
+const MAX_MEALYBUG_M3_WX_6_CHANGE_DIFF: usize = 13018;
 const MAX_CGB_ACID_HELL_DIFF: usize = 2;
 
 fn suites_dir() -> PathBuf {
@@ -205,6 +212,38 @@ fn mealybug_report() {
                 diff <= MAX_MEALYBUG_M3_BGP_CHANGE_DIFF,
                 "mealybug m3_bgp_change must not regress past {MAX_MEALYBUG_M3_BGP_CHANGE_DIFF} pixels ({diff} differ)"
             );
+        }
+        match name {
+            "m3_lcdc_win_en_change_multiple" => assert_eq!(
+                diff,
+                MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_DIFF,
+                "mealybug {name} must stay pixel-exact ({diff} differ)"
+            ),
+            "m3_lcdc_win_en_change_multiple_wx" => assert!(
+                diff <= MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_WX_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_WX_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_window_timing" => assert!(
+                diff <= MAX_MEALYBUG_M3_WINDOW_TIMING_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_WINDOW_TIMING_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_window_timing_wx_0" => assert!(
+                diff <= MAX_MEALYBUG_M3_WINDOW_TIMING_WX_0_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_WINDOW_TIMING_WX_0_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_wx_4_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_WX_4_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_WX_4_CHANGE_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_wx_5_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_WX_5_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_WX_5_CHANGE_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_wx_6_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_WX_6_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_WX_6_CHANGE_DIFF} pixels ({diff} differ)"
+            ),
+            _ => {}
         }
     }
     println!("----");
