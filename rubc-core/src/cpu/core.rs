@@ -95,6 +95,108 @@ struct ActiveCpuCycleState {
     elapsed_t: u8,
 }
 
+#[cfg(test)]
+struct PerTOpcodeBus<'a, B> {
+    inner: &'a mut B,
+}
+
+#[cfg(test)]
+impl<'a, B: CpuBus> PerTOpcodeBus<'a, B> {
+    fn new(inner: &'a mut B) -> Self {
+        Self { inner }
+    }
+
+    fn run_cycle(&mut self) {
+        self.inner.begin_cpu_cycle();
+        for _ in 0..4 {
+            self.inner.tick_cpu_t();
+        }
+    }
+}
+
+#[cfg(test)]
+impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
+    fn read_m(&mut self, addr: u16) -> u8 {
+        self.run_cycle();
+        let value = self.inner.read_latched(addr);
+        self.inner.end_cpu_cycle();
+        value
+    }
+
+    fn read_m_oam_bug_idu(&mut self, addr: u16) -> u8 {
+        self.run_cycle();
+        let value = self.inner.read_latched(addr);
+        self.inner.oam_bug_idu_glitch(addr);
+        self.inner.end_cpu_cycle();
+        value
+    }
+
+    fn write_m(&mut self, addr: u16, value: u8) {
+        self.run_cycle();
+        self.inner.write_latched(addr, value);
+        self.inner.end_cpu_cycle();
+    }
+
+    fn idle_m(&mut self) {
+        self.run_cycle();
+        self.inner.end_cpu_cycle();
+    }
+
+    fn oam_bug_idu_m(&mut self, addr: u16) {
+        self.run_cycle();
+        self.inner.oam_bug_idu_glitch(addr);
+        self.inner.end_cpu_cycle();
+    }
+
+    fn oam_bug_idu_glitch(&mut self, addr: u16) {
+        self.inner.oam_bug_idu_glitch(addr);
+    }
+
+    fn irq_pending_mask(&self) -> u8 {
+        self.inner.irq_pending_mask()
+    }
+
+    fn ie(&self) -> u8 {
+        self.inner.ie()
+    }
+
+    fn clear_if_bit(&mut self, bit: u8) {
+        self.inner.clear_if_bit(bit);
+    }
+
+    fn speed_switch_armed(&self) -> bool {
+        self.inner.speed_switch_armed()
+    }
+
+    fn finish_speed_switch(&mut self) {
+        self.inner.finish_speed_switch();
+    }
+
+    fn boundary(&mut self) {
+        self.inner.boundary();
+    }
+
+    fn begin_cpu_cycle(&mut self) {
+        self.inner.begin_cpu_cycle();
+    }
+
+    fn tick_cpu_t(&mut self) {
+        self.inner.tick_cpu_t();
+    }
+
+    fn read_latched(&mut self, addr: u16) -> u8 {
+        self.inner.read_latched(addr)
+    }
+
+    fn write_latched(&mut self, addr: u16, value: u8) {
+        self.inner.write_latched(addr, value);
+    }
+
+    fn end_cpu_cycle(&mut self) {
+        self.inner.end_cpu_cycle();
+    }
+}
+
 /// The SM83 CPU.
 #[cfg_attr(test, derive(Clone))]
 pub struct Cpu {
@@ -293,6 +395,70 @@ impl Cpu {
                 _ => false,
             },
             _ => false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn step_b4_supported_m_via_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
+        loop {
+            match self.mode {
+                CpuMode::Halt => {
+                    bus.boundary();
+                    if bus.irq_pending_mask() != 0 {
+                        self.mode = CpuMode::Running;
+                        self.exec = Exec::Boundary;
+                        continue;
+                    }
+                    self.start_cpu_cycle(ActiveCpuCycle::Idle {
+                        completion: CpuCycleCompletion::None,
+                    });
+                    self.finish_active_cycle_for_b1_test(bus);
+                    return true;
+                }
+                CpuMode::Stopped => {
+                    self.start_cpu_cycle(ActiveCpuCycle::Idle {
+                        completion: CpuCycleCompletion::None,
+                    });
+                    self.finish_active_cycle_for_b1_test(bus);
+                    return true;
+                }
+                CpuMode::InterruptDispatch { .. } => {
+                    self.step_dispatch_via_t(bus);
+                    return true;
+                }
+                CpuMode::Running => match self.exec {
+                    Exec::Boundary => {
+                        if self.ime_pending {
+                            if self.ime_delay_boundary == 0 {
+                                self.ime = true;
+                                self.ime_pending = false;
+                            } else {
+                                self.ime_delay_boundary -= 1;
+                            }
+                        }
+                        bus.boundary();
+                        if self.try_dispatch_interrupt(bus) {
+                            continue;
+                        }
+                        self.start_cpu_cycle(ActiveCpuCycle::Fetch {
+                            addr: self.r.pc,
+                            completion: CpuCycleCompletion::FetchOpcode,
+                        });
+                        self.finish_active_cycle_for_b1_test(bus);
+                        return true;
+                    }
+                    Exec::Execute { op, phase } => {
+                        let mut per_t_bus = PerTOpcodeBus::new(bus);
+                        super::opcodes::step(self, &mut per_t_bus, op, phase);
+                        return true;
+                    }
+                    Exec::CbExecute { op, phase } => {
+                        let mut per_t_bus = PerTOpcodeBus::new(bus);
+                        super::opcodes_cb::step(self, &mut per_t_bus, op, phase);
+                        return true;
+                    }
+                },
+            }
         }
     }
 

@@ -125,6 +125,13 @@ pub fn trace_b3_step_t_supported_instruction(
     trace_b3_step_t_supported_instruction_inner(&mut cpu, &mut bus)
 }
 
+pub fn trace_b4_step_t_supported_instruction(
+    mut cpu: Cpu,
+    mut bus: FlatBus,
+) -> Result<Vec<CpuSnapshot>, TraceError> {
+    trace_b4_step_t_supported_instruction_inner(&mut cpu, &mut bus)
+}
+
 fn trace_b2_step_t_supported_instruction_inner(
     cpu: &mut Cpu,
     bus: &mut FlatBus,
@@ -159,6 +166,32 @@ fn trace_b3_step_t_supported_instruction_inner(
 
     for step in 0..DEFAULT_MAX_STEPS {
         if !cpu.step_b3_supported_m_via_t(bus) {
+            return Err(TraceError::UnsupportedB1Opcode {
+                exec: cpu.equiv_exec(),
+            });
+        }
+        trace.push(CpuSnapshot::capture(cpu, bus));
+        if cpu.exec_is_boundary() && !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }) {
+            return Ok(trace);
+        }
+        if step + 1 == DEFAULT_MAX_STEPS {
+            break;
+        }
+    }
+
+    Err(TraceError::MaxStepsExceeded {
+        max_steps: DEFAULT_MAX_STEPS,
+    })
+}
+
+fn trace_b4_step_t_supported_instruction_inner(
+    cpu: &mut Cpu,
+    bus: &mut FlatBus,
+) -> Result<Vec<CpuSnapshot>, TraceError> {
+    let mut trace = Vec::new();
+
+    for step in 0..DEFAULT_MAX_STEPS {
+        if !cpu.step_b4_supported_m_via_t(bus) {
             return Err(TraceError::UnsupportedB1Opcode {
                 exec: cpu.equiv_exec(),
             });
@@ -727,6 +760,36 @@ mod tests {
                 .unwrap_or_else(|err| panic!("CB opcode {op:02X} failed: {err:?}"));
             assert!(!trace.is_empty(), "CB opcode {op:02X} trace is empty");
         }
+    }
+
+    #[test]
+    fn all_512_opcodes_equivalent_via_t() {
+        let mut checked = 0usize;
+
+        for op in 0u8..=0xFF {
+            let (cpu, bus) = opcode_fixture(op);
+            let legacy = trace_instruction(cpu.clone(), bus.clone())
+                .unwrap_or_else(|err| panic!("main opcode {op:02X} legacy trace failed: {err:?}"));
+            let via_t = trace_b4_step_t_supported_instruction(cpu, bus)
+                .unwrap_or_else(|err| panic!("main opcode {op:02X} via-T trace failed: {err:?}"));
+            compare_traces(&legacy, &via_t)
+                .unwrap_or_else(|err| panic!("main opcode {op:02X} diverged: {err:?}"));
+            checked += 1;
+        }
+
+        for op in 0u8..=0xFF {
+            let (cpu, bus) = cb_opcode_fixture(op);
+            let legacy = trace_instruction(cpu.clone(), bus.clone())
+                .unwrap_or_else(|err| panic!("CB opcode {op:02X} legacy trace failed: {err:?}"));
+            let via_t = trace_b4_step_t_supported_instruction(cpu, bus)
+                .unwrap_or_else(|err| panic!("CB opcode {op:02X} via-T trace failed: {err:?}"));
+            compare_traces(&legacy, &via_t)
+                .unwrap_or_else(|err| panic!("CB opcode {op:02X} diverged: {err:?}"));
+            checked += 1;
+        }
+
+        assert_eq!(checked, 512);
+        println!("all_512_opcodes_equivalent_via_t: {checked} opcodes passed compare_traces");
     }
 
     #[test]
