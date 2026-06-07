@@ -31,6 +31,7 @@ const MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_DIFF: usize = 0;
 const MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_WX_DIFF: usize = 1085;
 const MAX_MEALYBUG_M3_WINDOW_TIMING_DIFF: usize = 103;
 const MAX_MEALYBUG_M3_WINDOW_TIMING_WX_0_DIFF: usize = 1346;
+const MAX_MEALYBUG_M3_SCY_CHANGE_DIFF: usize = 8819;
 const MAX_MEALYBUG_M3_WX_4_CHANGE_DIFF: usize = 3077;
 const MAX_MEALYBUG_M3_WX_5_CHANGE_DIFF: usize = 3267;
 const MAX_MEALYBUG_M3_WX_6_CHANGE_DIFF: usize = 13018;
@@ -230,6 +231,10 @@ fn mealybug_report() {
             "m3_window_timing_wx_0" => assert!(
                 diff <= MAX_MEALYBUG_M3_WINDOW_TIMING_WX_0_DIFF,
                 "mealybug {name} must stay <= {MAX_MEALYBUG_M3_WINDOW_TIMING_WX_0_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_scy_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_SCY_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_SCY_CHANGE_DIFF} pixels ({diff} differ)"
             ),
             "m3_wx_4_change" => assert!(
                 diff <= MAX_MEALYBUG_M3_WX_4_CHANGE_DIFF,

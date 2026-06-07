@@ -338,6 +338,7 @@ struct BgFetcher {
     /// set this from the window line counter before incrementing it for a later
     /// same-scanline reactivation.
     y: u8,
+    scy_at_tile_no: u8,
 }
 
 impl BgFetcher {
@@ -843,13 +844,14 @@ impl Ppu {
 
         match self.bg_fetcher.step {
             FetchStep::TileNo => {
-                // Latch map/window Y at TileNo; DMG data fetches may resample
-                // SCY later for low/high row-mixing, while CGB-D+ keeps this Y.
+                // Latch map/window Y at TileNo. DMG can re-sample SCY before
+                // the low data byte below; CGB-D+ keeps this TileNo Y for data.
                 self.bg_fetcher.y = if self.bg_fetcher.window {
                     self.bg_fetcher.y
                 } else {
                     self.ly.wrapping_add(self.scy)
                 };
+                self.bg_fetcher.scy_at_tile_no = self.scy;
 
                 let (tile, attr) = self.fetch_bg_tile_no(vram);
                 self.bg_fetcher.tile = tile;
@@ -857,6 +859,15 @@ impl Ppu {
                 self.bg_fetcher.step = FetchStep::TileDataLow;
             }
             FetchStep::TileDataLow => {
+                if !self.bg_fetcher.window
+                    && !self.cgb_mode
+                    && self.scy != self.bg_fetcher.scy_at_tile_no
+                {
+                    self.bg_fetcher.y = self.ly.wrapping_add(self.scy);
+                    let (tile, attr) = self.fetch_bg_tile_no(vram);
+                    self.bg_fetcher.tile = tile;
+                    self.bg_fetcher.attr = attr;
+                }
                 let addr = self.fetch_bg_tile_data_addr();
                 self.bg_fetcher.low = read_vram(&vram[self.bg_tile_bank()], addr);
                 self.bg_fetcher.step = FetchStep::TileDataHigh;
