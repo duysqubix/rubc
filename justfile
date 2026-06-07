@@ -148,14 +148,13 @@ sm83:
 # Alias kept for muscle memory.
 test-opcodes: sm83
 
-# Per-opcode M-cycle count traces (taken/not-taken branch timing).
+# Per-opcode M-cycle count traces (branch-timing regression; legacy name, still useful on the per-T CPU).
 mcycle:
     cargo test -p {{core}} --lib cpu::mcycle -- --show-output
 
 # ---- test: blargg gb-test-roms (prebuilt .gb) ------------------------------
 
-# Run a blargg test ROM by name (default cpu_instrs) headlessly on the M-cycle
-# core; reports PASS/FAIL via serial or the cart-RAM result protocol.
+# Run a blargg test ROM by name (default cpu_instrs) headlessly through the emulator core; reports PASS/FAIL via serial or the cart-RAM result protocol.
 # Usage: just blargg [cpu_instrs|instr_timing|halt_bug|mem_timing|...]
 blargg name="cpu_instrs":
     #!/usr/bin/env bash
@@ -171,8 +170,7 @@ blargg name="cpu_instrs":
     echo "== blargg: $rom =="
     LOG_LEVEL=warn cargo run -q -- run --no-gui --test blargg "$rom"
 
-# Run the blargg cpu_instrs sub-tests through the M-cycle machine harness
-# (rubc-core::machine integration tests) -- the source-of-truth CPU regression.
+# Run the blargg cpu_instrs sub-tests through the machine harness (rubc-core::machine integration tests) -- the source-of-truth CPU regression.
 cpu-roms:
     cargo test -p rubc-core machine::tests::blargg -- --show-output
 
