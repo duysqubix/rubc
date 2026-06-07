@@ -22,6 +22,7 @@ pub mod apu;
 pub mod cartridge;
 pub mod flat;
 pub mod ppu;
+pub mod serial;
 pub mod sm83_vectors;
 pub mod stubs;
 pub mod timer;
@@ -31,6 +32,7 @@ pub use flat::FlatBus;
 pub use ppu::{CgbRenderState, DmgPalettes, Ppu};
 
 use apu::Apu;
+use serial::Serial;
 pub use stubs::Button;
 use stubs::{CgbState, Interrupts, Joypad};
 use timer::Timer;
@@ -192,6 +194,7 @@ pub struct Bus {
 
     pub interrupts: Interrupts,
     pub joypad: Joypad,
+    pub serial: Serial,
     pub timer: Timer,
     pub ppu: Ppu,
     pub apu: Apu,
@@ -227,6 +230,7 @@ impl Default for Bus {
             io: [0; 0x80],
             interrupts: Interrupts::default(),
             joypad: Joypad::default(),
+            serial: Serial::default(),
             timer: Timer::power_on(),
             ppu: Ppu::default(),
             apu: Apu::default(),
@@ -371,6 +375,8 @@ impl Bus {
 
         let div_apu_before = self.div_apu_bit_high();
         self.timer.tick_t(&mut self.interrupts);
+        self.serial
+            .tick_t(self.timer.div_counter(), &mut self.interrupts);
         self.clock_div_apu_if_fell(div_apu_before);
 
         if self.cgb.double_speed {
@@ -699,6 +705,8 @@ impl Bus {
                 self.wram[bank][off]
             }
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
+            0xFF01 => self.serial.read_sb(),
+            0xFF02 => self.serial.read_sc(self.cgb.cgb_mode),
             0xFF04..=0xFF07 => self.timer.read(addr),
             0xFF0F => self.interrupts.if_ | 0xE0, // IF lives in interrupts, not io[]
             0xFF10..=0xFF26 | 0xFF30..=0xFF3F => self.apu.read_for_model(addr, self.cgb.cgb_mode),
@@ -775,10 +783,8 @@ impl Bus {
             // LOW (1 = pressed). The Joypad synthesizes the full register from
             // the logical button state + the selected line.
             0xFF00 => return self.joypad.read_p1(),
-            0xFF01 => 0x00,                            // SB: full
-            0xFF02 => 0x7E, // SC: bit7 + bit0 valid, 6-1 read 1 (DMG); CGB adds bit0
             0xFF42 | 0xFF43 | 0xFF4A | 0xFF4B => 0x00, // SCY/SCX/WY/WX: full (but PPU-owned)
-            0xFF47..=0xFF49 => 0x00, // BGP/OBP0/OBP1: full
+            0xFF47..=0xFF49 => 0x00,                   // BGP/OBP0/OBP1: full
             // CGB-only registers, gated on cgb_mode:
             0xFF68 | 0xFF6A if self.cgb.cgb_mode => 0x40, // BCPS/OCPS: bit 6 reads 1 (unused_hwio-C)
             0xFF72 | 0xFF73 if self.cgb.cgb_mode => 0x00, // fully read/write
@@ -822,9 +828,19 @@ impl Bus {
             }
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
             0xFF00 => self.joypad.write_p1(value), // P1/JOYP: only bits 5-4 (line select) writable
+            0xFF01 => self.serial.write_sb(value),
+            0xFF02 => {
+                if value & 0x80 != 0 {
+                    self.serial_out.push(self.serial.read_sb());
+                }
+                self.serial
+                    .write_sc(value, self.cgb.cgb_mode, self.timer.div_counter());
+            }
             0xFF04 => {
                 let div_apu_before = self.div_apu_bit_high();
                 self.timer.write(addr, value, &mut self.interrupts);
+                self.serial
+                    .div_changed(self.timer.div_counter(), &mut self.interrupts);
                 self.clock_div_apu_if_fell(div_apu_before);
             }
             0xFF05..=0xFF07 => self.timer.write(addr, value, &mut self.interrupts),
@@ -930,21 +946,9 @@ impl Bus {
                     self.io[0x4D] = (self.io[0x4D] & !0x01) | (value & 0x01);
                 }
             }
-            0xFF02 => {
-                // Serial control: writing bit 7 starts a transfer. With no link
-                // partner, capture the SB byte (the blargg result channel) and
-                // immediately clear bit 7 to signal transfer-complete, so a ROM
-                // that polls SC for completion does not hang.
-                if value & 0x80 != 0 {
-                    self.serial_out.push(self.io[0x01]);
-                    self.io[0x02] = value & !0x80;
-                } else {
-                    self.io[0x02] = value;
-                }
-            }
             // $FF00 (P1/JOYP) is handled by the joypad arm above; the rest of
             // the IO page falls through to the raw backing store.
-            0xFF01..=0xFF7F => self.io[(addr - 0xFF00) as usize] = value,
+            0xFF03..=0xFF7F => self.io[(addr - 0xFF00) as usize] = value,
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             0xFFFF => self.interrupts.ie = value,
             0x0000..=0x7FFF => self.cart.write_reg(addr, value), // MBC control regs
@@ -1863,5 +1867,86 @@ mod tests {
         bus.set_button(Button::A, false);
         bus.set_button(Button::Right, false);
         assert_eq!(bus.peek(0xFF00) & 0x0F, 0x0F, "all released -> idle");
+    }
+
+    #[test]
+    fn serial_internal_clock_completes_after_eight_slow_edges() {
+        let mut bus = Bus::new();
+        bus.interrupts.ie = 0x08;
+        for _ in 0..52 {
+            bus.tick_cpu_t();
+        }
+        bus.poke(0xFF01, 0x00);
+        bus.poke(0xFF02, 0x81);
+
+        for _ in 0..(8 * 512 - 1) {
+            bus.tick_cpu_t();
+        }
+        assert_eq!(bus.peek(0xFF02) & 0x80, 0x80, "transfer still active");
+        assert_eq!(
+            bus.peek(0xFF01),
+            0x7F,
+            "seven disconnected-link bits shifted in"
+        );
+        assert_eq!(
+            bus.interrupts.if_ & 0x08,
+            0x00,
+            "no serial IRQ before final edge"
+        );
+
+        bus.tick_cpu_t();
+
+        assert_eq!(bus.peek(0xFF01), 0xFF, "disconnected link shifts in ones");
+        assert_eq!(
+            bus.peek(0xFF02) & 0x80,
+            0x00,
+            "transfer complete clears SC bit 7"
+        );
+        assert_eq!(
+            bus.interrupts.if_ & 0x08,
+            0x08,
+            "serial IRQ requested on completion"
+        );
+    }
+
+    #[test]
+    fn serial_sc_read_masks_unused_bits() {
+        let mut bus = Bus::new();
+        bus.poke(0xFF02, 0x00);
+        assert_eq!(bus.peek(0xFF02), 0x7E, "DMG SC unused bits read high");
+
+        bus.poke(0xFF02, 0x02);
+        assert_eq!(bus.peek(0xFF02), 0x7E, "DMG ignores CGB fast-clock bit");
+
+        bus.cgb.cgb_mode = true;
+        bus.poke(0xFF02, 0x02);
+        assert_eq!(bus.peek(0xFF02), 0x7E, "CGB exposes SC bit 1");
+    }
+
+    #[test]
+    fn serial_external_clock_waits_for_partner_clock() {
+        let mut bus = Bus::new();
+        bus.poke(0xFF01, 0xA5);
+        bus.poke(0xFF02, 0x80);
+
+        for _ in 0..(8 * 512 + 512) {
+            bus.tick_cpu_t();
+        }
+
+        assert_eq!(
+            bus.peek(0xFF01),
+            0xA5,
+            "external-clock transfer does not shift itself"
+        );
+        assert_eq!(
+            bus.peek(0xFF02) & 0x80,
+            0x80,
+            "external-clock transfer remains active"
+        );
+        assert_eq!(
+            bus.interrupts.if_ & 0x08,
+            0x00,
+            "no serial IRQ without partner clock"
+        );
     }
 }
