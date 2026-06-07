@@ -17,6 +17,8 @@ use rubc_core::bus::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use rubc_core::logger;
 use rubc_core::machine::{Machine, RunStop};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 mod audio;
@@ -386,6 +388,18 @@ struct RubcApp {
     audio_frames_pushed: usize,
     audio_log_start: Instant,
     gui: Gui,
+    /// Read-only VRAM snapshot handed to the detached debug viewport each frame
+    /// (None until the viewer is first opened). Written under a brief write lock
+    /// in `logic`, cloned out under a read lock by the viewport closure.
+    vram_snapshot: Arc<RwLock<Option<vramview::VramDebugSnapshot>>>,
+    /// File -> Debug toggle, shared with the menu ([`Gui`]) and the detached
+    /// viewport so the menu entry and the OS close button stay consistent.
+    debug_open: Arc<AtomicBool>,
+    /// Render state for the detached VRAM viewer (view mode, toggles, scale,
+    /// cached texture, signature). Owned behind an `Arc<RwLock>` so the
+    /// `'static` deferred-viewport closure can mutate it -- the closure cannot
+    /// borrow `self`.
+    vram_view: Arc<RwLock<vramview::VramView>>,
     /// The 160x144 framebuffer uploaded as a NEAREST-filtered texture; updated
     /// in place each frame (no per-frame texture allocation).
     screen_tex: Option<egui::TextureHandle>,
@@ -407,6 +421,7 @@ impl RubcApp {
     fn new(machine: Machine, save_path: PathBuf, audio: Option<audio::AudioOutput>) -> Self {
         let now = Instant::now();
         let fps_target = Duration::from_micros(FPS_US);
+        let debug_open = Arc::new(AtomicBool::new(false));
         Self {
             machine,
             save_path,
@@ -414,7 +429,7 @@ impl RubcApp {
             audio_scratch: Vec::new(),
             audio_frames_pushed: 0,
             audio_log_start: now,
-            gui: Gui::new(),
+            gui: Gui::new(Arc::clone(&debug_open)),
             screen_tex: None,
             fps_target,
             last_frame: now,
@@ -422,7 +437,62 @@ impl RubcApp {
             fps_window_start: now,
             frames_this_window: 0,
             last_save: now,
+            vram_snapshot: Arc::new(RwLock::new(None)),
+            debug_open,
+            vram_view: Arc::new(RwLock::new(vramview::VramView::new())),
         }
+    }
+
+    /// (Re)spawn the detached VRAM debug viewport. Called every frame while the
+    /// `File -> Debug` toggle is on; egui keeps the OS window alive as long as
+    /// this is called and closes it once we stop. The deferred closure is
+    /// `Fn(&mut Ui, ViewportClass) + Send + Sync + 'static`, so it captures only
+    /// `Arc` clones of the shared state -- never `&mut self`.
+    fn show_vram_viewport(&self, ctx: &egui::Context) {
+        let snapshot = Arc::clone(&self.vram_snapshot);
+        let view = Arc::clone(&self.vram_view);
+        let debug_open = Arc::clone(&self.debug_open);
+        ctx.show_viewport_deferred(
+            egui::ViewportId::from_hash_of("rubc-vram-debug"),
+            egui::ViewportBuilder::default()
+                .with_title("rubc \u{2014} VRAM Debug")
+                .with_inner_size([580.0, 640.0])
+                .with_min_inner_size([320.0, 240.0]),
+            move |ui, class| {
+                // Platform without native multi-viewport support: the backend
+                // embedded us inside a Window instead of a real OS window, so a
+                // detached viewer is impossible here -- show a notice and bail.
+                if class == egui::ViewportClass::EmbeddedWindow {
+                    ui.label("Detached VRAM viewer needs native multi-viewport support.");
+                    return;
+                }
+
+                // Repaint the detached window continuously so it shows LIVE VRAM
+                // as the game runs; its ctx drives independently of the parent.
+                ui.ctx().request_repaint();
+
+                // Clone the freshly-written snapshot out and drop the read lock
+                // immediately so the emulator loop never blocks on the viewer.
+                let snap = snapshot.read().ok().and_then(|g| g.clone());
+
+                egui::CentralPanel::default().show_inside(ui, |ui| match snap {
+                    Some(snap) => {
+                        if let Ok(mut view) = view.write() {
+                            view.viewport_ui(ui, &snap);
+                        }
+                    }
+                    None => {
+                        ui.label("Waiting for VRAM snapshot\u{2026}");
+                    }
+                });
+
+                // OS close button -> un-toggle File -> Debug so the menu and the
+                // window stay consistent (the menu re-opens it next click).
+                if ui.input(|i| i.viewport().close_requested()) {
+                    debug_open.store(false, Ordering::Relaxed);
+                }
+            },
+        );
     }
 }
 
@@ -498,11 +568,15 @@ impl eframe::App for RubcApp {
             }
         }
 
-        // Hand the debug viewer a read-only VRAM snapshot (only when the window
-        // is open). The immutable borrow ends before the egui closures in `ui`.
-        if self.gui.debug_open() {
-            self.gui
-                .set_vram_snapshot(vramview::VramDebugSnapshot::capture(&self.machine));
+        // While the detached debug viewer is open: capture a fresh read-only
+        // VRAM snapshot into the shared lock (brief write), then (re)spawn the
+        // deferred viewport so it renders in its own OS window. The immutable
+        // machine borrow ends before the closure runs.
+        if self.debug_open.load(Ordering::Relaxed) {
+            if let Ok(mut guard) = self.vram_snapshot.write() {
+                *guard = Some(vramview::VramDebugSnapshot::capture(&self.machine));
+            }
+            self.show_vram_viewport(ctx);
         }
 
         // Pace to an ABSOLUTE per-frame deadline. Sleep until just shy of it

@@ -134,8 +134,6 @@ enum ViewMode {
 
 /// The File -> Debug VRAM viewer window state.
 pub struct VramView {
-    /// Whether the debug window is shown. Toggled by the File -> Debug menu.
-    pub open: bool,
     view: ViewMode,
     /// Tile addressing: `true` = `$8000` unsigned, `false` = `$8800` signed.
     tile_8000: bool,
@@ -151,13 +149,11 @@ pub struct VramView {
     tex_size: [usize; 2],
     /// Signature of the last-built texture; rebuild only when it changes.
     sig: u64,
-    snapshot: Option<VramDebugSnapshot>,
 }
 
 impl Default for VramView {
     fn default() -> Self {
         Self {
-            open: false,
             view: ViewMode::Tiles,
             tile_8000: true,
             map_9c00: false,
@@ -168,7 +164,6 @@ impl Default for VramView {
             tex: None,
             tex_size: [0, 0],
             sig: 0,
-            snapshot: None,
         }
     }
 }
@@ -176,16 +171,6 @@ impl Default for VramView {
 impl VramView {
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Toggle the window open/closed (wired to File -> Debug).
-    pub fn toggle(&mut self) {
-        self.open = !self.open;
-    }
-
-    /// Receive this frame's read-only VRAM snapshot.
-    pub fn set_snapshot(&mut self, snapshot: VramDebugSnapshot) {
-        self.snapshot = Some(snapshot);
     }
 
     /// Compute a cheap signature of everything that affects the rendered
@@ -322,35 +307,31 @@ impl VramView {
         }
     }
 
-    /// Draw the debug window. No-op when closed.
-    pub fn ui(&mut self, ctx: &Context) {
-        if !self.open {
-            return;
-        }
-        self.handle_shortcuts(ctx);
+    /// Render the VRAM viewer into a detached-viewport `Ui`. The texture is
+    /// built and uploaded in the VIEWPORT's egui context (`ui.ctx()`), and the
+    /// existing `window_body` content is drawn directly -- there is no embedded
+    /// `egui::Window` here, the deferred viewport IS the window. The caller
+    /// passes the freshly-captured read-only snapshot.
+    pub fn viewport_ui(&mut self, ui: &mut egui::Ui, snap: &VramDebugSnapshot) {
+        self.handle_shortcuts(ui.ctx());
 
-        let Some(snap) = self.snapshot.clone() else {
-            return;
-        };
+        // Reflect the live view/addressing state in the OS window title bar.
+        ui.ctx()
+            .send_viewport_cmd(egui::ViewportCommand::Title(self.title(snap)));
 
         // Rebuild the texture only when the signature (state/toggles) changes.
-        let sig = self.signature(&snap);
+        let sig = self.signature(snap);
         if self.tex.is_none() || sig != self.sig {
-            let image = self.build_image(&snap);
+            let image = self.build_image(snap);
             self.tex_size = image.size;
-            let handle = ctx.load_texture("rubc-vram-debug", image, TextureOptions::NEAREST);
+            let handle = ui
+                .ctx()
+                .load_texture("rubc-vram-debug", image, TextureOptions::NEAREST);
             self.tex = Some(handle);
             self.sig = sig;
         }
 
-        let title = self.title(&snap);
-        let mut open = self.open;
-        egui::Window::new(title)
-            .open(&mut open)
-            .resizable(true)
-            .default_width(560.0)
-            .show(ctx, |ui| self.window_body(ui, &snap));
-        self.open = open;
+        self.window_body(ui, snap);
     }
 
     fn title(&self, snap: &VramDebugSnapshot) -> String {
