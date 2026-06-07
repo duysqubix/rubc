@@ -17,6 +17,7 @@
 use super::CpuBus;
 
 /// A flat 64 KiB address space implementing [`CpuBus`] with no side effects.
+#[cfg_attr(test, derive(Clone))]
 pub struct FlatBus {
     pub mem: Box<[u8; 0x1_0000]>,
     /// Number of `*_m` calls (a coarse M-cycle count for vector cycle checks).
@@ -54,6 +55,18 @@ impl FlatBus {
     /// Set the IE register directly (vectors carry an `ie` field).
     pub fn set_ie(&mut self, ie: u8) {
         self.ie = ie;
+    }
+
+    /// Set the IF register directly for deterministic interrupt fixtures.
+    #[cfg(test)]
+    pub fn set_if(&mut self, if_: u8) {
+        self.if_ = if_;
+    }
+
+    /// Direct IF register read for equivalence snapshots.
+    #[cfg(test)]
+    pub fn if_(&self) -> u8 {
+        self.if_
     }
 }
 

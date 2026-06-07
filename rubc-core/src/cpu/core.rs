@@ -35,6 +35,7 @@ pub enum Exec {
 }
 
 /// The SM83 CPU.
+#[cfg_attr(test, derive(Clone))]
 pub struct Cpu {
     pub r: Regs,
     pub ime: bool,
@@ -71,6 +72,9 @@ impl Cpu {
 
     /// Advance exactly one bus M-cycle.
     pub fn step_m<B: CpuBus>(&mut self, bus: &mut B) {
+        // Candidate-B seam: B5 will introduce a cfg(test)-only
+        // `step_m_legacy` copy here while `step_m` switches to the per-T engine.
+        // Keep this implementation behavior-identical until that split.
         loop {
             match self.mode {
                 CpuMode::Halt => {
@@ -137,6 +141,36 @@ impl Cpu {
     /// opcode). Used by the machine runner to step exactly one instruction.
     pub fn exec_is_boundary(&self) -> bool {
         self.exec == Exec::Boundary
+    }
+
+    #[cfg(test)]
+    pub(super) fn equiv_exec(&self) -> Exec {
+        self.exec
+    }
+
+    #[cfg(test)]
+    pub(super) fn equiv_ime_pending(&self) -> bool {
+        self.ime_pending
+    }
+
+    #[cfg(test)]
+    pub(super) fn equiv_ime_delay_boundary(&self) -> u8 {
+        self.ime_delay_boundary
+    }
+
+    #[cfg(test)]
+    pub(super) fn equiv_halt_bug(&self) -> bool {
+        self.halt_bug
+    }
+
+    #[cfg(test)]
+    pub(super) fn equiv_tmp8(&self) -> u8 {
+        self.tmp8
+    }
+
+    #[cfg(test)]
+    pub(super) fn equiv_tmp16(&self) -> u16 {
+        self.tmp16
     }
 
     /// Advance to the next phase of the current (non-CB) opcode.

@@ -12,6 +12,8 @@ pub mod opcodes_cb;
 pub mod regs;
 
 #[cfg(test)]
+pub(crate) mod equiv_harness;
+#[cfg(test)]
 mod interrupts_test;
 #[cfg(test)]
 mod mcycle;
