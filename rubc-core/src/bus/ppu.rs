@@ -965,8 +965,17 @@ impl Ppu {
         }
 
         let window_x = self.wx.saturating_sub(7) as usize;
-        if self.lcd_x != window_x {
+        // SameBoy's DMG FIFO path also triggers on WX == position+6 when WX was
+        // stable, then applies the one-pixel horizontal desync observed on DMG.
+        // This is distinct from the normal WX == position+7 compare.
+        let dmg_early_window_x = self.wx.saturating_sub(6) as usize;
+        let dmg_early_window = !self.cgb_mode && self.lcd_x == dmg_early_window_x;
+        if self.lcd_x != window_x && !dmg_early_window {
             return;
+        }
+
+        if dmg_early_window && self.lcd_x > 0 {
+            self.lcd_x -= 1;
         }
 
         self.window_active = true;
