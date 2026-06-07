@@ -95,12 +95,10 @@ struct ActiveCpuCycleState {
     elapsed_t: u8,
 }
 
-#[cfg(test)]
 struct PerTOpcodeBus<'a, B> {
     inner: &'a mut B,
 }
 
-#[cfg(test)]
 impl<'a, B: CpuBus> PerTOpcodeBus<'a, B> {
     fn new(inner: &'a mut B) -> Self {
         Self { inner }
@@ -114,7 +112,6 @@ impl<'a, B: CpuBus> PerTOpcodeBus<'a, B> {
     }
 }
 
-#[cfg(test)]
 impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
     fn read_m(&mut self, addr: u16) -> u8 {
         self.run_cycle();
@@ -124,17 +121,11 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
     }
 
     fn read_m_oam_bug_idu(&mut self, addr: u16) -> u8 {
-        self.run_cycle();
-        let value = self.inner.read_latched(addr);
-        self.inner.oam_bug_idu_glitch(addr);
-        self.inner.end_cpu_cycle();
-        value
+        self.inner.read_m_oam_bug_idu(addr)
     }
 
     fn write_m(&mut self, addr: u16, value: u8) {
-        self.run_cycle();
-        self.inner.write_latched(addr, value);
-        self.inner.end_cpu_cycle();
+        self.inner.write_m(addr, value);
     }
 
     fn idle_m(&mut self) {
@@ -143,9 +134,7 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
     }
 
     fn oam_bug_idu_m(&mut self, addr: u16) {
-        self.run_cycle();
-        self.inner.oam_bug_idu_glitch(addr);
-        self.inner.end_cpu_cycle();
+        self.inner.oam_bug_idu_m(addr);
     }
 
     fn oam_bug_idu_glitch(&mut self, addr: u16) {
@@ -314,7 +303,7 @@ impl Cpu {
                         addr: self.r.pc,
                         completion: CpuCycleCompletion::FetchOpcode,
                     });
-                    self.finish_active_cycle_for_b1_test(bus);
+                    self.finish_active_cycle(bus);
                     true
                 }
                 Exec::Execute { op: 0x00, phase: 0 } => {
@@ -334,7 +323,7 @@ impl Cpu {
                             finish: true,
                         },
                     });
-                    self.finish_active_cycle_for_b1_test(bus);
+                    self.finish_active_cycle(bus);
                     true
                 }
                 _ => false,
@@ -369,7 +358,7 @@ impl Cpu {
                         addr: self.r.pc,
                         completion: CpuCycleCompletion::FetchOpcode,
                     });
-                    self.finish_active_cycle_for_b1_test(bus);
+                    self.finish_active_cycle(bus);
                     true
                 }
                 Exec::Execute { op: 0x00, phase: 0 } => {
@@ -389,7 +378,7 @@ impl Cpu {
                             finish: true,
                         },
                     });
-                    self.finish_active_cycle_for_b1_test(bus);
+                    self.finish_active_cycle(bus);
                     true
                 }
                 _ => false,
@@ -398,8 +387,7 @@ impl Cpu {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn step_b4_supported_m_via_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
+    fn step_m_via_t<B: CpuBus>(&mut self, bus: &mut B) {
         loop {
             match self.mode {
                 CpuMode::Halt => {
@@ -412,19 +400,19 @@ impl Cpu {
                     self.start_cpu_cycle(ActiveCpuCycle::Idle {
                         completion: CpuCycleCompletion::None,
                     });
-                    self.finish_active_cycle_for_b1_test(bus);
-                    return true;
+                    self.finish_active_cycle(bus);
+                    return;
                 }
                 CpuMode::Stopped => {
                     self.start_cpu_cycle(ActiveCpuCycle::Idle {
                         completion: CpuCycleCompletion::None,
                     });
-                    self.finish_active_cycle_for_b1_test(bus);
-                    return true;
+                    self.finish_active_cycle(bus);
+                    return;
                 }
                 CpuMode::InterruptDispatch { .. } => {
                     self.step_dispatch_via_t(bus);
-                    return true;
+                    return;
                 }
                 CpuMode::Running => match self.exec {
                     Exec::Boundary => {
@@ -444,25 +432,24 @@ impl Cpu {
                             addr: self.r.pc,
                             completion: CpuCycleCompletion::FetchOpcode,
                         });
-                        self.finish_active_cycle_for_b1_test(bus);
-                        return true;
+                        self.finish_active_cycle(bus);
+                        return;
                     }
                     Exec::Execute { op, phase } => {
                         let mut per_t_bus = PerTOpcodeBus::new(bus);
                         super::opcodes::step(self, &mut per_t_bus, op, phase);
-                        return true;
+                        return;
                     }
                     Exec::CbExecute { op, phase } => {
                         let mut per_t_bus = PerTOpcodeBus::new(bus);
                         super::opcodes_cb::step(self, &mut per_t_bus, op, phase);
-                        return true;
+                        return;
                     }
                 },
             }
         }
     }
 
-    #[cfg(test)]
     fn step_dispatch_via_t<B: CpuBus>(&mut self, bus: &mut B) {
         let CpuMode::InterruptDispatch { phase, .. } = self.mode else {
             unreachable!();
@@ -491,11 +478,10 @@ impl Cpu {
             }),
         }
 
-        self.finish_active_cycle_for_b1_test(bus);
+        self.finish_active_cycle(bus);
     }
 
-    #[cfg(test)]
-    fn finish_active_cycle_for_b1_test<B: CpuBus>(&mut self, bus: &mut B) {
+    fn finish_active_cycle<B: CpuBus>(&mut self, bus: &mut B) {
         for t in 0..4 {
             let done = self.step_t(bus);
             assert_eq!(done, t == 3);
@@ -504,9 +490,11 @@ impl Cpu {
 
     /// Advance exactly one bus M-cycle.
     pub fn step_m<B: CpuBus>(&mut self, bus: &mut B) {
-        // Candidate-B seam: B5 will introduce a cfg(test)-only
-        // `step_m_legacy` copy here while `step_m` switches to the per-T engine.
-        // Keep this implementation behavior-identical until that split.
+        self.step_m_via_t(bus);
+    }
+
+    #[cfg(test)]
+    pub(super) fn step_m_legacy<B: CpuBus>(&mut self, bus: &mut B) {
         loop {
             match self.mode {
                 CpuMode::Halt => {
@@ -690,6 +678,7 @@ impl Cpu {
         true
     }
 
+    #[cfg(test)]
     fn step_dispatch<B: CpuBus>(&mut self, bus: &mut B) {
         let CpuMode::InterruptDispatch {
             phase,

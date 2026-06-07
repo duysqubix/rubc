@@ -100,8 +100,33 @@ pub fn trace_step_m_until_boundary(
     Err(TraceError::MaxStepsExceeded { max_steps })
 }
 
+pub fn trace_step_m_legacy_until_boundary(
+    mut cpu: Cpu,
+    mut bus: FlatBus,
+    max_steps: usize,
+) -> Result<Vec<CpuSnapshot>, TraceError> {
+    let mut trace = Vec::new();
+
+    for step in 0..max_steps {
+        cpu.step_m_legacy(&mut bus);
+        trace.push(CpuSnapshot::capture(&cpu, &bus));
+        if cpu.exec_is_boundary() && !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }) {
+            return Ok(trace);
+        }
+        if step + 1 == max_steps {
+            break;
+        }
+    }
+
+    Err(TraceError::MaxStepsExceeded { max_steps })
+}
+
 pub fn trace_instruction(cpu: Cpu, bus: FlatBus) -> Result<Vec<CpuSnapshot>, TraceError> {
     trace_step_m_until_boundary(cpu, bus, DEFAULT_MAX_STEPS)
+}
+
+pub fn trace_legacy_instruction(cpu: Cpu, bus: FlatBus) -> Result<Vec<CpuSnapshot>, TraceError> {
+    trace_step_m_legacy_until_boundary(cpu, bus, DEFAULT_MAX_STEPS)
 }
 
 pub fn trace_b1_step_t_supported_instruction(
@@ -123,13 +148,6 @@ pub fn trace_b3_step_t_supported_instruction(
     mut bus: FlatBus,
 ) -> Result<Vec<CpuSnapshot>, TraceError> {
     trace_b3_step_t_supported_instruction_inner(&mut cpu, &mut bus)
-}
-
-pub fn trace_b4_step_t_supported_instruction(
-    mut cpu: Cpu,
-    mut bus: FlatBus,
-) -> Result<Vec<CpuSnapshot>, TraceError> {
-    trace_b4_step_t_supported_instruction_inner(&mut cpu, &mut bus)
 }
 
 fn trace_b2_step_t_supported_instruction_inner(
@@ -166,32 +184,6 @@ fn trace_b3_step_t_supported_instruction_inner(
 
     for step in 0..DEFAULT_MAX_STEPS {
         if !cpu.step_b3_supported_m_via_t(bus) {
-            return Err(TraceError::UnsupportedB1Opcode {
-                exec: cpu.equiv_exec(),
-            });
-        }
-        trace.push(CpuSnapshot::capture(cpu, bus));
-        if cpu.exec_is_boundary() && !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }) {
-            return Ok(trace);
-        }
-        if step + 1 == DEFAULT_MAX_STEPS {
-            break;
-        }
-    }
-
-    Err(TraceError::MaxStepsExceeded {
-        max_steps: DEFAULT_MAX_STEPS,
-    })
-}
-
-fn trace_b4_step_t_supported_instruction_inner(
-    cpu: &mut Cpu,
-    bus: &mut FlatBus,
-) -> Result<Vec<CpuSnapshot>, TraceError> {
-    let mut trace = Vec::new();
-
-    for step in 0..DEFAULT_MAX_STEPS {
-        if !cpu.step_b4_supported_m_via_t(bus) {
             return Err(TraceError::UnsupportedB1Opcode {
                 exec: cpu.equiv_exec(),
             });
@@ -768,22 +760,24 @@ mod tests {
 
         for op in 0u8..=0xFF {
             let (cpu, bus) = opcode_fixture(op);
-            let legacy = trace_instruction(cpu.clone(), bus.clone())
+            let legacy = trace_legacy_instruction(cpu.clone(), bus.clone())
                 .unwrap_or_else(|err| panic!("main opcode {op:02X} legacy trace failed: {err:?}"));
-            let via_t = trace_b4_step_t_supported_instruction(cpu, bus)
-                .unwrap_or_else(|err| panic!("main opcode {op:02X} via-T trace failed: {err:?}"));
-            compare_traces(&legacy, &via_t)
+            let production = trace_instruction(cpu, bus).unwrap_or_else(|err| {
+                panic!("main opcode {op:02X} production trace failed: {err:?}")
+            });
+            compare_traces(&legacy, &production)
                 .unwrap_or_else(|err| panic!("main opcode {op:02X} diverged: {err:?}"));
             checked += 1;
         }
 
         for op in 0u8..=0xFF {
             let (cpu, bus) = cb_opcode_fixture(op);
-            let legacy = trace_instruction(cpu.clone(), bus.clone())
+            let legacy = trace_legacy_instruction(cpu.clone(), bus.clone())
                 .unwrap_or_else(|err| panic!("CB opcode {op:02X} legacy trace failed: {err:?}"));
-            let via_t = trace_b4_step_t_supported_instruction(cpu, bus)
-                .unwrap_or_else(|err| panic!("CB opcode {op:02X} via-T trace failed: {err:?}"));
-            compare_traces(&legacy, &via_t)
+            let production = trace_instruction(cpu, bus).unwrap_or_else(|err| {
+                panic!("CB opcode {op:02X} production trace failed: {err:?}")
+            });
+            compare_traces(&legacy, &production)
                 .unwrap_or_else(|err| panic!("CB opcode {op:02X} diverged: {err:?}"));
             checked += 1;
         }
@@ -816,7 +810,7 @@ mod tests {
         }
         .initial_state();
 
-        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let legacy = trace_legacy_instruction(cpu.clone(), bus.clone()).unwrap();
         let b1 = trace_b1_step_t_supported_instruction(cpu, bus).unwrap();
         compare_traces(&legacy, &b1).unwrap();
     }
@@ -831,7 +825,7 @@ mod tests {
         }
         .initial_state();
 
-        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let legacy = trace_legacy_instruction(cpu.clone(), bus.clone()).unwrap();
         let b1 = trace_b1_step_t_supported_instruction(cpu, bus).unwrap();
         compare_traces(&legacy, &b1).unwrap();
     }
@@ -839,7 +833,7 @@ mod tests {
     #[test]
     fn b2_step_t_boundary_fetch_matches_plain_legacy_fetch() {
         let (cpu, bus) = program_fixture(&[0x00]);
-        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let legacy = trace_legacy_instruction(cpu.clone(), bus.clone()).unwrap();
         let b2 = trace_b2_step_t_supported_instruction(cpu, bus).unwrap();
         compare_traces(&legacy, &b2).unwrap();
     }
@@ -847,7 +841,7 @@ mod tests {
     #[test]
     fn b2_step_t_boundary_dispatch_preempts_fetch_like_legacy() {
         let (cpu, bus) = interrupt_fixture();
-        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let legacy = trace_legacy_instruction(cpu.clone(), bus.clone()).unwrap();
         let b2 = trace_b2_step_t_supported_instruction(cpu, bus).unwrap();
         compare_traces(&legacy, &b2).unwrap();
     }
@@ -855,7 +849,7 @@ mod tests {
     #[test]
     fn b2_step_t_boundary_fetch_matches_halt_bug_legacy_fetch() {
         let (cpu, bus) = halt_bug_fetch_fixture();
-        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let legacy = trace_legacy_instruction(cpu.clone(), bus.clone()).unwrap();
         let b2 = trace_b2_step_t_supported_instruction(cpu, bus).unwrap();
         compare_traces(&legacy, &b2).unwrap();
     }
@@ -863,7 +857,7 @@ mod tests {
     #[test]
     fn b3_step_t_dispatch_matches_legacy_normal_vblank() {
         let (cpu, bus) = interrupt_fixture();
-        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let legacy = trace_legacy_instruction(cpu.clone(), bus.clone()).unwrap();
         let b3 = trace_b3_step_t_supported_instruction(cpu, bus).unwrap();
         compare_traces(&legacy, &b3).unwrap();
     }
