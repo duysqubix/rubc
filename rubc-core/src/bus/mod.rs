@@ -51,6 +51,9 @@ fn write_oam_word(oam: &mut [u8; 0xA0], index: usize, value: u16) {
 pub trait CpuBus {
     /// Read one byte over one M-cycle (tick-THEN-sample).
     fn read_m(&mut self, addr: u16) -> u8;
+    fn read_m_oam_bug_idu(&mut self, addr: u16) -> u8 {
+        self.read_m(addr)
+    }
     /// Write one byte over one M-cycle.
     fn write_m(&mut self, addr: u16, value: u8);
     /// Burn one M-cycle with no memory access (internal CPU work).
@@ -91,6 +94,9 @@ enum CpuAccess {
     Read {
         addr: u16,
     },
+    OamBugReadIncDec {
+        addr: u16,
+    },
     /// Memory write.
     Write {
         addr: u16,
@@ -104,6 +110,7 @@ enum CpuAccess {
 #[derive(Clone, Copy)]
 enum OamBugAccess {
     Read,
+    ReadIncDec,
     Write,
 }
 
@@ -321,6 +328,10 @@ impl Bus {
                 // ses_16262cca4).
                 self.tick_t_times(4);
                 self.cpu_read_latched(addr)
+            }
+            CpuAccess::OamBugReadIncDec { addr } => {
+                self.tick_t_times(4);
+                self.cpu_read_latched_for_oam_bug(addr, OamBugAccess::ReadIncDec)
             }
             CpuAccess::Write { addr, value } => {
                 // TAC ($FF07) is the edge-producing timer register: a write can
@@ -610,8 +621,12 @@ impl Bus {
     // ---- latched access (sample at END of M) -------------------------------
 
     fn cpu_read_latched(&mut self, addr: u16) -> u8 {
+        self.cpu_read_latched_for_oam_bug(addr, OamBugAccess::Read)
+    }
+
+    fn cpu_read_latched_for_oam_bug(&mut self, addr: u16, access: OamBugAccess) -> u8 {
         self.ticks_at_last_sample = self.t_tick_count;
-        self.corrupt_oam_for_bug(addr, OamBugAccess::Read);
+        self.corrupt_oam_for_bug(addr, access);
 
         // OAM DMA bus conflict (Pan Docs: the CPU can still access the OTHER
         // bus during DMA). The DMA drives the bus its SOURCE is on -- the
@@ -674,7 +689,16 @@ impl Bus {
     }
 
     fn apply_oam_bug_corruption(&mut self, row: usize, access: OamBugAccess) {
-        if row == 0 || row >= 20 {
+        if row >= 20 {
+            return;
+        }
+
+        if matches!(access, OamBugAccess::ReadIncDec) {
+            self.apply_oam_bug_read_inc_dec_corruption(row);
+            return;
+        }
+
+        if row == 0 {
             return;
         }
 
@@ -685,6 +709,7 @@ impl Bus {
         let c = read_oam_word(&self.oam, prev + 4);
         let word0 = match access {
             OamBugAccess::Read => b | (a & c),
+            OamBugAccess::ReadIncDec => unreachable!(),
             OamBugAccess::Write => ((a ^ c) & (b ^ c)) ^ c,
         };
         write_oam_word(&mut self.oam, base, word0);
@@ -692,6 +717,31 @@ impl Bus {
             let copied = read_oam_word(&self.oam, prev + word * 2);
             write_oam_word(&mut self.oam, base + word * 2, copied);
         }
+    }
+
+    fn apply_oam_bug_read_inc_dec_corruption(&mut self, row: usize) {
+        if row == 0 {
+            return;
+        }
+
+        if (4..=18).contains(&row) {
+            let base = row * 8;
+            let prev = base - 8;
+            let prev_prev = base - 16;
+            let a = read_oam_word(&self.oam, prev_prev);
+            let b = read_oam_word(&self.oam, prev);
+            let c = read_oam_word(&self.oam, base);
+            let d = read_oam_word(&self.oam, prev + 4);
+            let word0 = (b & (a | c | d)) | (a & c & d);
+            write_oam_word(&mut self.oam, prev, word0);
+
+            let mut copied_row = [0; 8];
+            copied_row.copy_from_slice(&self.oam[prev..prev + 8]);
+            self.oam[base..base + 8].copy_from_slice(&copied_row);
+            self.oam[prev_prev..prev_prev + 8].copy_from_slice(&copied_row);
+        }
+
+        self.apply_oam_bug_corruption(row, OamBugAccess::Read);
     }
 
     /// Side-effect-free read (no tick). The decode is a flat placeholder; real
@@ -963,6 +1013,10 @@ impl CpuBus for Bus {
         self.run_cpu_access(CpuAccess::Read { addr })
     }
 
+    fn read_m_oam_bug_idu(&mut self, addr: u16) -> u8 {
+        self.run_cpu_access(CpuAccess::OamBugReadIncDec { addr })
+    }
+
     fn write_m(&mut self, addr: u16, value: u8) {
         self.run_cpu_access(CpuAccess::Write { addr, value });
     }
@@ -1124,6 +1178,27 @@ mod tests {
             oam_row_words(&bus, 1),
             [0x00F0 | (0xAAAA & 0x0F0F), 0x1111, 0x0F0F, 0x3333]
         );
+    }
+
+    #[test]
+    fn dmg_oam_read_inc_dec_during_mode2_corrupts_previous_and_current_rows() {
+        let mut bus = Bus::new();
+        seed_oam_row(&mut bus, 2, [0x0F0F, 0x2222, 0x3333, 0x4444]);
+        seed_oam_row(&mut bus, 3, [0x00F0, 0x5555, 0x0F0F, 0x7777]);
+        seed_oam_row(&mut bus, 4, [0xAAAA, 0x8888, 0x9999, 0xBBBB]);
+
+        for _ in 0..4 {
+            bus.idle_m();
+        }
+        let _ = bus.read_m_oam_bug_idu(0xFEA0);
+
+        let complex_word0 = (0x00F0 & (0x0F0F | 0xAAAA | 0x0F0F)) | (0x0F0F & 0xAAAA & 0x0F0F);
+        let complex_row = [complex_word0, 0x5555, 0x0F0F, 0x7777];
+        let read_word0 = complex_word0;
+
+        assert_eq!(oam_row_words(&bus, 2), complex_row);
+        assert_eq!(oam_row_words(&bus, 3), complex_row);
+        assert_eq!(oam_row_words(&bus, 4), [read_word0, 0x5555, 0x0F0F, 0x7777]);
     }
 
     #[test]

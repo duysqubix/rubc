@@ -402,15 +402,46 @@ mod tests {
     /// cart-RAM $A000 protocol). Used for ROMs like mem_timing-2 that report to
     /// cart RAM instead of serial.
     fn blargg_passes_at(rel: &str) -> bool {
+        blargg_passes_at_for(rel, 100_000_000)
+    }
+
+    fn blargg_passes_at_for(rel: &str, max_mcycles: u64) -> bool {
+        blargg_result_at_for(rel, max_mcycles)
+            .map(|(_, passed, _, _, _)| passed)
+            .unwrap_or(true)
+    }
+
+    fn blargg_result_at_for(
+        rel: &str,
+        max_mcycles: u64,
+    ) -> Option<(RunStop, bool, String, String, String)> {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../reference/test-suites/gb-test-roms")
             .join(rel);
         let Ok(rom) = std::fs::read(&path) else {
-            return true; // ROM absent on this checkout -> skip (don't fail CI)
+            return None;
         };
         let mut m = Machine::boot_dmg(&rom);
-        m.run_blargg(100_000_000);
-        m.blargg_passed()
+        let stop = m.run_blargg(max_mcycles);
+        let passed = m.blargg_passed();
+        let serial = m.serial_text().unwrap_or_default();
+        let console = m.blargg_console_text().unwrap_or_default();
+        let cart_text: String = (0..512u16)
+            .map(|i| m.bus.peek(0xA000 + i))
+            .take_while(|&b| b != 0)
+            .map(|b| {
+                if (0x20..0x7F).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect();
+        let debug = format!(
+            "pc={:04X} sp={:04X} ly={} mode={} dot={} cart={cart_text:?}",
+            m.cpu.r.pc, m.cpu.r.sp, m.bus.ppu.ly, m.bus.ppu.mode, m.bus.ppu.dot_ticks
+        );
+        Some((stop, passed, serial, console, debug))
     }
 
     #[test]
@@ -464,10 +495,10 @@ mod tests {
     }
 
     #[test]
-    fn blargg_oam_bug_combined_still_fails_until_instr_patterns_are_complete() {
+    fn blargg_oam_bug_combined_passes() {
         assert!(
-            !blargg_passes_at("oam_bug/oam_bug.gb"),
-            "combined oam_bug needs the remaining exact multi-access instruction patterns"
+            blargg_passes_at_for("oam_bug/oam_bug.gb", 120_000_000),
+            "combined oam_bug should pass"
         );
     }
 
@@ -480,9 +511,18 @@ mod tests {
             "4-scanline_timing.gb",
             "5-timing_bug.gb",
             "6-timing_no_bug.gb",
+            "8-instr_effect.gb",
         ] {
             let rel = format!("oam_bug/rom_singles/{name}");
-            assert!(blargg_passes_at(&rel), "oam_bug {name} should pass");
+            let Some((stop, passed, serial, console, debug)) =
+                blargg_result_at_for(&rel, 120_000_000)
+            else {
+                continue;
+            };
+            assert!(
+                passed,
+                "oam_bug {name} should pass. stop={stop:?} {debug} serial={serial:?} console={console:?}"
+            );
         }
     }
 

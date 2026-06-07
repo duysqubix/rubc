@@ -235,12 +235,17 @@ impl Cpu {
             unreachable!();
         };
         match *phase {
-            0 | 1 => {
+            0 => {
                 bus.idle_m();
                 *phase += 1;
             }
+            1 => {
+                let old_sp = self.r.sp;
+                bus.oam_bug_idu_m(old_sp);
+                self.r.sp = old_sp.wrapping_sub(1);
+                *phase = 2;
+            }
             2 => {
-                self.r.sp = self.r.sp.wrapping_sub(1);
                 bus.write_m(self.r.sp, (self.r.pc >> 8) as u8); // PC high
                                                                 // Re-select the interrupt from the CURRENT (IE & IF) right after
                                                                 // the PC-HIGH push (Oracle ses_164828bc5 + mooneye ie_push). A
@@ -260,10 +265,10 @@ impl Cpu {
                     *bit = new_bit;
                     *vector = 0x0040 + (new_bit as u16) * 8;
                 }
+                self.r.sp = self.r.sp.wrapping_sub(1);
                 *phase = 3;
             }
             3 => {
-                self.r.sp = self.r.sp.wrapping_sub(1);
                 bus.write_m(self.r.sp, self.r.pc as u8); // PC low
                 *phase = 4;
             }
