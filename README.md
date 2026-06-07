@@ -130,6 +130,7 @@ what currently passes:
 | **Blargg `cgb_sound`** | ✅ 12/12 |
 | **dmg-acid2** | ✅ Pixel-exact |
 | **cgb-acid2** | ✅ Pixel-exact |
+| **cgb-acid-hell** | ✅ Pixel-exact |
 | **Mooneye acceptance (DMG-ABC + CGB)** | ✅ 94/115 |
 
 ### Test gallery
@@ -214,9 +215,9 @@ hacks.
 ## Status
 
 rubc plays commercial DMG and CGB games today, with picture, sound, input, and
-battery saves — natively, in the browser (WebAssembly), or via Docker. Work
-continues on the last few sub-instruction PPU timing edge cases (the mid-
-scanline mealybug-tearoom and `cgb-acid-hell` tests).
+battery saves — natively, in the browser (WebAssembly), or via Docker. The PPU is
+pixel-exact on dmg-acid2, cgb-acid2, and the demanding cgb-acid-hell torture test;
+work continues on the remaining mid-scanline mealybug-tearoom edge cases.
 
 ## License
 
