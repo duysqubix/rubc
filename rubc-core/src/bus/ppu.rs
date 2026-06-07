@@ -763,13 +763,7 @@ impl Ppu {
         if self.bg_fetcher.step == FetchStep::Push {
             if self.bg_fifo.is_empty() {
                 let x_flip = self.cgb_mode && self.bg_fetcher.attr & 0x20 != 0;
-                let colors = if self.lcdc & 0x01 == 0 && !self.cgb_mode {
-                    // DMG: LCDC bit 0 clear blanks the BG. In CGB this bit only
-                    // affects OBJ master priority, not BG visibility.
-                    [0; FIFO_CAPACITY]
-                } else {
-                    decode_2bpp(self.bg_fetcher.low, self.bg_fetcher.high, x_flip)
-                };
+                let colors = decode_2bpp(self.bg_fetcher.low, self.bg_fetcher.high, x_flip);
                 // CGB BG attr: bits 2-0 = palette, bit 7 = BG-to-OBJ priority.
                 let cgb_palette = self.bg_fetcher.attr & 0x07;
                 let bg_priority = self.cgb_mode && self.bg_fetcher.attr & 0x80 != 0;
