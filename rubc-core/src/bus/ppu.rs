@@ -29,12 +29,10 @@ const DOTS_PER_LINE: u32 = 456;
 const MODE2_DOTS: u32 = 80;
 /// Baseline mode 3 length: 12-dot fetch startup + 160 visible pixels.
 const BASE_MODE3_DOTS: u32 = 172;
-const MODE3_PIPELINE_DELAY_DOTS: u8 = 7;
-const EFFECTIVE_BASE_MODE3_DOTS: u32 = BASE_MODE3_DOTS + MODE3_PIPELINE_DELAY_DOTS as u32;
 const LCD_ON_FIRST_LINE_DOTS: u32 = DOTS_PER_LINE - 4;
 const LCD_ON_FIRST_MODE3_START: u32 = MODE2_DOTS;
 const LCD_ON_FIRST_MODE3_PUBLIC_START: u32 = LCD_ON_FIRST_MODE3_START;
-const LCD_ON_FIRST_MODE3_PUBLIC_END: u32 = LCD_ON_FIRST_MODE3_START + EFFECTIVE_BASE_MODE3_DOTS - 1;
+const LCD_ON_FIRST_MODE3_PUBLIC_END: u32 = LCD_ON_FIRST_MODE3_START + BASE_MODE3_DOTS - 1;
 /// Last visible scanline (LY 0..=143 are visible; 144..=153 are VBlank).
 const LAST_VISIBLE_LINE: u8 = 143;
 /// Last scanline before LY wraps back to 0.
@@ -389,7 +387,7 @@ pub struct Ppu {
     window_active: bool,
     window_started_this_line: bool,
     window_glitch_x: Option<usize>,
-    drawing_start_delay: u8,
+    window_disable_pending: bool,
     drawing_dots: u32,
 }
 
@@ -441,7 +439,7 @@ impl Default for Ppu {
             window_active: false,
             window_started_this_line: false,
             window_glitch_x: None,
-            drawing_start_delay: 0,
+            window_disable_pending: false,
             drawing_dots: 0,
         }
     }
@@ -599,7 +597,7 @@ impl Ppu {
     }
 
     fn public_mode3_end_dot(&self) -> u32 {
-        let mut len = EFFECTIVE_BASE_MODE3_DOTS + u32::from(self.scx & 0x07);
+        let mut len = BASE_MODE3_DOTS + u32::from(self.scx & 0x07);
         let mut seen_tiles = [false; 32];
         let mut sprite_penalty = 0u32;
         for sprite in self.scanline_sprites[..self.scanline_sprite_count]
@@ -682,6 +680,7 @@ impl Ppu {
         self.window_active = false;
         self.window_started_this_line = false;
         self.window_glitch_x = None;
+        self.window_disable_pending = false;
         if self.ly == self.wy {
             self.window_y_condition = true;
         }
@@ -708,18 +707,13 @@ impl Ppu {
         self.window_active = false;
         self.window_started_this_line = false;
         self.window_glitch_x = None;
-        self.drawing_start_delay = MODE3_PIPELINE_DELAY_DOTS;
+        self.window_disable_pending = false;
         self.drawing_dots = 0;
         self.set_mode(mode::DRAWING, irq);
     }
 
     fn tick_drawing(&mut self, vram: &[[u8; 0x2000]; 2], irq: &mut Interrupts) {
         self.drawing_dots += 1;
-
-        if self.drawing_start_delay > 0 {
-            self.drawing_start_delay -= 1;
-            return;
-        }
 
         if self.sprite_idle_ticks > 0 {
             self.clock_bg_fetcher(vram);
@@ -752,12 +746,20 @@ impl Ppu {
         self.sprite_fetch_ticks = 0;
         self.sprite_idle_ticks = 0;
         self.window_glitch_x = None;
-        self.drawing_start_delay = 0;
+        self.window_disable_pending = false;
         self.stat_mode0_level = true;
         self.set_mode(mode::HBLANK, irq);
     }
 
     fn clock_bg_fetcher(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        if self.window_disable_pending && self.bg_fifo.is_empty() {
+            if self.lcdc & 0x20 == 0 {
+                self.stop_window_fetcher_for_bg_resume();
+            } else {
+                self.window_disable_pending = false;
+            }
+        }
+
         if self.bg_fetcher.step == FetchStep::Push {
             if self.bg_fifo.is_empty() {
                 let x_flip = self.cgb_mode && self.bg_fetcher.attr & 0x20 != 0;
@@ -776,12 +778,6 @@ impl Ppu {
                 self.bg_fetcher.fetcher_x = self.bg_fetcher.fetcher_x.wrapping_add(1);
                 self.bg_fetcher.step = FetchStep::TileNo;
                 self.bg_fetcher.step_ticks = 0;
-                if self.bg_fetcher.window && self.lcdc & 0x20 == 0 {
-                    let fetcher_x = (self.lcd_x as u8).wrapping_add(self.scx) / 8;
-                    self.window_active = false;
-                    self.bg_fetcher.reset(false, true);
-                    self.bg_fetcher.fetcher_x = fetcher_x & 0x1F;
-                }
             }
             return;
         }
@@ -916,6 +912,14 @@ impl Ppu {
         self.bg_fetcher.reset(true, true);
         self.bg_fetcher.y = self.window_line_counter;
         self.window_line_counter = self.window_line_counter.wrapping_add(1);
+    }
+
+    fn stop_window_fetcher_for_bg_resume(&mut self) {
+        let bg_x = (self.lcd_x as u8).wrapping_add(self.scx);
+        self.window_active = false;
+        self.window_disable_pending = false;
+        self.bg_fetcher.reset(false, true);
+        self.bg_fetcher.fetcher_x = (bg_x / 8) & 0x1F;
     }
 
     fn maybe_push_window_glitch_pixel(&mut self) {
@@ -1153,8 +1157,17 @@ impl Ppu {
     /// Write LCDC (`$FF40`). Toggling bit 7 turns the LCD on/off.
     pub fn write_lcdc(&mut self, value: u8, irq: &mut Interrupts) {
         let was_on = self.enabled;
+        let old_lcdc = self.lcdc;
         self.lcdc = value;
         self.enabled = value & 0x80 != 0;
+
+        if self.mode == mode::DRAWING && (old_lcdc ^ value) & 0x20 != 0 {
+            if old_lcdc & 0x20 != 0 && value & 0x20 == 0 && self.bg_fetcher.window {
+                self.window_disable_pending = true;
+            } else if value & 0x20 != 0 {
+                self.window_disable_pending = false;
+            }
+        }
 
         if was_on && !self.enabled {
             // LCD off: PPU stops, LY resets, mode -> 0, dot counter resets.
@@ -1458,10 +1471,10 @@ mod tests {
         assert_eq!(p.mode, mode::OAM_SCAN, "still OAM scan at dot 79");
         tick(&mut p, 1);
         assert_eq!(p.mode, mode::DRAWING, "mode 3 at dot 80");
-        tick(&mut p, EFFECTIVE_BASE_MODE3_DOTS - 1);
-        assert_eq!(p.mode, mode::DRAWING, "still drawing at dot 258");
+        tick(&mut p, BASE_MODE3_DOTS - 1);
+        assert_eq!(p.mode, mode::DRAWING, "still drawing at dot 251");
         tick(&mut p, 1);
-        assert_eq!(p.mode, mode::HBLANK, "HBlank at dot 259");
+        assert_eq!(p.mode, mode::HBLANK, "HBlank at dot 252");
     }
 
     #[test]
@@ -1518,7 +1531,7 @@ mod tests {
     fn stat_mode0_rising_edge_fires_once() {
         let mut p = ppu_at_line_start();
         p.stat_enables = 0x08;
-        let irq = tick(&mut p, MODE2_DOTS + EFFECTIVE_BASE_MODE3_DOTS);
+        let irq = tick(&mut p, MODE2_DOTS + BASE_MODE3_DOTS);
         assert_eq!(p.mode, mode::HBLANK);
         assert!(irq & 0x02 != 0, "STAT fires entering mode 0");
         let irq2 = tick(&mut p, 10);
@@ -1590,7 +1603,7 @@ mod tests {
         assert_eq!(p.mode, mode::DRAWING);
         assert!(p.oam_blocked());
         assert!(p.vram_blocked());
-        tick(&mut p, EFFECTIVE_BASE_MODE3_DOTS);
+        tick(&mut p, BASE_MODE3_DOTS);
         assert_eq!(p.mode, mode::HBLANK);
         assert_eq!(p.read_stat() & 0x03, mode::DRAWING);
         assert!(p.oam_blocked(), "access follows public mode 3 tail");
@@ -1671,7 +1684,7 @@ mod tests {
         let mut p = ppu_at_line_start();
         p.write_scx(3);
         let len = mode3_len(&mut p, &zero_vram(), &zero_oam());
-        assert_eq!(len, EFFECTIVE_BASE_MODE3_DOTS + 3);
+        assert_eq!(len, BASE_MODE3_DOTS + 3);
     }
 
     #[test]
@@ -1781,13 +1794,10 @@ mod tests {
         }
 
         assert_eq!(counts[mode::OAM_SCAN as usize], MODE2_DOTS);
-        assert_eq!(
-            counts[mode::DRAWING as usize],
-            EFFECTIVE_BASE_MODE3_DOTS + 3
-        );
+        assert_eq!(counts[mode::DRAWING as usize], BASE_MODE3_DOTS + 3);
         assert_eq!(
             counts[mode::HBLANK as usize],
-            DOTS_PER_LINE - MODE2_DOTS - EFFECTIVE_BASE_MODE3_DOTS - 3
+            DOTS_PER_LINE - MODE2_DOTS - BASE_MODE3_DOTS - 3
         );
         assert_eq!(p.ly, 1);
         assert_eq!(p.line_dot, 0);
