@@ -35,6 +35,15 @@ const MAX_MEALYBUG_M3_SCY_CHANGE_DIFF: usize = 8819;
 const MAX_MEALYBUG_M3_WX_4_CHANGE_DIFF: usize = 3077;
 const MAX_MEALYBUG_M3_WX_5_CHANGE_DIFF: usize = 3267;
 const MAX_MEALYBUG_M3_WX_6_CHANGE_DIFF: usize = 13018;
+// Boot-ROM setup-state gains (commit 937294d): real DMG boot ROM gives these
+// setup-sensitive ROMs the hardware-correct PPU phase. Gated to lock the gains.
+const MAX_MEALYBUG_M3_BGP_CHANGE_SPRITES_DIFF: usize = 2124;
+const MAX_MEALYBUG_M3_OBP0_CHANGE_DIFF: usize = 221;
+const MAX_MEALYBUG_M3_SCX_LOW_3_BITS_DIFF: usize = 396;
+const MAX_MEALYBUG_M3_LCDC_TILE_SEL_CHANGE_DIFF: usize = 1755;
+const MAX_MEALYBUG_M3_LCDC_TILE_SEL_WIN_CHANGE_DIFF: usize = 2755;
+const MAX_MEALYBUG_M3_LCDC_WIN_MAP_CHANGE_DIFF: usize = 1925;
+const MAX_MEALYBUG_M3_LCDC_BG_MAP_CHANGE_DIFF: usize = 845;
 const MAX_CGB_ACID_HELL_DIFF: usize = 2;
 
 fn suites_dir() -> PathBuf {
@@ -267,6 +276,34 @@ fn mealybug_report() {
             "m3_wx_6_change" => assert!(
                 diff <= MAX_MEALYBUG_M3_WX_6_CHANGE_DIFF,
                 "mealybug {name} must stay <= {MAX_MEALYBUG_M3_WX_6_CHANGE_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_bgp_change_sprites" => assert!(
+                diff <= MAX_MEALYBUG_M3_BGP_CHANGE_SPRITES_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_BGP_CHANGE_SPRITES_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_obp0_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_OBP0_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_OBP0_CHANGE_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_scx_low_3_bits" => assert!(
+                diff <= MAX_MEALYBUG_M3_SCX_LOW_3_BITS_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_SCX_LOW_3_BITS_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_lcdc_tile_sel_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_LCDC_TILE_SEL_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_LCDC_TILE_SEL_CHANGE_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_lcdc_tile_sel_win_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_LCDC_TILE_SEL_WIN_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_LCDC_TILE_SEL_WIN_CHANGE_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_lcdc_win_map_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_LCDC_WIN_MAP_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_LCDC_WIN_MAP_CHANGE_DIFF} pixels ({diff} differ)"
+            ),
+            "m3_lcdc_bg_map_change" => assert!(
+                diff <= MAX_MEALYBUG_M3_LCDC_BG_MAP_CHANGE_DIFF,
+                "mealybug {name} must stay <= {MAX_MEALYBUG_M3_LCDC_BG_MAP_CHANGE_DIFF} pixels ({diff} differ)"
             ),
             _ => {}
         }
