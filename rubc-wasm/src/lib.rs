@@ -204,4 +204,26 @@ impl RubcWasm {
         self.machine.bus.apu.drain_samples(&mut self.samples);
         self.samples.clone()
     }
+
+    /// True if the loaded cartridge has battery-backed RAM (i.e. a persistable
+    /// `.sav`). When false, `save_ram` returns an empty array and there is
+    /// nothing to persist.
+    #[wasm_bindgen(getter)]
+    pub fn has_battery(&self) -> bool {
+        self.machine.has_battery()
+    }
+
+    /// Snapshot the cartridge's battery-backed RAM as a fresh `Uint8Array`,
+    /// suitable for writing to browser storage (IndexedDB). Empty if the cart
+    /// has no battery.
+    pub fn save_ram(&self) -> Vec<u8> {
+        self.machine.save_ram().to_vec()
+    }
+
+    /// Restore battery-backed RAM previously produced by [`Self::save_ram`].
+    /// Sizes that don't match the cart's RAM are ignored by the core. Call this
+    /// right after constructing the machine, before the first frame.
+    pub fn load_ram(&mut self, data: &[u8]) {
+        self.machine.load_ram(data);
+    }
 }

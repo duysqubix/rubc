@@ -11,6 +11,66 @@
 
 import init, { RubcWasm } from "./pkg/rubc_wasm.js";
 
+// --- battery save persistence (IndexedDB) -------------------------------
+// Cartridges with battery-backed RAM (Pokémon, Zelda, …) keep their save in
+// IndexedDB keyed by the cartridge title, so a save survives a page reload.
+// localStorage is unsuitable: it's synchronous and ~5 MB, while saves can be
+// up to 128 KB and we don't want to block the main thread.
+const SAVE_DB = "rubc-saves";
+const SAVE_STORE = "sav";
+
+function openSaveDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(SAVE_DB, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(SAVE_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+// Stable per-cartridge key: the 16-byte title field at $0134 plus the ROM
+// length, so different games (and different dumps) never collide.
+function romKey(bytes) {
+  let title = "";
+  for (let i = 0x134; i < 0x144 && i < bytes.length; i++) {
+    const c = bytes[i];
+    if (c === 0) break;
+    if (c >= 0x20 && c < 0x7f) title += String.fromCharCode(c);
+  }
+  return `${title || "untitled"}:${bytes.length}`;
+}
+
+async function loadSaveRam(key) {
+  try {
+    const db = await openSaveDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(SAVE_STORE, "readonly");
+      const req = tx.objectStore(SAVE_STORE).get(key);
+      req.onsuccess = () => resolve(req.result ? new Uint8Array(req.result) : null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) {
+    console.warn("save load failed:", e);
+    return null;
+  }
+}
+
+async function storeSaveRam(key, bytes) {
+  try {
+    const db = await openSaveDb();
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(SAVE_STORE, "readwrite");
+      // Store a plain copy; the Uint8Array view over wasm memory must not be
+      // handed to IndexedDB (it can detach on memory growth).
+      tx.objectStore(SAVE_STORE).put(bytes.slice(), key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.warn("save store failed:", e);
+  }
+}
+
 // JS button codes — must match rubc_wasm::button_from_code.
 const BTN = { A: 0, B: 1, SELECT: 2, START: 3, RIGHT: 4, LEFT: 5, UP: 6, DOWN: 7 };
 
@@ -35,6 +95,8 @@ const soundBtn = document.getElementById("sound");
 
 let wasm = null;          // wasm exports (for `.memory`)
 let emu = null;           // RubcWasm instance
+let currentSaveKey = null; // IndexedDB key for the running cart's battery RAM
+let saveTimer = null;     // periodic autosave interval handle
 let imageData = null;     // reused ImageData backing the canvas
 let rafId = null;
 let paused = false;
@@ -162,20 +224,52 @@ function loop(now) {
 }
 
 // --- ROM loading --------------------------------------------------------
+// Persist the running cart's battery RAM to IndexedDB (best-effort, async).
+async function flushSave() {
+  if (!emu || !currentSaveKey || !emu.has_battery) return;
+  const ram = emu.save_ram();
+  if (ram.length === 0) return;
+  await storeSaveRam(currentSaveKey, ram);
+}
+
 async function loadRom(bytes) {
+  // Flush the previous cart's save before swapping ROMs.
+  await flushSave();
+  if (saveTimer !== null) {
+    clearInterval(saveTimer);
+    saveTimer = null;
+  }
+
   // Create the AudioContext now (if not already) so the emulator is built with
   // the real device sample rate — RubcWasm has no post-construction rate setter.
   const rate = ensureAudio().sampleRate;
   emu = new RubcWasm(bytes, rate);
+
+  // Restore battery RAM from a previous session BEFORE the first frame runs.
+  currentSaveKey = romKey(bytes);
+  if (emu.has_battery) {
+    const saved = await loadSaveRam(currentSaveKey);
+    if (saved) emu.load_ram(saved);
+    // Autosave every 10 s while a battery cart is running.
+    saveTimer = setInterval(flushSave, 10000);
+  }
+
   imageData = ctx.createImageData(emu.width, emu.height);
   paused = false;
   pauseBtn.disabled = false;
   soundBtn.disabled = false;
   pauseBtn.textContent = "Pause";
-  statusEl.textContent = `Running — ${emu.is_cgb ? "CGB" : "DMG"} mode (${bytes.length} bytes).`;
+  const saveNote = emu.has_battery ? " · save persisted" : "";
+  statusEl.textContent = `Running — ${emu.is_cgb ? "CGB" : "DMG"} mode (${bytes.length} bytes)${saveNote}.`;
   // Kick the loop via rAF so the first `now` is a real timestamp (never undefined).
   if (rafId === null) rafId = requestAnimationFrame(loop);
 }
+
+// Flush the save when the tab is hidden or closed (covers reload/navigation).
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushSave();
+});
+window.addEventListener("pagehide", flushSave);
 
 romInput.addEventListener("change", async (e) => {
   const file = e.target.files[0];
