@@ -34,6 +34,62 @@ pub enum Exec {
     CbExecute { op: u8, phase: u8 },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CpuReg8Target {
+    A,
+    B,
+    C,
+    D,
+    E,
+    H,
+    L,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CpuCycleCompletion {
+    None,
+    FetchOpcode,
+    ReadReg8 {
+        target: CpuReg8Target,
+        increment_pc: bool,
+        finish: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActiveCpuCycle {
+    Idle {
+        completion: CpuCycleCompletion,
+    },
+    Fetch {
+        addr: u16,
+        completion: CpuCycleCompletion,
+    },
+    Read {
+        addr: u16,
+        completion: CpuCycleCompletion,
+    },
+    Write {
+        addr: u16,
+        value: u8,
+        completion: CpuCycleCompletion,
+    },
+    OamBugIdu {
+        addr: u16,
+        completion: CpuCycleCompletion,
+    },
+    OamBugReadIncDec {
+        addr: u16,
+        completion: CpuCycleCompletion,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ActiveCpuCycleState {
+    cycle: ActiveCpuCycle,
+    elapsed_t: u8,
+}
+
 /// The SM83 CPU.
 #[cfg_attr(test, derive(Clone))]
 pub struct Cpu {
@@ -47,6 +103,7 @@ pub struct Cpu {
     // Scratch registers for multi-phase instructions.
     tmp8: u8,
     tmp16: u16,
+    active_cycle: Option<ActiveCpuCycleState>,
 }
 
 impl Default for Cpu {
@@ -67,6 +124,118 @@ impl Cpu {
             halt_bug: false,
             tmp8: 0,
             tmp16: 0,
+            active_cycle: None,
+        }
+    }
+
+    pub fn active_cpu_cycle(&self) -> Option<ActiveCpuCycle> {
+        self.active_cycle.map(|state| state.cycle)
+    }
+
+    pub fn start_cpu_cycle(&mut self, cycle: ActiveCpuCycle) {
+        assert!(
+            self.active_cycle.is_none(),
+            "cannot start a CPU cycle while another is active"
+        );
+        self.active_cycle = Some(ActiveCpuCycleState {
+            cycle,
+            elapsed_t: 0,
+        });
+    }
+
+    pub fn step_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
+        let Some(mut state) = self.active_cycle else {
+            return false;
+        };
+
+        if state.elapsed_t == 0 {
+            bus.begin_cpu_cycle();
+        }
+
+        bus.tick_cpu_t();
+        state.elapsed_t += 1;
+
+        if state.elapsed_t < 4 {
+            self.active_cycle = Some(state);
+            return false;
+        }
+
+        let result = match state.cycle {
+            ActiveCpuCycle::Idle { .. } => 0xFF,
+            ActiveCpuCycle::Fetch { addr, .. }
+            | ActiveCpuCycle::Read { addr, .. }
+            | ActiveCpuCycle::OamBugReadIncDec { addr, .. } => bus.read_latched(addr),
+            ActiveCpuCycle::Write { addr, value, .. } => {
+                bus.write_latched(addr, value);
+                0xFF
+            }
+            ActiveCpuCycle::OamBugIdu { addr, .. } => {
+                bus.oam_bug_idu_glitch(addr);
+                0xFF
+            }
+        };
+
+        bus.end_cpu_cycle();
+        self.active_cycle = None;
+        self.apply_cycle_completion(state.cycle.completion(), result);
+        true
+    }
+
+    #[cfg(test)]
+    pub(super) fn step_b1_supported_m_via_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
+        match self.mode {
+            CpuMode::Running => match self.exec {
+                Exec::Boundary => {
+                    if self.ime_pending {
+                        if self.ime_delay_boundary == 0 {
+                            self.ime = true;
+                            self.ime_pending = false;
+                        } else {
+                            self.ime_delay_boundary -= 1;
+                        }
+                    }
+                    bus.boundary();
+                    if bus.irq_pending_mask() != 0 {
+                        return false;
+                    }
+                    self.start_cpu_cycle(ActiveCpuCycle::Fetch {
+                        addr: self.r.pc,
+                        completion: CpuCycleCompletion::FetchOpcode,
+                    });
+                    self.finish_active_cycle_for_b1_test(bus);
+                    true
+                }
+                Exec::Execute { op: 0x00, phase: 0 } => {
+                    self.finish();
+                    true
+                }
+                Exec::Execute { op: 0x06, phase: 0 } => {
+                    self.next_phase(0x06, 1);
+                    true
+                }
+                Exec::Execute { op: 0x06, phase: 1 } => {
+                    self.start_cpu_cycle(ActiveCpuCycle::Read {
+                        addr: self.r.pc,
+                        completion: CpuCycleCompletion::ReadReg8 {
+                            target: CpuReg8Target::B,
+                            increment_pc: true,
+                            finish: true,
+                        },
+                    });
+                    self.finish_active_cycle_for_b1_test(bus);
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    #[cfg(test)]
+    fn finish_active_cycle_for_b1_test<B: CpuBus>(&mut self, bus: &mut B) {
+        for t in 0..4 {
+            let done = self.step_t(bus);
+            assert_eq!(done, t == 3);
         }
     }
 
@@ -341,6 +510,61 @@ impl Cpu {
             }
         }
         bus_m_at(bus) - start
+    }
+
+    fn apply_cycle_completion(&mut self, completion: CpuCycleCompletion, value: u8) {
+        match completion {
+            CpuCycleCompletion::None => {}
+            CpuCycleCompletion::FetchOpcode => {
+                if self.halt_bug {
+                    self.halt_bug = false;
+                } else {
+                    self.r.pc = self.r.pc.wrapping_add(1);
+                }
+                self.exec = Exec::Execute {
+                    op: value,
+                    phase: 0,
+                };
+            }
+            CpuCycleCompletion::ReadReg8 {
+                target,
+                increment_pc,
+                finish,
+            } => {
+                self.write_reg8_target(target, value);
+                if increment_pc {
+                    self.r.pc = self.r.pc.wrapping_add(1);
+                }
+                if finish {
+                    self.finish();
+                }
+            }
+        }
+    }
+
+    fn write_reg8_target(&mut self, target: CpuReg8Target, value: u8) {
+        match target {
+            CpuReg8Target::A => self.r.a = value,
+            CpuReg8Target::B => self.r.b = value,
+            CpuReg8Target::C => self.r.c = value,
+            CpuReg8Target::D => self.r.d = value,
+            CpuReg8Target::E => self.r.e = value,
+            CpuReg8Target::H => self.r.h = value,
+            CpuReg8Target::L => self.r.l = value,
+        }
+    }
+}
+
+impl ActiveCpuCycle {
+    fn completion(self) -> CpuCycleCompletion {
+        match self {
+            ActiveCpuCycle::Idle { completion }
+            | ActiveCpuCycle::Fetch { completion, .. }
+            | ActiveCpuCycle::Read { completion, .. }
+            | ActiveCpuCycle::Write { completion, .. }
+            | ActiveCpuCycle::OamBugIdu { completion, .. }
+            | ActiveCpuCycle::OamBugReadIncDec { completion, .. } => completion,
+        }
     }
 }
 

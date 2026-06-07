@@ -104,9 +104,36 @@ pub fn trace_instruction(cpu: Cpu, bus: FlatBus) -> Result<Vec<CpuSnapshot>, Tra
     trace_step_m_until_boundary(cpu, bus, DEFAULT_MAX_STEPS)
 }
 
+pub fn trace_b1_step_t_supported_instruction(
+    mut cpu: Cpu,
+    mut bus: FlatBus,
+) -> Result<Vec<CpuSnapshot>, TraceError> {
+    let mut trace = Vec::new();
+
+    for step in 0..DEFAULT_MAX_STEPS {
+        if !cpu.step_b1_supported_m_via_t(&mut bus) {
+            return Err(TraceError::UnsupportedB1Opcode {
+                exec: cpu.equiv_exec(),
+            });
+        }
+        trace.push(CpuSnapshot::capture(&cpu, &bus));
+        if cpu.exec_is_boundary() && !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }) {
+            return Ok(trace);
+        }
+        if step + 1 == DEFAULT_MAX_STEPS {
+            break;
+        }
+    }
+
+    Err(TraceError::MaxStepsExceeded {
+        max_steps: DEFAULT_MAX_STEPS,
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TraceError {
     MaxStepsExceeded { max_steps: usize },
+    UnsupportedB1Opcode { exec: Exec },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -480,5 +507,35 @@ mod tests {
                 fixture.name
             );
         }
+    }
+
+    #[test]
+    fn b1_step_t_substrate_matches_legacy_nop() {
+        let (cpu, bus) = GoldenTraceFixture {
+            name: "NOP",
+            kind: GoldenKind::Nop,
+            expected_len: 2,
+            expected_digest: 0,
+        }
+        .initial_state();
+
+        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let b1 = trace_b1_step_t_supported_instruction(cpu, bus).unwrap();
+        compare_traces(&legacy, &b1).unwrap();
+    }
+
+    #[test]
+    fn b1_step_t_substrate_matches_legacy_ld_b_d8() {
+        let (cpu, bus) = GoldenTraceFixture {
+            name: "LD B,d8",
+            kind: GoldenKind::LdBD8,
+            expected_len: 3,
+            expected_digest: 0,
+        }
+        .initial_state();
+
+        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let b1 = trace_b1_step_t_supported_instruction(cpu, bus).unwrap();
+        compare_traces(&legacy, &b1).unwrap();
     }
 }

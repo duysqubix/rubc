@@ -80,6 +80,22 @@ pub trait CpuBus {
     /// Interrupt requests are already visible in IF; this normalizes IF's
     /// unused high bits for buses that model them.
     fn boundary(&mut self);
+
+    /// Begin one CPU bus M-cycle for the candidate-B per-T substrate.
+    ///
+    /// B1 exposes the same pieces `run_cpu_access` already uses, but keeps the
+    /// production `read_m` / `write_m` / `idle_m` path untouched.  The per-T CPU
+    /// engine calls this once, then four [`tick_cpu_t`](CpuBus::tick_cpu_t)
+    /// calls, then a latched access, then [`end_cpu_cycle`](CpuBus::end_cpu_cycle).
+    fn begin_cpu_cycle(&mut self);
+    /// Advance exactly one CPU T-cycle.
+    fn tick_cpu_t(&mut self);
+    /// Sample a CPU read at the current latched bus time.
+    fn read_latched(&mut self, addr: u16) -> u8;
+    /// Commit a CPU write at the current latched bus time.
+    fn write_latched(&mut self, addr: u16, value: u8);
+    /// Finish one CPU bus M-cycle after its latched access.
+    fn end_cpu_cycle(&mut self);
 }
 
 /// A single CPU bus access, used to drive the per-M-cycle timing in one place.
@@ -1061,6 +1077,26 @@ impl CpuBus for Bus {
 
     fn boundary(&mut self) {
         Bus::boundary(self);
+    }
+
+    fn begin_cpu_cycle(&mut self) {
+        self.oam_dma_beat();
+    }
+
+    fn tick_cpu_t(&mut self) {
+        Bus::tick_cpu_t(self);
+    }
+
+    fn read_latched(&mut self, addr: u16) -> u8 {
+        self.cpu_read_latched(addr)
+    }
+
+    fn write_latched(&mut self, addr: u16, value: u8) {
+        self.cpu_write_latched(addr, value);
+    }
+
+    fn end_cpu_cycle(&mut self) {
+        self.hdma_hblank_step();
     }
 }
 

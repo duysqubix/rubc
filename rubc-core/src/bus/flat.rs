@@ -109,6 +109,22 @@ impl CpuBus for FlatBus {
     fn boundary(&mut self) {
         // No queued-IRQ model in the flat bus; nothing to settle.
     }
+
+    fn begin_cpu_cycle(&mut self) {}
+
+    fn tick_cpu_t(&mut self) {}
+
+    fn read_latched(&mut self, addr: u16) -> u8 {
+        self.mem[addr as usize]
+    }
+
+    fn write_latched(&mut self, addr: u16, value: u8) {
+        self.mem[addr as usize] = value;
+    }
+
+    fn end_cpu_cycle(&mut self) {
+        self.m_cycles += 1;
+    }
 }
 
 #[cfg(test)]

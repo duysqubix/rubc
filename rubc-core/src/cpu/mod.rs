@@ -19,5 +19,5 @@ mod interrupts_test;
 mod mcycle;
 
 pub use alu::Flags;
-pub use core::{Cpu, CpuMode, Exec};
+pub use core::{ActiveCpuCycle, Cpu, CpuCycleCompletion, CpuMode, CpuReg8Target, Exec};
 pub use regs::Regs;
