@@ -204,6 +204,9 @@ pub struct Bus {
     /// Optional 256-byte DMG boot ROM overlay. When mapped, reads from
     /// $0000-$00FF come from this ROM until the cartridge writes $FF50 bit 0.
     pub boot_rom: Option<Box<[u8; 256]>>,
+    /// Optional 2304-byte CGB boot ROM overlay. CGB keeps the cartridge header
+    /// visible, so this maps only $0000-$00FF and $0200-$08FF until $FF50 bit 0.
+    pub cgb_boot_rom: Option<Box<[u8; 2304]>>,
     pub boot_rom_mapped: bool,
     /// WRAM: 8 banks of 4 KiB. DMG uses banks 0-1 flat; CGB fixes bank 0 at
     /// C000-CFFF and selects banks 1-7 at D000-DFFF via SVBK ($FF70).
@@ -253,6 +256,7 @@ impl Default for Bus {
         Self {
             cart: Cartridge::default(),
             boot_rom: None,
+            cgb_boot_rom: None,
             boot_rom_mapped: false,
             wram: [[0; 0x1000]; 8],
             svbk: 1,
@@ -284,6 +288,24 @@ impl Default for Bus {
 impl Bus {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn boot_rom_byte(&self, addr: u16) -> Option<u8> {
+        if !self.boot_rom_mapped {
+            return None;
+        }
+        if let Some(boot_rom) = &self.cgb_boot_rom {
+            if addr <= 0x00FF || (0x0200..=0x08FF).contains(&addr) {
+                return Some(boot_rom[addr as usize]);
+            }
+        }
+        if addr <= 0x00FF {
+            return self
+                .boot_rom
+                .as_ref()
+                .map(|boot_rom| boot_rom[addr as usize]);
+        }
+        None
     }
 
     /// Read-only DMG background palette register (BGP, `$FF47`). Provided for
@@ -778,12 +800,10 @@ impl Bus {
     /// Side-effect-free read (no tick). The decode is a flat placeholder; real
     /// banking/IO-side-effects land in later waves.
     pub fn peek(&self, addr: u16) -> u8 {
+        if let Some(byte) = self.boot_rom_byte(addr) {
+            return byte;
+        }
         match addr {
-            0x0000..=0x00FF if self.boot_rom_mapped => self
-                .boot_rom
-                .as_ref()
-                .map(|boot_rom| boot_rom[addr as usize])
-                .unwrap_or_else(|| self.cart.read(addr)),
             0x0000..=0x7FFF => self.cart.read(addr),
             0x8000..=0x9FFF => self.vram[self.vbk as usize][(addr - 0x8000) as usize],
             0xC000..=0xFDFF => {

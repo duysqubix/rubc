@@ -12,6 +12,7 @@ use crate::bus::Bus;
 use crate::cpu::{Cpu, CpuMode};
 
 const DMG_BOOT_ROM: &[u8; 256] = include_bytes!("boot/dmg_boot.bin");
+const CGB_BOOT_ROM: &[u8; 2304] = include_bytes!("boot/cgb_boot.bin");
 
 /// Why a run stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -95,6 +96,16 @@ impl Machine {
         m.cpu.r.l = 0x7C;
         m.cpu.r.sp = 0xFFFE;
         m.cpu.r.pc = 0x0100;
+        m
+    }
+
+    /// Boot through the bundled open-source SameBoy CGB bootstrap ROM.
+    pub fn boot_cgb_with_bootrom(rom: &[u8]) -> Self {
+        let mut m = Self::new();
+        m.load_rom(rom);
+        m.bus.cgb.cgb_mode = true;
+        m.bus.cgb_boot_rom = Some(Box::new(*CGB_BOOT_ROM));
+        m.bus.boot_rom_mapped = true;
         m
     }
 
@@ -333,6 +344,42 @@ mod tests {
         bus.poke(0xFF01, b'B');
         bus.poke(0xFF02, 0x01);
         assert_eq!(bus.serial_out, vec![b'A']);
+    }
+
+    #[test]
+    fn cgb_boot_rom_runs_and_unmaps() {
+        // A real CGB boot ROM run must: overlay $0000-$00FF + $0200-$08FF,
+        // execute the bootstrap, write FF50 to unmap, and hand off at PC=0x0100
+        // with A=0x11 (the CGB hardware signature). A minimal valid CGB header
+        // is needed so the boot ROM's logo/header path completes.
+        let mut rom = vec![0u8; 0x8000];
+        // Nintendo logo (0x0104-0x0133): the boot ROM checks it. Copy the
+        // canonical logo bytes so the boot completes rather than locking up.
+        const LOGO: [u8; 48] = [
+            0xCE, 0xED, 0x66, 0x66, 0xCC, 0x0D, 0x00, 0x0B, 0x03, 0x73, 0x00, 0x83, 0x00, 0x0C,
+            0x00, 0x0D, 0x00, 0x08, 0x11, 0x1F, 0x88, 0x89, 0x00, 0x0E, 0xDC, 0xCC, 0x6E, 0xE6,
+            0xDD, 0xDD, 0xD9, 0x99, 0xBB, 0xBB, 0x67, 0x63, 0x6E, 0x0E, 0xEC, 0xCC, 0xDD, 0xDC,
+            0x99, 0x9F, 0xBB, 0xB9, 0x33, 0x3E,
+        ];
+        rom[0x0104..0x0134].copy_from_slice(&LOGO);
+        rom[0x0143] = 0x80; // CGB-compatible flag
+                            // A trivial program at 0x0100 that immediately hits the LD B,B halt.
+        rom[0x0100] = 0x00; // NOP
+        rom[0x0101] = 0x40; // LD B,B (mooneye breakpoint)
+        let mut m = Machine::boot_cgb_with_bootrom(&rom);
+        assert!(m.bus.boot_rom_mapped, "boot ROM must start mapped");
+        // Run the bootstrap until it unmaps (or a generous instruction cap).
+        let mut unmapped = false;
+        for _ in 0..3_000_000u64 {
+            m.step_instruction();
+            if !m.bus.boot_rom_mapped {
+                unmapped = true;
+                break;
+            }
+        }
+        assert!(unmapped, "CGB boot ROM must write FF50 to unmap");
+        assert_eq!(m.cpu.r.pc, 0x0100, "boot ROM must hand off at PC=0x0100");
+        assert_eq!(m.cpu.r.a, 0x11, "CGB boot hands off with A=0x11");
     }
 
     /// Assemble a tiny program at 0x0100 that prints `text` over serial.
