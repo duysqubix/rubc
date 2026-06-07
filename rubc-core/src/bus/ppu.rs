@@ -93,6 +93,60 @@ enum DmgPaletteSource {
     Obp1,
 }
 
+const DMG_OUTPUT_LATENCY_DOTS: usize = 4;
+
+/// DMG pixel after BG/OBJ priority has been resolved, but before the live
+/// BGP/OBP palette register maps the raw 2-bit color index to a shade.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DmgRawPixel {
+    ly: u8,
+    x: usize,
+    color: u8,
+    palette: DmgPaletteSource,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DmgOutputPipe {
+    pixels: [DmgRawPixel; DMG_OUTPUT_LATENCY_DOTS],
+    len: usize,
+}
+
+impl Default for DmgOutputPipe {
+    fn default() -> Self {
+        Self {
+            pixels: [DmgRawPixel::default(); DMG_OUTPUT_LATENCY_DOTS],
+            len: 0,
+        }
+    }
+}
+
+impl DmgOutputPipe {
+    fn clear(&mut self) {
+        self.pixels = [DmgRawPixel::default(); DMG_OUTPUT_LATENCY_DOTS];
+        self.len = 0;
+    }
+
+    fn push(&mut self, pixel: DmgRawPixel) {
+        debug_assert!(self.len < DMG_OUTPUT_LATENCY_DOTS);
+        self.pixels[self.len] = pixel;
+        self.len += 1;
+    }
+
+    fn pop_oldest(&mut self) -> Option<DmgRawPixel> {
+        if self.len == 0 {
+            return None;
+        }
+        let pixel = self.pixels[0];
+        self.pixels.copy_within(1..self.len, 0);
+        self.len -= 1;
+        Some(pixel)
+    }
+
+    fn is_full(&self) -> bool {
+        self.len == DMG_OUTPUT_LATENCY_DOTS
+    }
+}
+
 /// Live DMG palette registers, snapshotted from the bus each `tick_dot`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DmgPalettes {
@@ -372,6 +426,7 @@ pub struct Ppu {
 
     bg_fifo: PixelFifo,
     sprite_fifo: PixelFifo,
+    dmg_output_pipe: DmgOutputPipe,
     bg_fetcher: BgFetcher,
     scanline_sprites: [ScanlineSprite; MAX_SPRITES_PER_LINE],
     scanline_sprite_count: usize,
@@ -424,6 +479,7 @@ impl Default for Ppu {
             wx: 0,
             bg_fifo: PixelFifo::default(),
             sprite_fifo: PixelFifo::default(),
+            dmg_output_pipe: DmgOutputPipe::default(),
             bg_fetcher: BgFetcher::default(),
             scanline_sprites: [ScanlineSprite::default(); MAX_SPRITES_PER_LINE],
             scanline_sprite_count: 0,
@@ -677,6 +733,7 @@ impl Ppu {
         self.sprite_idle_ticks = 0;
         self.bg_fifo.clear();
         self.sprite_fifo.clear();
+        self.dmg_output_pipe.clear();
         self.window_active = false;
         self.window_started_this_line = false;
         self.window_glitch_x = None;
@@ -698,6 +755,7 @@ impl Ppu {
             .sort_by_key(|sprite| (sprite.x, sprite.oam_index));
         self.bg_fifo.clear();
         self.sprite_fifo.clear();
+        self.dmg_output_pipe.clear();
         self.bg_fetcher.reset(false, false);
         self.pending_sprite = None;
         self.sprite_fetch_ticks = 0;
@@ -742,6 +800,7 @@ impl Ppu {
     fn finish_drawing(&mut self, irq: &mut Interrupts) {
         self.bg_fifo.clear();
         self.sprite_fifo.clear();
+        self.flush_dmg_output_pipe();
         self.pending_sprite = None;
         self.sprite_fetch_ticks = 0;
         self.sprite_idle_ticks = 0;
@@ -1037,15 +1096,23 @@ impl Ppu {
 
         let sprite_pixel = self.sprite_fifo.pop().unwrap_or_default();
 
-        let pixel = if self.cgb_mode {
-            self.resolve_cgb_pixel(bg_pixel, sprite_pixel)
+        if self.cgb_mode {
+            let pixel = self.resolve_cgb_pixel(bg_pixel, sprite_pixel);
+            if self.ly <= LAST_VISIBLE_LINE && self.lcd_x < SCREEN_WIDTH {
+                let index = self.ly as usize * SCREEN_WIDTH + self.lcd_x;
+                self.framebuffer[index] = pixel;
+            }
         } else {
-            self.resolve_dmg_pixel(bg_pixel, sprite_pixel)
-        };
-
-        if self.ly <= LAST_VISIBLE_LINE && self.lcd_x < SCREEN_WIDTH {
-            let index = self.ly as usize * SCREEN_WIDTH + self.lcd_x;
-            self.framebuffer[index] = pixel;
+            if self.dmg_output_pipe.is_full() {
+                self.emit_oldest_dmg_pixel();
+            }
+            let raw_pixel = self.resolve_dmg_raw_pixel(bg_pixel, sprite_pixel);
+            self.dmg_output_pipe.push(DmgRawPixel {
+                ly: self.ly,
+                x: self.lcd_x,
+                color: raw_pixel.color,
+                palette: raw_pixel.palette,
+            });
         }
         self.lcd_x += 1;
 
@@ -1055,9 +1122,7 @@ impl Ppu {
         true
     }
 
-    /// DMG pixel resolution: priority by OBJ attr bit 7, palette through
-    /// BGP/OBP0/OBP1, emitting a post-palette `DmgShade`.
-    fn resolve_dmg_pixel(&self, bg_pixel: FifoPixel, sprite_pixel: FifoPixel) -> FramePixel {
+    fn resolve_dmg_raw_pixel(&self, bg_pixel: FifoPixel, sprite_pixel: FifoPixel) -> DmgRawPixel {
         let bg_color = if self.lcdc & 0x01 == 0 {
             0
         } else {
@@ -1067,16 +1132,45 @@ impl Ppu {
             && sprite_pixel.color != 0
             && !(sprite_pixel.bg_priority && bg_color != 0);
 
-        let shade = if sprite_wins {
-            let obp = match sprite_pixel.palette {
-                DmgPaletteSource::Obp1 => self.obp1,
-                _ => self.obp0,
-            };
-            (obp >> (sprite_pixel.color * 2)) & 0x03
+        if sprite_wins {
+            DmgRawPixel {
+                color: sprite_pixel.color & 0x03,
+                palette: sprite_pixel.palette,
+                ..DmgRawPixel::default()
+            }
         } else {
-            (self.bgp >> (bg_color * 2)) & 0x03
+            DmgRawPixel {
+                color: bg_color,
+                palette: DmgPaletteSource::Bg,
+                ..DmgRawPixel::default()
+            }
+        }
+    }
+
+    fn emit_oldest_dmg_pixel(&mut self) {
+        if let Some(pixel) = self.dmg_output_pipe.pop_oldest() {
+            self.write_dmg_pixel(pixel);
+        }
+    }
+
+    fn flush_dmg_output_pipe(&mut self) {
+        while let Some(pixel) = self.dmg_output_pipe.pop_oldest() {
+            self.write_dmg_pixel(pixel);
+        }
+    }
+
+    fn write_dmg_pixel(&mut self, pixel: DmgRawPixel) {
+        if pixel.ly > LAST_VISIBLE_LINE || pixel.x >= SCREEN_WIDTH {
+            return;
+        }
+        let palette = match pixel.palette {
+            DmgPaletteSource::Bg => self.bgp,
+            DmgPaletteSource::Obp0 => self.obp0,
+            DmgPaletteSource::Obp1 => self.obp1,
         };
-        FramePixel::DmgShade(shade)
+        let shade = (palette >> ((pixel.color & 0x03) * 2)) & 0x03;
+        let index = pixel.ly as usize * SCREEN_WIDTH + pixel.x;
+        self.framebuffer[index] = FramePixel::DmgShade(shade);
     }
 
     /// CGB pixel resolution: the BG/OBJ priority table (Pan Docs), then a
