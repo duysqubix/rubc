@@ -182,8 +182,12 @@ impl Cpu {
     }
 
     #[cfg(test)]
-    pub(super) fn step_b1_supported_m_via_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
+    pub(super) fn step_b2_supported_m_via_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
         match self.mode {
+            CpuMode::InterruptDispatch { .. } => {
+                self.step_dispatch(bus);
+                true
+            }
             CpuMode::Running => match self.exec {
                 Exec::Boundary => {
                     if self.ime_pending {
@@ -195,8 +199,9 @@ impl Cpu {
                         }
                     }
                     bus.boundary();
-                    if bus.irq_pending_mask() != 0 {
-                        return false;
+                    if self.try_dispatch_interrupt(bus) {
+                        self.step_dispatch(bus);
+                        return true;
                     }
                     self.start_cpu_cycle(ActiveCpuCycle::Fetch {
                         addr: self.r.pc,

@@ -108,15 +108,29 @@ pub fn trace_b1_step_t_supported_instruction(
     mut cpu: Cpu,
     mut bus: FlatBus,
 ) -> Result<Vec<CpuSnapshot>, TraceError> {
+    trace_b2_step_t_supported_instruction_inner(&mut cpu, &mut bus)
+}
+
+pub fn trace_b2_step_t_supported_instruction(
+    mut cpu: Cpu,
+    mut bus: FlatBus,
+) -> Result<Vec<CpuSnapshot>, TraceError> {
+    trace_b2_step_t_supported_instruction_inner(&mut cpu, &mut bus)
+}
+
+fn trace_b2_step_t_supported_instruction_inner(
+    cpu: &mut Cpu,
+    bus: &mut FlatBus,
+) -> Result<Vec<CpuSnapshot>, TraceError> {
     let mut trace = Vec::new();
 
     for step in 0..DEFAULT_MAX_STEPS {
-        if !cpu.step_b1_supported_m_via_t(&mut bus) {
+        if !cpu.step_b2_supported_m_via_t(bus) {
             return Err(TraceError::UnsupportedB1Opcode {
                 exec: cpu.equiv_exec(),
             });
         }
-        trace.push(CpuSnapshot::capture(&cpu, &bus));
+        trace.push(CpuSnapshot::capture(cpu, bus));
         if cpu.exec_is_boundary() && !matches!(cpu.mode, CpuMode::InterruptDispatch { .. }) {
             return Ok(trace);
         }
@@ -349,6 +363,17 @@ fn interrupt_fixture() -> (Cpu, FlatBus) {
     (cpu, bus)
 }
 
+fn halt_bug_fetch_fixture() -> (Cpu, FlatBus) {
+    let mut cpu = seeded_cpu();
+    let mut bus = seeded_bus();
+    cpu.r.pc = 0x0100;
+    bus.poke(0x0100, 0x00);
+    bus.set_ie(0x01);
+    bus.set_if(0x01);
+    cpu.enter_halt(&bus);
+    (cpu, bus)
+}
+
 fn seeded_cpu() -> Cpu {
     let mut cpu = Cpu::new();
     cpu.r.a = 0x12;
@@ -537,5 +562,29 @@ mod tests {
         let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
         let b1 = trace_b1_step_t_supported_instruction(cpu, bus).unwrap();
         compare_traces(&legacy, &b1).unwrap();
+    }
+
+    #[test]
+    fn b2_step_t_boundary_fetch_matches_plain_legacy_fetch() {
+        let (cpu, bus) = program_fixture(&[0x00]);
+        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let b2 = trace_b2_step_t_supported_instruction(cpu, bus).unwrap();
+        compare_traces(&legacy, &b2).unwrap();
+    }
+
+    #[test]
+    fn b2_step_t_boundary_dispatch_preempts_fetch_like_legacy() {
+        let (cpu, bus) = interrupt_fixture();
+        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let b2 = trace_b2_step_t_supported_instruction(cpu, bus).unwrap();
+        compare_traces(&legacy, &b2).unwrap();
+    }
+
+    #[test]
+    fn b2_step_t_boundary_fetch_matches_halt_bug_legacy_fetch() {
+        let (cpu, bus) = halt_bug_fetch_fixture();
+        let legacy = trace_instruction(cpu.clone(), bus.clone()).unwrap();
+        let b2 = trace_b2_step_t_supported_instruction(cpu, bus).unwrap();
+        compare_traces(&legacy, &b2).unwrap();
     }
 }
