@@ -7,9 +7,7 @@
 //!      `active_for_cpu_this_m` (so a conflicting CPU access this M-cycle sees
 //!      the in-flight DMA byte).
 //!   2. **T-cycle ticks split around the access** — timer / PPU / APU advance.
-//!      TAC commits mid-M (tick 2 → commit → tick 2), PPU-visible IO writes
-//!      commit late-M (tick 3 → commit → tick 1), and every other write commits
-//!      at end-of-M. A READ/idle ticks all 4 T then samples at end-of-M (the
+//!      A READ/idle ticks all 4 T then samples at end-of-M (the
 //!      correct DMG placement; Oracle ses_16262cca4 confirmed reads must NOT
 //!      move to T3). The timer always advances 4 per M; in CGB double-speed
 //!      PPU+APU advance every 2nd T.
@@ -94,6 +92,9 @@ pub trait CpuBus {
     fn read_latched(&mut self, addr: u16) -> u8;
     /// Commit a CPU write at the current latched bus time.
     fn write_latched(&mut self, addr: u16, value: u8);
+    fn write_drive_ticks(&self, _addr: u16) -> u8 {
+        2
+    }
     /// Finish one CPU bus M-cycle after its latched access.
     fn end_cpu_cycle(&mut self);
 }
@@ -1093,6 +1094,28 @@ impl CpuBus for Bus {
 
     fn write_latched(&mut self, addr: u16, value: u8) {
         self.cpu_write_latched(addr, value);
+    }
+
+    fn write_drive_ticks(&self, addr: u16) -> u8 {
+        if addr == 0xFF47 {
+            0
+        } else if matches!(
+            addr,
+            0xFF07
+                | 0xFF41
+                | 0xFF42
+                | 0xFF43
+                | 0xFF45
+                | 0xFF48..=0xFF49
+                | 0xFF4A
+                | 0xFF68..=0xFF6B
+        ) {
+            2
+        } else if is_ppu_visible_write(addr) {
+            3
+        } else {
+            4
+        }
     }
 
     fn end_cpu_cycle(&mut self) {

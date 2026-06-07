@@ -125,7 +125,18 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
     }
 
     fn write_m(&mut self, addr: u16, value: u8) {
-        self.inner.write_m(addr, value);
+        self.inner.begin_cpu_cycle();
+        let drive_ticks = self.inner.write_drive_ticks(addr);
+        for elapsed in 0..4 {
+            if elapsed == drive_ticks {
+                self.inner.write_latched(addr, value);
+            }
+            self.inner.tick_cpu_t();
+        }
+        if drive_ticks == 4 {
+            self.inner.write_latched(addr, value);
+        }
+        self.inner.end_cpu_cycle();
     }
 
     fn idle_m(&mut self) {
@@ -246,10 +257,21 @@ impl Cpu {
 
         if state.elapsed_t == 0 {
             bus.begin_cpu_cycle();
+            if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
+                if bus.write_drive_ticks(addr) == 0 {
+                    bus.write_latched(addr, value);
+                }
+            }
         }
 
         bus.tick_cpu_t();
         state.elapsed_t += 1;
+
+        if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
+            if bus.write_drive_ticks(addr) == state.elapsed_t {
+                bus.write_latched(addr, value);
+            }
+        }
 
         if state.elapsed_t < 4 {
             self.active_cycle = Some(state);
@@ -261,10 +283,7 @@ impl Cpu {
             ActiveCpuCycle::Fetch { addr, .. }
             | ActiveCpuCycle::Read { addr, .. }
             | ActiveCpuCycle::OamBugReadIncDec { addr, .. } => bus.read_latched(addr),
-            ActiveCpuCycle::Write { addr, value, .. } => {
-                bus.write_latched(addr, value);
-                0xFF
-            }
+            ActiveCpuCycle::Write { .. } => 0xFF,
             ActiveCpuCycle::OamBugIdu { addr, .. } => {
                 bus.oam_bug_idu_glitch(addr);
                 0xFF
