@@ -67,6 +67,33 @@ cargo run --release -p rubc -- run path/to/game.gbc
 
 That's it — a window opens and your game runs.
 
+### Play in your browser (WebAssembly)
+
+rubc compiles to WebAssembly and runs entirely client-side — your ROM never
+leaves your machine. Build the bundle and serve it:
+
+```sh
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack        # or: cargo install wasm-bindgen-cli --version 0.2.91
+
+just wasm-build                # -> rubc-wasm/web/pkg/
+just wasm-serve                # http://localhost:8000/
+```
+
+Open <http://localhost:8000/>, click **Load ROM**, and play.
+
+### Play in your browser (Docker)
+
+No Rust toolchain needed — just Docker. This builds the wasm bundle and serves
+the demo through nginx:
+
+```sh
+docker compose up --build      # then open http://localhost:8080/
+```
+
+See the [**usage guide**](docs/USAGE.md) for the full walkthrough of all three
+ways to run rubc (native, browser, Docker), saves, and troubleshooting.
+
 ## Controls
 
 | Key | Game Boy button |
@@ -159,6 +186,7 @@ cargo run -p rubc -- cartdump ROM   # inspect a cartridge header
 just run path/to/game.gb    # run quietly
 just trun path/to/game.gb   # run with debug logging
 just unit-test              # core unit tests
+just wasm-build             # build the browser (WebAssembly) bundle
 just check                  # fmt + clippy + build + test
 ```
 
@@ -172,6 +200,8 @@ rubc/
 │       ├── bus/       # memory bus, PPU, APU, timer, cartridge/MBC banking
 │       └── machine.rs # bootable Machine{Cpu, Bus} + test-ROM harness
 ├── rubc/        # the binary — windowing, rendering, audio, input
+├── rubc-wasm/    # WebAssembly bindings + browser demo (web/)
+├── deploy/       # nginx config for the Docker demo
 └── justfile     # build / run / test / diagnostics recipes
 ```
 
@@ -183,9 +213,9 @@ hacks.
 ## Status
 
 rubc plays commercial DMG and CGB games today, with picture, sound, input, and
-battery saves. Work continues on the last few sub-instruction PPU timing edge
-cases (the mid-scanline mealybug-tearoom and `cgb-acid-hell` tests) and on link-
-cable serial I/O.
+battery saves — natively, in the browser (WebAssembly), or via Docker. Work
+continues on the last few sub-instruction PPU timing edge cases (the mid-
+scanline mealybug-tearoom and `cgb-acid-hell` tests).
 
 ## License
 

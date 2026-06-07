@@ -16,7 +16,7 @@ the commands to run each suite are in the [justfile](../justfile).
 | `interrupt_time` (CGB) | ✅ Pass |
 | `dmg_sound` (01–12) | ✅ 12/12 |
 | `cgb_sound` (01–12) | ✅ 12/12 |
-| `oam_bug` | ◐ 6/8 sub-tests (DMG OAM corruption — POP/RET patterns in progress) |
+| `oam_bug` | ✅ Combined ROM passes; 7/8 sub-tests (DMG OAM corruption — `7-timing_effect` needs sub-M-cycle PPU-dot phase) |
 
 rubc's own rendered output running each suite to completion:
 
@@ -86,9 +86,10 @@ they fall into three groups:
    `KEY1`/`RP`/`OPRI`/`SVBK` to read as unmapped — but those are functional CGB
    registers rubc implements correctly. Matching the test would break real CGB
    games.
-3. **Out-of-scope features**: link-cable serial timing, the MBC1 multicart
-   wiring variant, and utility/manual/torture ROMs (`bootrom_dumper`,
-   `sprite_priority`, the `madness` category).
+3. **Out-of-scope / torture ROMs**: the MBC1 multicart wiring variant and the
+   utility/manual/`madness` category (`bootrom_dumper`, `sprite_priority`, …).
+   Link-cable serial *clock alignment* now passes (`boot_sclk_align`); full
+   multi-device serial timing remains out of scope.
 
 ## Reproducing
 

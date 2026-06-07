@@ -1,0 +1,23 @@
+# Keep the Docker build context small and reproducible.
+
+# Rust build output — rebuilt inside the image.
+target/
+
+# Vendored reference docs + test ROMs (git-ignored, huge, not needed for wasm).
+reference/
+
+# Generated wasm-bindgen output — regenerated in the build's wasm stage.
+rubc-wasm/web/pkg/
+
+# Local save data and captures.
+*.sav
+*.png
+*.gif
+!docs/media/**
+
+# Git + editor + CI noise.
+.git/
+.github/
+.beads/
+.omo/
+*.log

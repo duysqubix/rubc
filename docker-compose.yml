@@ -1,0 +1,20 @@
+# Docker Compose for the rubc WebAssembly demo.
+#
+#   docker compose up --build        # build the wasm bundle + serve it
+#   open http://localhost:8080/      # load a .gb/.gbc ROM and play
+#
+# The image is fully self-contained: it compiles rubc-core to WebAssembly,
+# generates the JS glue, and serves the static demo through nginx. No ROMs
+# are bundled — you load your own from the browser file picker.
+
+services:
+  rubc-wasm:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rubc-wasm:latest
+    container_name: rubc-wasm
+    ports:
+      # host:container — change the host port if 8080 is taken.
+      - "8080:80"
+    restart: unless-stopped
