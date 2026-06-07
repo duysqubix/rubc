@@ -44,10 +44,10 @@ It's small, fast, dependency-light, and written entirely in safe Rust.
   full envelope/sweep/length hardware, output through your speakers.
 - 💾 **Battery saves** — games like Pokémon Crystal write a `.sav` file next to
   the ROM and resume right where you left off.
-- ⏱️ **Cycle accuracy** — an M-cycle-stepped CPU driving T-cycle-accurate
+- ⏱️ **Cycle accuracy** — a per-T-cycle CPU driving T-cycle-accurate
   peripherals; passes Blargg's `instr_timing`, `mem_timing`, and the bulk of
-  Gekkio's mooneye acceptance suite.
-- 🧩 **Multiple cartridge types** — MBC1, MBC2, MBC3 (with RTC), and MBC5.
+  Gekkio's mooneye acceptance suite (94/115).
+- 🧩 **Multiple cartridge types** — MBC0, MBC1, MBC2, MBC3 (with RTC), and MBC5.
 - 🦀 **100% safe Rust** — the emulation core is `#![forbid(unsafe_code)]` with no
   C bindings, no `-sys` crates, and no FFI.
 
@@ -130,7 +130,7 @@ what currently passes:
 | **Blargg `cgb_sound`** | ✅ 12/12 |
 | **dmg-acid2** | ✅ Pixel-exact |
 | **cgb-acid2** | ✅ Pixel-exact |
-| **Mooneye acceptance (DMG-ABC + CGB)** | ✅ Full target coverage |
+| **Mooneye acceptance (DMG-ABC + CGB)** | ✅ 94/115 |
 
 ### Test gallery
 
@@ -160,9 +160,10 @@ rendered output running the named test ROM to completion:
 ## Why rubc?
 
 - **Correctness first.** Every subsystem is gated against a real hardware test
-  ROM before it's considered done. The CPU advances one **M-cycle** at a time;
-  the bus ticks peripherals **four T-cycles** per M-cycle and samples *after*
-  they advance, so memory and timer ordering matches the real machine.
+  ROM before it's considered done. The CPU advances one M-cycle at a time, ticking
+  four T-cycles internally; memory access is observable at individual T-cycles
+  within each M-cycle (reads latch at end-T4, writes drive at per-register T-positions),
+  ensuring memory and timer ordering matches the real machine.
 - **DMG + CGB from the ground up.** Dual-mode is a first-class design target, not
   a retrofit — color, double-speed, VRAM/WRAM banking, and HDMA are all native.
 - **Genuinely safe.** The core library forbids `unsafe`. No C dependencies means
@@ -196,7 +197,7 @@ just check                  # fmt + clippy + build + test
 rubc/
 ├── rubc-core/   # the emulator library — CPU, PPU, APU, bus, MBCs (no rendering)
 │   └── src/
-│       ├── cpu/       # SM83 core: M-cycle state machine, all 512 opcodes, ALU
+│       ├── cpu/       # SM83 core: per-T-cycle engine, all 512 opcodes, ALU
 │       ├── bus/       # memory bus, PPU, APU, timer, cartridge/MBC banking
 │       └── machine.rs # bootable Machine{Cpu, Bus} + test-ROM harness
 ├── rubc/        # the binary — windowing, rendering, audio, input
@@ -206,7 +207,7 @@ rubc/
 ```
 
 The CPU and bus are joined by a single `CpuBus` trait: the CPU borrows the bus
-`&mut` for exactly one call per M-cycle. No peripheral holds a back-reference,
+`&mut` for each M-cycle of work. No peripheral holds a back-reference,
 which keeps the whole design borrow-checker-clean and free of interior-mutability
 hacks.
 
