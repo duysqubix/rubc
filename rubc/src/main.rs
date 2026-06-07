@@ -9,18 +9,15 @@
 //! - `cartdump ROM [opts]` prints the cartridge header + a few derived facts.
 //! - bare `ROM [opts]` is shorthand for `run ROM`.
 
-use crate::gui::Framework;
+use crate::gui::Gui;
 
 use clap::{Parser, Subcommand};
+use eframe::egui;
 use rubc_core::bus::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use rubc_core::logger;
 use rubc_core::machine::{Machine, RunStop};
-use std::time;
-use winit::dpi::LogicalSize;
-use winit::event::{Event, VirtualKeyCode};
-use winit::event_loop::{ControlFlow, EventLoop};
-use winit::window::WindowBuilder;
-use winit_input_helper::WinitInputHelper;
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 mod audio;
 mod capture;
@@ -328,44 +325,22 @@ fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
     }
 }
 
-/// Windowed: run the emulator and render the PPU framebuffer to the window.
-fn run_windowed(mut machine: Machine, save_path: std::path::PathBuf) -> anyhow::Result<()> {
-    let event_loop = EventLoop::new();
-    let mut input = WinitInputHelper::new();
-
-    let window = {
-        let size = LogicalSize::new(WIDTH as f64 * SCALE as f64, HEIGHT as f64 * SCALE as f64);
-        WindowBuilder::new()
-            .with_title(TITLE)
-            .with_inner_size(size)
-            .with_min_inner_size(LogicalSize::new(WIDTH as f64, HEIGHT as f64))
-            .build(&event_loop)?
-    };
-
-    let (mut pixels, mut framework) = {
-        let window_size = window.inner_size();
-        let surface_texture =
-            pixels::SurfaceTexture::new(window_size.width, window_size.height, &window);
-        // Disable vsync (PresentMode::Immediate): the default AutoVsync/Fifo
-        // locks render to the 60 Hz monitor, capping the 59.7 Hz Game Boy frame
-        // at ~56 FPS. With vsync off, our own thread::sleep paces the frame.
-        let pixels = pixels::PixelsBuilder::new(WIDTH, HEIGHT, surface_texture)
-            .present_mode(pixels::wgpu::PresentMode::Immediate)
-            .build()?;
-        let framework = Framework::new(
-            &event_loop,
-            window_size.width,
-            window_size.height,
-            window.scale_factor() as f32,
-            &pixels,
-        );
-        (pixels, framework)
-    };
-
+/// Windowed: run the emulator inside an `eframe` native window, rendering the
+/// PPU framebuffer as a texture and driving input/audio/saves each frame.
+///
+/// `eframe` owns the winit event loop + wgpu surface; we supply an
+/// [`eframe::App`] ([`RubcApp`]) whose `update` runs exactly one Game Boy frame
+/// per repaint. The emulator is paced to the GB frame period by an absolute
+/// per-frame deadline (identical algorithm to the previous manual loop), and
+/// `request_repaint` is called every frame so eframe drives the loop
+/// continuously rather than waiting on input.
+fn run_windowed(mut machine: Machine, save_path: PathBuf) -> anyhow::Result<()> {
     // Audio: open the default output device and tell the APU to produce samples
     // at the device's native rate (no resampling). If no device is available
     // (headless CI, no soundcard), warn and run silently -- the emulator must
-    // still run without audio.
+    // still run without audio. Created here (before the eframe loop) and moved
+    // into the app; the cpal stream runs on its own realtime callback thread,
+    // independent of eframe's repaint cadence.
     let audio = match audio::AudioOutput::new() {
         Ok(a) => {
             machine.bus.apu.set_sample_rate(a.sample_rate());
@@ -377,176 +352,267 @@ fn run_windowed(mut machine: Machine, save_path: std::path::PathBuf) -> anyhow::
             None
         }
     };
-    // Scratch buffer reused each frame to drain APU samples without realloc.
-    let mut audio_scratch: Vec<f32> = Vec::new();
-    // Per-second counter of stereo frames pushed to the device (audio evidence).
-    let mut audio_frames_pushed: usize = 0;
-    let mut audio_log_start = time::Instant::now();
 
-    let fps_target = time::Duration::from_micros(FPS_US);
-    // Tracks the start of the previous frame so the displayed FPS reflects the
-    // true frame-to-frame period (emulation + render + sleep), not just the
-    // paced work window.
-    let mut last_frame = time::Instant::now();
-    // Absolute next-frame deadline: advanced by exactly one frame period each
-    // iteration so pacing does not drift even if a frame runs long or sleep
-    // overshoots (macOS thread::sleep can over-sleep by ~1ms).
-    let mut next_deadline = time::Instant::now() + fps_target;
-    // Rolling FPS counter: log the measured framerate once per second so it can
-    // be monitored headlessly (fern writes to stdout + the log file).
-    let mut fps_window_start = time::Instant::now();
-    let mut frames_this_window: u32 = 0;
-    // Persist battery RAM at most once per second while running, so progress
-    // is not lost if the process is killed without a clean exit.
-    let mut last_save = time::Instant::now();
+    // Disable vsync so eframe's present does not lock to the 60 Hz monitor and
+    // cap the 59.7 Hz Game Boy frame at ~56 FPS; our own deadline + sleep paces
+    // the frame (matching the old `PresentMode::Immediate` behavior).
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_title(TITLE)
+            .with_inner_size([WIDTH as f32 * SCALE, HEIGHT as f32 * SCALE])
+            .with_min_inner_size([WIDTH as f32, HEIGHT as f32]),
+        vsync: false,
+        ..Default::default()
+    };
 
-    event_loop.run(move |event, _, control_flow| {
-        // Run the loop continuously (default is Wait, which gates frames on
-        // events + the vsync'd render and caps FPS below target); our own
-        // thread::sleep paces to the Game Boy frame period.
-        control_flow.set_poll();
-        if input.update(&event) {
-            if input.key_pressed(VirtualKeyCode::Escape) || input.close_requested() {
-                // Clean exit (Esc or window close): flush the save first.
-                persist_save(&machine, &save_path);
-                *control_flow = ControlFlow::Exit;
-                return;
-            }
-            if let Some(scale_factor) = input.scale_factor() {
-                framework.scale_factor(scale_factor);
-            }
-            if let Some(size) = input.window_resized() {
-                if let Err(err) = pixels.resize_surface(size.width, size.height) {
-                    log::error!("pixels.resize_surface: {err}");
-                    *control_flow = ControlFlow::Exit;
-                    return;
-                }
-                framework.resize(size.width, size.height);
-            }
-
-            // Map keyboard -> Game Boy joypad. Z=B X=A Enter=Start RShift/
-            // Backspace=Select, arrow keys=d-pad. key_held drives the active-low
-            // register; key_pressed edges raise the joypad interrupt in core.
-            use rubc_core::bus::Button;
-            for (key, button) in [
-                (VirtualKeyCode::Up, Button::Up),
-                (VirtualKeyCode::Down, Button::Down),
-                (VirtualKeyCode::Left, Button::Left),
-                (VirtualKeyCode::Right, Button::Right),
-                (VirtualKeyCode::X, Button::A),
-                (VirtualKeyCode::Z, Button::B),
-                (VirtualKeyCode::Return, Button::Start),
-                (VirtualKeyCode::RShift, Button::Select),
-                (VirtualKeyCode::Back, Button::Select),
-            ] {
-                machine.set_button(button, input.key_held(key));
-            }
-
-            // One full frame: emulate, draw, and PRESENT inline so the render
-            // cost is inside the pacing budget (the old split RedrawRequested
-            // render leaked ~1ms past the target and capped FPS at ~56).
-            machine.step_frame();
-            // Periodic battery-save flush (best-effort, gated inside).
-            if last_save.elapsed() >= time::Duration::from_secs(1) {
-                persist_save(&machine, &save_path);
-                last_save = time::Instant::now();
-            }
-            // Feed this frame's APU samples to the audio device. The APU was
-            // told to emit at the device's native rate, so push them straight
-            // through with no resampling.
-            if let Some(audio) = &audio {
-                audio_scratch.clear();
-                machine.bus.apu.drain_samples(&mut audio_scratch);
-                audio_frames_pushed += audio_scratch.len() / 2;
-                audio.push_samples(&audio_scratch);
-            }
-            draw_framebuffer(&machine, pixels.frame_mut());
-            // Hand the debug viewer a read-only VRAM snapshot (only when the
-            // window is open). Immutable borrow ends before the egui closure,
-            // so no `&mut Machine` is held across `prepare`.
-            if framework.debug_open() {
-                framework.set_vram_snapshot(vramview::VramDebugSnapshot::capture(&machine));
-            }
-            framework.prepare(&window);
-            let render_result = pixels.render_with(|encoder, render_target, context| {
-                context.scaling_renderer.render(encoder, render_target);
-                framework.render(encoder, render_target, context);
-                Ok(())
-            });
-            if let Err(err) = render_result {
-                log::error!("pixels.render: {err}");
-                *control_flow = ControlFlow::Exit;
-                return;
-            }
-
-            // Pace to an ABSOLUTE per-frame deadline. Sleep until just shy of it
-            // (macOS thread::sleep tends to overshoot), then advance the deadline
-            // by exactly one frame period so timing never drifts.
-            let now = time::Instant::now();
-            if now < next_deadline {
-                // Leave a 1ms slack and let the loop spin the remainder.
-                let slack = time::Duration::from_millis(1);
-                if next_deadline - now > slack {
-                    std::thread::sleep(next_deadline - now - slack);
-                }
-                while time::Instant::now() < next_deadline {
-                    std::hint::spin_loop();
-                }
-            }
-            let period = last_frame.elapsed();
-            last_frame = time::Instant::now();
-            // Advance the deadline; if we fell badly behind, resync to now.
-            next_deadline += fps_target;
-            if next_deadline < last_frame {
-                next_deadline = last_frame + fps_target;
-            }
-            window.set_title(&format!("{TITLE}  {:.3} FPS", 1.0 / period.as_secs_f64()));
-
-            // Once per second, log the average FPS over the window.
-            frames_this_window += 1;
-            let win = fps_window_start.elapsed();
-            if win >= time::Duration::from_secs(1) {
-                let fps = frames_this_window as f64 / win.as_secs_f64();
-                log::info!(
-                    "fps: {fps:.3} ({frames_this_window} frames in {:.3}s)",
-                    win.as_secs_f64()
-                );
-                frames_this_window = 0;
-                fps_window_start = time::Instant::now();
-            }
-
-            // Once per second, log audio frames pushed to the device + current
-            // device-side buffer depth: evidence the APU->device path carries
-            // real (non-zero) samples.
-            if let Some(audio) = &audio {
-                let alog = audio_log_start.elapsed();
-                if alog >= time::Duration::from_secs(1) {
-                    log::info!(
-                        "audio: {audio_frames_pushed} frames pushed in {:.3}s, {} frames buffered",
-                        alog.as_secs_f64(),
-                        audio.buffered_frames(),
-                    );
-                    audio_frames_pushed = 0;
-                    audio_log_start = time::Instant::now();
-                }
-            }
-        }
-
-        // egui still needs window events; the frame render happens inline above.
-        if let Event::WindowEvent { event, .. } = event {
-            framework.handle_event(&event);
-        }
-    });
+    eframe::run_native(
+        TITLE,
+        options,
+        Box::new(move |_cc| Ok(Box::new(RubcApp::new(machine, save_path, audio)))),
+    )
+    .map_err(|e| anyhow::anyhow!("eframe run_native failed: {e}"))
 }
 
-/// Map the PPU's resolved framebuffer into the RGBA `pixels` buffer. Shares the
-/// per-pixel shade->RGB mapping with the headless capture path so the window and
-/// screenshots/GIFs render identically.
-fn draw_framebuffer(machine: &Machine, frame: &mut [u8]) {
-    let fb = &machine.bus.ppu.framebuffer;
-    for (px, &pixel) in frame.chunks_exact_mut(4).zip(fb.iter()) {
-        px.copy_from_slice(&capture::frame_pixel_rgba(pixel));
+/// The windowed application state, driven by `eframe`. Holds the emulator, the
+/// save path, the audio output, the egui UI ([`Gui`]), the screen texture, and
+/// the frame-pacing / periodic-logging timers.
+struct RubcApp {
+    machine: Machine,
+    save_path: PathBuf,
+    audio: Option<audio::AudioOutput>,
+    /// Scratch buffer reused each frame to drain APU samples without realloc.
+    audio_scratch: Vec<f32>,
+    /// Per-second counter of stereo frames pushed to the device (audio evidence).
+    audio_frames_pushed: usize,
+    audio_log_start: Instant,
+    gui: Gui,
+    /// The 160x144 framebuffer uploaded as a NEAREST-filtered texture; updated
+    /// in place each frame (no per-frame texture allocation).
+    screen_tex: Option<egui::TextureHandle>,
+    fps_target: Duration,
+    /// Start of the previous frame, so the displayed FPS reflects the true
+    /// frame-to-frame period (emulation + render + sleep).
+    last_frame: Instant,
+    /// Absolute next-frame deadline, advanced by exactly one frame period each
+    /// iteration so pacing does not drift even if a frame runs long or sleep
+    /// overshoots (macOS thread::sleep can over-sleep by ~1ms).
+    next_deadline: Instant,
+    fps_window_start: Instant,
+    frames_this_window: u32,
+    /// Persist battery RAM at most once per second while running.
+    last_save: Instant,
+}
+
+impl RubcApp {
+    fn new(machine: Machine, save_path: PathBuf, audio: Option<audio::AudioOutput>) -> Self {
+        let now = Instant::now();
+        let fps_target = Duration::from_micros(FPS_US);
+        Self {
+            machine,
+            save_path,
+            audio,
+            audio_scratch: Vec::new(),
+            audio_frames_pushed: 0,
+            audio_log_start: now,
+            gui: Gui::new(),
+            screen_tex: None,
+            fps_target,
+            last_frame: now,
+            next_deadline: now + fps_target,
+            fps_window_start: now,
+            frames_this_window: 0,
+            last_save: now,
+        }
     }
+}
+
+impl eframe::App for RubcApp {
+    // All emulation (input, stepping, audio, saves, framebuffer upload, frame
+    // pacing) lives in `logic`, which eframe calls EVERY frame regardless of
+    // window visibility -- so the emulator keeps running (and audio keeps
+    // flowing) even when minimized, matching the old continuous winit loop.
+    // `ui` (visible-only) just paints the already-uploaded screen texture.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Map keyboard -> Game Boy joypad. Z=B X=A Enter=Start, Backspace or
+        // Shift=Select, arrow keys=d-pad. `key_down` drives the active-low
+        // register from the held state; key edges raise the joypad interrupt in
+        // core. NOTE: egui exposes no distinct Right-Shift key, so EITHER shift
+        // key now maps to Select (the old code documented Right Shift; its
+        // RShift branch was in any case overwritten by the Backspace branch, so
+        // Backspace was already the effective Select key).
+        use rubc_core::bus::Button;
+        let esc = ctx.input(|i| {
+            self.machine
+                .set_button(Button::Up, i.key_down(egui::Key::ArrowUp));
+            self.machine
+                .set_button(Button::Down, i.key_down(egui::Key::ArrowDown));
+            self.machine
+                .set_button(Button::Left, i.key_down(egui::Key::ArrowLeft));
+            self.machine
+                .set_button(Button::Right, i.key_down(egui::Key::ArrowRight));
+            self.machine.set_button(Button::A, i.key_down(egui::Key::X));
+            self.machine.set_button(Button::B, i.key_down(egui::Key::Z));
+            self.machine
+                .set_button(Button::Start, i.key_down(egui::Key::Enter));
+            self.machine.set_button(
+                Button::Select,
+                i.key_down(egui::Key::Backspace) || i.modifiers.shift,
+            );
+            i.key_pressed(egui::Key::Escape)
+        });
+        if esc {
+            // Clean exit (Esc): flush the save, then ask eframe to close. The
+            // window-close button is covered by `on_exit`.
+            persist_save(&self.machine, &self.save_path);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
+
+        // One full Game Boy frame.
+        self.machine.step_frame();
+
+        // Periodic battery-save flush (best-effort, gated inside).
+        if self.last_save.elapsed() >= Duration::from_secs(1) {
+            persist_save(&self.machine, &self.save_path);
+            self.last_save = Instant::now();
+        }
+
+        // Feed this frame's APU samples to the audio device. The APU was told to
+        // emit at the device's native rate, so push them straight through with
+        // no resampling.
+        if let Some(audio) = &self.audio {
+            self.audio_scratch.clear();
+            self.machine.bus.apu.drain_samples(&mut self.audio_scratch);
+            self.audio_frames_pushed += self.audio_scratch.len() / 2;
+            audio.push_samples(&self.audio_scratch);
+        }
+
+        // Upload the resolved framebuffer as a NEAREST-filtered texture (updated
+        // in place after the first frame -- no per-frame allocation).
+        let image = framebuffer_color_image(&self.machine);
+        match &mut self.screen_tex {
+            Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
+            None => {
+                self.screen_tex =
+                    Some(ctx.load_texture("rubc-screen", image, egui::TextureOptions::NEAREST));
+            }
+        }
+
+        // Hand the debug viewer a read-only VRAM snapshot (only when the window
+        // is open). The immutable borrow ends before the egui closures in `ui`.
+        if self.gui.debug_open() {
+            self.gui
+                .set_vram_snapshot(vramview::VramDebugSnapshot::capture(&self.machine));
+        }
+
+        // Pace to an ABSOLUTE per-frame deadline. Sleep until just shy of it
+        // (macOS thread::sleep tends to overshoot), then spin the remainder so
+        // timing never drifts.
+        let now = Instant::now();
+        if now < self.next_deadline {
+            let slack = Duration::from_millis(1);
+            if self.next_deadline - now > slack {
+                std::thread::sleep(self.next_deadline - now - slack);
+            }
+            while Instant::now() < self.next_deadline {
+                std::hint::spin_loop();
+            }
+        }
+        let period = self.last_frame.elapsed();
+        self.last_frame = Instant::now();
+        // Advance the deadline; if we fell badly behind, resync to now.
+        self.next_deadline += self.fps_target;
+        if self.next_deadline < self.last_frame {
+            self.next_deadline = self.last_frame + self.fps_target;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!(
+            "{TITLE}  {:.3} FPS",
+            1.0 / period.as_secs_f64()
+        )));
+
+        // Once per second, log the average FPS over the window.
+        self.frames_this_window += 1;
+        let win = self.fps_window_start.elapsed();
+        if win >= Duration::from_secs(1) {
+            let fps = self.frames_this_window as f64 / win.as_secs_f64();
+            log::info!(
+                "fps: {fps:.3} ({} frames in {:.3}s)",
+                self.frames_this_window,
+                win.as_secs_f64()
+            );
+            self.frames_this_window = 0;
+            self.fps_window_start = Instant::now();
+        }
+
+        // Once per second, log audio frames pushed to the device + current
+        // device-side buffer depth: evidence the APU->device path carries real
+        // (non-zero) samples.
+        if let Some(audio) = &self.audio {
+            let alog = self.audio_log_start.elapsed();
+            if alog >= Duration::from_secs(1) {
+                log::info!(
+                    "audio: {} frames pushed in {:.3}s, {} frames buffered",
+                    self.audio_frames_pushed,
+                    alog.as_secs_f64(),
+                    audio.buffered_frames(),
+                );
+                self.audio_frames_pushed = 0;
+                self.audio_log_start = Instant::now();
+            }
+        }
+
+        // eframe is repaint-driven: request the next frame immediately so the
+        // loop runs at the Game Boy cadence set by the deadline pacing above.
+        ctx.request_repaint();
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // The egui UI: menubar (File -> Debug / About), About window, and the
+        // embedded live VRAM viewer. Drawn before the CentralPanel so the game
+        // screen fills the remaining space below the menubar.
+        self.gui.ui(ui);
+
+        // The game screen: the framebuffer texture, aspect-preserved, centered
+        // on a black field, NEAREST-filtered (no blur).
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+            .show_inside(ui, |ui| {
+                if let Some(tex) = &self.screen_tex {
+                    let avail = ui.available_size();
+                    let scale = (avail.x / WIDTH as f32)
+                        .min(avail.y / HEIGHT as f32)
+                        .max(0.0);
+                    let size = egui::vec2(WIDTH as f32 * scale, HEIGHT as f32 * scale);
+                    ui.centered_and_justified(|ui| {
+                        ui.add(
+                            egui::Image::new(egui::load::SizedTexture::new(tex.id(), size))
+                                .texture_options(egui::TextureOptions::NEAREST),
+                        );
+                    });
+                }
+            });
+    }
+
+    fn on_exit(&mut self) {
+        // Window-close (or any shutdown) save flush.
+        persist_save(&self.machine, &self.save_path);
+    }
+}
+
+/// Map the PPU's resolved framebuffer into an egui [`egui::ColorImage`]. Shares
+/// the per-pixel shade->RGB mapping with the headless capture path so the window
+/// and screenshots/GIFs render identically.
+fn framebuffer_color_image(machine: &Machine) -> egui::ColorImage {
+    let fb = &machine.bus.ppu.framebuffer;
+    let pixels: Vec<egui::Color32> = fb
+        .iter()
+        .map(|&pixel| {
+            let [r, g, b, a] = capture::frame_pixel_rgba(pixel);
+            // Alpha is always 0xFF, so premultiplied == unmultiplied here.
+            egui::Color32::from_rgba_premultiplied(r, g, b, a)
+        })
+        .collect();
+    egui::ColorImage::new([WIDTH as usize, HEIGHT as usize], pixels)
 }
 
 /// `cartdump`: decode and print the cartridge header.

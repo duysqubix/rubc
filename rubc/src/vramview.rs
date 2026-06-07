@@ -225,7 +225,7 @@ impl VramView {
     }
 
     fn build_tiles_image(&self, snap: &VramDebugSnapshot) -> ColorImage {
-        let mut img = ColorImage::new([SHEET_W, SHEET_H], Color32::BLACK);
+        let mut img = ColorImage::filled([SHEET_W, SHEET_H], Color32::BLACK);
         let bank = &snap.vram[self.bank & 1];
         for tile_idx in 0..TILE_COUNT {
             let tx = (tile_idx % SHEET_COLS) * 8;
@@ -251,7 +251,7 @@ impl VramView {
     }
 
     fn build_tilemap_image(&self, snap: &VramDebugSnapshot) -> ColorImage {
-        let mut img = ColorImage::new([MAP_W, MAP_H], Color32::BLACK);
+        let mut img = ColorImage::filled([MAP_W, MAP_H], Color32::BLACK);
         let map_base = if self.map_9c00 { 0x1C00 } else { 0x1800 };
         for cy in 0..MAP_TILES {
             for cx in 0..MAP_TILES {
@@ -517,7 +517,7 @@ impl VramView {
                 min,
                 egui::vec2(VIEW_W as f32 * scale, VIEW_H as f32 * scale),
             );
-            painter.rect_stroke(vp, 0.0, stroke);
+            painter.rect_stroke(vp, 0.0, stroke, egui::StrokeKind::Middle);
         }
     }
 }

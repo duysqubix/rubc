@@ -128,14 +128,14 @@ fn build_stream<T>(
     config: &cpal::StreamConfig,
     ring: Arc<Mutex<VecDeque<f32>>>,
     channels: usize,
-    err_fn: impl FnMut(cpal::StreamError) + Send + 'static,
+    err_fn: impl FnMut(cpal::Error) + Send + 'static,
 ) -> anyhow::Result<cpal::Stream>
 where
     T: cpal::SizedSample + cpal::FromSample<f32>,
 {
     let stream = device
         .build_output_stream(
-            config,
+            *config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 // Lock briefly, copy out, release. No allocation, no panics:
                 // recover a poisoned lock and emit silence on underrun.
