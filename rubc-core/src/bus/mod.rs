@@ -124,6 +124,13 @@ fn is_ppu_visible_write(addr: u16) -> bool {
     )
 }
 
+fn ppu_visible_write_pre_ticks(addr: u16) -> u32 {
+    match addr {
+        0xFF47..=0xFF49 | 0xFF68..=0xFF6B => 0,
+        _ => 3,
+    }
+}
+
 /// Bus-observable fields the CPU merges into a flight record after an M-cycle.
 /// The CPU supplies PC/opcode/regs; the bus supplies these. Side-effect-free.
 #[cfg(feature = "flight-recorder")]
@@ -341,20 +348,15 @@ impl Bus {
                 // sub-cycle (Oracle ses_164cf0305). rapid_toggle's `ldh (TAC),a`
                 // is immediately followed by `dec bc`; end-of-M gives BC=$FFD8,
                 // N=0 gives $FFDA, and the N=2 midpoint hits the correct $FFD9.
-                //
-                // PPU-visible IO commits at T3 so the final dot of the M-cycle
-                // sees mid-mode-3 register changes. Every other write --
-                // including DIV ($FF04), TIMA/TMA ($FF05/$FF06), VRAM/OAM, DMA,
-                // HDMA, WRAM, HRAM, and VBK ($FF4F) -- stays end-of-M to keep the
-                // memory/timer timing contracts intact.
                 if addr == 0xFF07 {
                     self.tick_t_times(2);
                     self.cpu_write_latched(addr, value);
                     self.tick_t_times(2);
                 } else if is_ppu_visible_write(addr) {
-                    self.tick_t_times(3);
+                    let pre_ticks = ppu_visible_write_pre_ticks(addr);
+                    self.tick_t_times(pre_ticks);
                     self.cpu_write_latched(addr, value);
-                    self.tick_t_times(1);
+                    self.tick_t_times(4 - pre_ticks);
                 } else {
                     self.tick_t_times(4);
                     self.cpu_write_latched(addr, value);
