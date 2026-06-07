@@ -280,6 +280,12 @@ impl Bus {
         Self::default()
     }
 
+    /// Read-only DMG background palette register (BGP, `$FF47`). Provided for
+    /// debug/visualization tooling (VRAM viewer); has no timing side effects.
+    pub fn dmg_bgp(&self) -> u8 {
+        self.io[0x47]
+    }
+
     /// Set a joypad button's pressed state. A fresh press of a selected-line
     /// button raises the joypad interrupt (IF bit 4).
     pub fn set_button(&mut self, button: Button, pressed: bool) {

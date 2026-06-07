@@ -4,6 +4,8 @@ use pixels::{wgpu, PixelsContext};
 use winit::event_loop::EventLoopWindowTarget;
 use winit::window::Window;
 
+use crate::vramview::{VramDebugSnapshot, VramView};
+
 /// Manages all state required for rendering egui over `Pixels`.
 pub(crate) struct Framework {
     // State for egui.
@@ -20,8 +22,10 @@ pub(crate) struct Framework {
 
 /// Example application state. A real application will need a lot more state than this.
 struct Gui {
-    /// Only show the egui window when true.
+    /// Only show the egui "About" window when true.
     window_open: bool,
+    /// File -> Debug VRAM viewer.
+    vram_view: VramView,
 }
 
 impl Framework {
@@ -73,6 +77,19 @@ impl Framework {
     /// Update scaling factor.
     pub(crate) fn scale_factor(&mut self, scale_factor: f64) {
         self.screen_descriptor.pixels_per_point = scale_factor as f32;
+    }
+
+    /// Hand this frame's read-only VRAM snapshot to the debug viewer. Called
+    /// before `prepare`, so the viewer never borrows the `Machine` across the
+    /// egui closure.
+    pub(crate) fn set_vram_snapshot(&mut self, snapshot: VramDebugSnapshot) {
+        self.gui.vram_view.set_snapshot(snapshot);
+    }
+
+    /// Whether the debug window is currently open (lets the caller skip the
+    /// per-frame snapshot copy when it is closed).
+    pub(crate) fn debug_open(&self) -> bool {
+        self.gui.vram_view.open
     }
 
     /// Prepare egui.
@@ -140,7 +157,10 @@ impl Framework {
 impl Gui {
     /// Create a `Gui`.
     fn new() -> Self {
-        Self { window_open: true }
+        Self {
+            window_open: false,
+            vram_view: VramView::new(),
+        }
     }
 
     /// Create the UI using egui.
@@ -148,6 +168,10 @@ impl Gui {
         egui::TopBottomPanel::top("menubar_container").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    if ui.button("Debug...").clicked() {
+                        self.vram_view.toggle();
+                        ui.close_menu();
+                    }
                     if ui.button("About...").clicked() {
                         self.window_open = true;
                         ui.close_menu();
@@ -156,19 +180,16 @@ impl Gui {
             });
         });
 
-        // egui::Window::new("Hello, egui!")
-        //     .open(&mut self.window_open)
-        //     .show(ctx, |ui| {
-        //         ui.label("This example demonstrates using egui with pixels.");
-        //         ui.label("Made with 💖 in San Francisco!");
+        egui::Window::new("About rubc")
+            .open(&mut self.window_open)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                ui.label("rubc -- a safe-Rust Game Boy (DMG/CGB) emulator.");
+                ui.label("File -> Debug opens the live VRAM viewer.");
+            });
 
-        //         ui.separator();
-
-        //         ui.horizontal(|ui| {
-        //             ui.spacing_mut().item_spacing.x /= 2.0;
-        //             ui.label("Learn more about egui at");
-        //             ui.hyperlink("https://docs.rs/egui");
-        //         });
-        //     });
+        // Live VRAM debug viewer (File -> Debug).
+        self.vram_view.ui(ctx);
     }
 }

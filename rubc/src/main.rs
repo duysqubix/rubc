@@ -25,6 +25,7 @@ use winit_input_helper::WinitInputHelper;
 mod audio;
 mod capture;
 mod gui;
+mod vramview;
 
 const WIDTH: u32 = SCREEN_WIDTH as u32;
 const HEIGHT: u32 = SCREEN_HEIGHT as u32;
@@ -460,6 +461,12 @@ fn run_windowed(mut machine: Machine, save_path: std::path::PathBuf) -> anyhow::
                 audio.push_samples(&audio_scratch);
             }
             draw_framebuffer(&machine, pixels.frame_mut());
+            // Hand the debug viewer a read-only VRAM snapshot (only when the
+            // window is open). Immutable borrow ends before the egui closure,
+            // so no `&mut Machine` is held across `prepare`.
+            if framework.debug_open() {
+                framework.set_vram_snapshot(vramview::VramDebugSnapshot::capture(&machine));
+            }
             framework.prepare(&window);
             let render_result = pixels.render_with(|encoder, render_target, context| {
                 context.scaling_renderer.render(encoder, render_target);
