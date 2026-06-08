@@ -226,4 +226,12 @@ impl RubcWasm {
     pub fn load_ram(&mut self, data: &[u8]) {
         self.machine.load_ram(data);
     }
+
+    pub fn save_state(&self) -> Vec<u8> {
+        self.machine.save_state()
+    }
+
+    pub fn load_state(&mut self, data: &[u8]) -> bool {
+        self.machine.load_state(data).is_ok()
+    }
 }
