@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { getRomKey, exportSave, importSave, loadRomFile } from "@/lib/emulator";
+import { getRomKey, exportSave, importSave, loadRomFile, storeRomBytes, loadRomBytes, deleteRomBytes } from "@/lib/emulator";
 
 interface RecentRom {
   key: string;
@@ -47,8 +47,31 @@ export function RomLoader({ onRomLoaded }: { onRomLoaded: (bytes: Uint8Array) =>
     const updated = [newRecent, ...recentRoms.filter(r => r.key !== key)].slice(0, 5);
     setRecentRoms(updated);
     localStorage.setItem("rubc-recent-roms", JSON.stringify(updated));
+    await storeRomBytes(key, bytes);
 
     onRomLoaded(bytes);
+  };
+
+  const openRecent = async (rom: RecentRom) => {
+    const bytes = await loadRomBytes(rom.key);
+    if (!bytes) {
+      alert("That game's data is no longer cached. Please load the file again.");
+      return;
+    }
+    const updated = [
+      { ...rom, lastPlayed: Date.now() },
+      ...recentRoms.filter((r) => r.key !== rom.key),
+    ].slice(0, 5);
+    setRecentRoms(updated);
+    localStorage.setItem("rubc-recent-roms", JSON.stringify(updated));
+    onRomLoaded(bytes);
+  };
+
+  const removeRecent = async (key: string) => {
+    const updated = recentRoms.filter((r) => r.key !== key);
+    setRecentRoms(updated);
+    localStorage.setItem("rubc-recent-roms", JSON.stringify(updated));
+    await deleteRomBytes(key);
   };
 
   const handleSaveImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -110,21 +133,27 @@ export function RomLoader({ onRomLoaded }: { onRomLoaded: (bytes: Uint8Array) =>
           <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-4">Recent Games</h3>
           <div className="flex flex-col gap-2">
             {recentRoms.map(rom => (
-              <div key={rom.key} className="flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-800">
-                <div className="flex flex-col">
-                  <span className="text-zinc-200 font-medium text-sm">{rom.name}</span>
+              <div key={rom.key} className="flex items-center justify-between p-3 rounded-xl bg-zinc-900 border border-zinc-800 transition-colors hover:border-zinc-600 hover:bg-zinc-800/60">
+                <button
+                  type="button"
+                  onClick={() => openRecent(rom)}
+                  className="flex flex-col flex-1 min-w-0 text-left cursor-pointer"
+                  title={`Play ${rom.name}`}
+                >
+                  <span className="text-zinc-200 font-medium text-sm truncate">{rom.name}</span>
                   <span className="text-zinc-500 text-xs">{(rom.size / 1024).toFixed(1)} KB</span>
-                </div>
-                <div className="flex gap-2">
-                  <button 
-                    onClick={() => exportSave(rom.key)}
+                </button>
+                <div className="flex gap-2 ml-3 shrink-0">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); exportSave(rom.key); }}
                     className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors"
                     title="Export Save"
                   >
                     ↓
                   </button>
-                  <button 
-                    onClick={() => {
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setSelectedSaveKey(rom.key);
                       saveInputRef.current?.click();
                     }}
@@ -132,6 +161,13 @@ export function RomLoader({ onRomLoaded }: { onRomLoaded: (bytes: Uint8Array) =>
                     title="Import Save"
                   >
                     ↑
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); removeRecent(rom.key); }}
+                    className="p-2 text-zinc-500 hover:text-red-400 hover:bg-zinc-800 rounded-lg transition-colors"
+                    title="Remove from recent"
+                  >
+                    ✕
                   </button>
                 </div>
               </div>

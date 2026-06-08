@@ -49,11 +49,16 @@ export async function loadRomFile(file: File): Promise<LoadedRom> {
 
 const SAVE_DB = "rubc-saves";
 const SAVE_STORE = "sav";
+const ROM_STORE = "rom";
 
 function openSaveDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(SAVE_DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(SAVE_STORE);
+    const req = indexedDB.open(SAVE_DB, 2);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(SAVE_STORE)) db.createObjectStore(SAVE_STORE);
+      if (!db.objectStoreNames.contains(ROM_STORE)) db.createObjectStore(ROM_STORE);
+    };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
@@ -95,6 +100,51 @@ export async function storeSaveRam(key: string, bytes: Uint8Array): Promise<void
     });
   } catch (e) {
     console.warn("save store failed:", e);
+  }
+}
+
+// Cache the ROM bytes themselves (keyed like saves) so the Recent Games list
+// can reopen a game without the user re-picking the file.
+export async function storeRomBytes(key: string, bytes: Uint8Array): Promise<void> {
+  try {
+    const db = await openSaveDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(ROM_STORE, "readwrite");
+      tx.objectStore(ROM_STORE).put(bytes.slice(), key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.warn("rom store failed:", e);
+  }
+}
+
+export async function loadRomBytes(key: string): Promise<Uint8Array | null> {
+  try {
+    const db = await openSaveDb();
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(ROM_STORE, "readonly");
+      const req = tx.objectStore(ROM_STORE).get(key);
+      req.onsuccess = () => resolve(req.result ? new Uint8Array(req.result) : null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) {
+    console.warn("rom load failed:", e);
+    return null;
+  }
+}
+
+export async function deleteRomBytes(key: string): Promise<void> {
+  try {
+    const db = await openSaveDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(ROM_STORE, "readwrite");
+      tx.objectStore(ROM_STORE).delete(key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (e) {
+    console.warn("rom delete failed:", e);
   }
 }
 
