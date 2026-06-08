@@ -11,6 +11,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+pub(crate) enum GuiAction {
+    None,
+    LoadRom,
+}
+
 /// The egui UI state for the rubc window.
 pub(crate) struct Gui {
     /// Only show the egui "About" window when true.
@@ -30,7 +35,8 @@ impl Gui {
     }
 
     /// Create the UI using egui.
-    pub(crate) fn ui(&mut self, ui: &mut egui::Ui) {
+    pub(crate) fn ui(&mut self, ui: &mut egui::Ui) -> GuiAction {
+        let mut action = GuiAction::None;
         // Cheap (Arc) clone so the floating window below can borrow the egui
         // context after the menubar panel has finished borrowing `ui`.
         let ctx = ui.ctx().clone();
@@ -38,6 +44,10 @@ impl Gui {
         egui::Panel::top("menubar_container").show_inside(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    if ui.button("Load ROM...").clicked() {
+                        action = GuiAction::LoadRom;
+                        ui.close();
+                    }
                     if ui.button("Debug...").clicked() {
                         // Toggle the detached VRAM viewport. `logic` spawns the
                         // deferred viewport while this is true and drops it when
@@ -61,5 +71,7 @@ impl Gui {
                 ui.label("rubc -- a safe-Rust Game Boy (DMG/CGB) emulator.");
                 ui.label("File -> Debug opens the live VRAM viewer in its own window.");
             });
+
+        action
     }
 }

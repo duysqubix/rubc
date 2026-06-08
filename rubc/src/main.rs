@@ -219,10 +219,7 @@ fn main() -> anyhow::Result<()> {
         }
         None => match cli.rom {
             Some(rom) => run(&rom, &cli.run_opts), // bare-ROM shorthand
-            None => {
-                eprintln!("error: no ROM given. Try `rubc run <ROM>` or `rubc --help`.");
-                std::process::exit(2);
-            }
+            None => run_windowed(None, None, &cli.run_opts),
         },
     }
 }
@@ -231,6 +228,10 @@ fn main() -> anyhow::Result<()> {
 fn boot(rom_path: &str, force_dmg: bool, force_cgb: bool) -> anyhow::Result<Machine> {
     let rom = std::fs::read(rom_path)
         .map_err(|e| anyhow::anyhow!("failed to read ROM {rom_path:?}: {e}"))?;
+    Ok(boot_bytes(&rom, force_dmg, force_cgb))
+}
+
+fn boot_bytes(rom: &[u8], force_dmg: bool, force_cgb: bool) -> Machine {
     let cgb_flag = rom.get(0x0143).is_some_and(|f| f & 0x80 != 0);
     let cgb = if force_dmg {
         false
@@ -239,11 +240,11 @@ fn boot(rom_path: &str, force_dmg: bool, force_cgb: bool) -> anyhow::Result<Mach
     } else {
         cgb_flag
     };
-    Ok(if cgb {
-        Machine::boot_cgb(&rom)
+    if cgb {
+        Machine::boot_cgb(rom)
     } else {
-        Machine::boot_dmg(&rom)
-    })
+        Machine::boot_dmg(rom)
+    }
 }
 
 fn run(rom_path: &str, opts: &RunOpts) -> anyhow::Result<()> {
@@ -257,7 +258,7 @@ fn run(rom_path: &str, opts: &RunOpts) -> anyhow::Result<()> {
     if machine.has_battery() {
         load_save(&mut machine, &save_path);
     }
-    run_windowed(machine, save_path)
+    run_windowed(Some(machine), Some(save_path), opts)
 }
 
 /// The save-file path for a ROM: the ROM path with its extension replaced by
@@ -336,7 +337,7 @@ fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
 /// per-frame deadline (identical algorithm to the previous manual loop), and
 /// `request_repaint` is called every frame so eframe drives the loop
 /// continuously rather than waiting on input.
-fn run_windowed(mut machine: Machine, save_path: PathBuf) -> anyhow::Result<()> {
+fn run_windowed(machine: Option<Machine>, save_path: Option<PathBuf>, opts: &RunOpts) -> anyhow::Result<()> {
     // Audio: open the default output device and tell the APU to produce samples
     // at the device's native rate (no resampling). If no device is available
     // (headless CI, no soundcard), warn and run silently -- the emulator must
@@ -345,7 +346,6 @@ fn run_windowed(mut machine: Machine, save_path: PathBuf) -> anyhow::Result<()> 
     // independent of eframe's repaint cadence.
     let audio = match audio::AudioOutput::new() {
         Ok(a) => {
-            machine.bus.apu.set_sample_rate(a.sample_rate());
             log::info!("audio: output enabled at {} Hz", a.sample_rate());
             Some(a)
         }
@@ -367,10 +367,13 @@ fn run_windowed(mut machine: Machine, save_path: PathBuf) -> anyhow::Result<()> 
         ..Default::default()
     };
 
+    let force_dmg = opts.force_dmg;
+    let force_cgb = opts.force_cgb;
+
     eframe::run_native(
         TITLE,
         options,
-        Box::new(move |_cc| Ok(Box::new(RubcApp::new(machine, save_path, audio)))),
+        Box::new(move |_cc| Ok(Box::new(RubcApp::new(machine, save_path, audio, force_dmg, force_cgb)))),
     )
     .map_err(|e| anyhow::anyhow!("eframe run_native failed: {e}"))
 }
@@ -379,8 +382,8 @@ fn run_windowed(mut machine: Machine, save_path: PathBuf) -> anyhow::Result<()> 
 /// save path, the audio output, the egui UI ([`Gui`]), the screen texture, and
 /// the frame-pacing / periodic-logging timers.
 struct RubcApp {
-    machine: Machine,
-    save_path: PathBuf,
+    machine: Option<Machine>,
+    save_path: Option<PathBuf>,
     audio: Option<audio::AudioOutput>,
     /// Scratch buffer reused each frame to drain APU samples without realloc.
     audio_scratch: Vec<f32>,
@@ -415,13 +418,20 @@ struct RubcApp {
     frames_this_window: u32,
     /// Persist battery RAM at most once per second while running.
     last_save: Instant,
+    force_dmg: bool,
+    force_cgb: bool,
+    logo_tex: Option<egui::TextureHandle>,
+    error_msg: Option<String>,
 }
 
 impl RubcApp {
-    fn new(machine: Machine, save_path: PathBuf, audio: Option<audio::AudioOutput>) -> Self {
+    fn new(mut machine: Option<Machine>, save_path: Option<PathBuf>, audio: Option<audio::AudioOutput>, force_dmg: bool, force_cgb: bool) -> Self {
         let now = Instant::now();
         let fps_target = Duration::from_micros(FPS_US);
         let debug_open = Arc::new(AtomicBool::new(false));
+        if let (Some(m), Some(a)) = (&mut machine, &audio) {
+            m.bus.apu.set_sample_rate(a.sample_rate());
+        }
         Self {
             machine,
             save_path,
@@ -440,6 +450,10 @@ impl RubcApp {
             vram_snapshot: Arc::new(RwLock::new(None)),
             debug_open,
             vram_view: Arc::new(RwLock::new(vramview::VramView::new())),
+            force_dmg,
+            force_cgb,
+            logo_tex: None,
+            error_msg: None,
         }
     }
 
@@ -494,6 +508,119 @@ impl RubcApp {
             },
         );
     }
+    fn draw_idle_screen(&mut self, ui: &mut egui::Ui) {
+        let logo_bytes = include_bytes!("../assets/logo.png");
+        let tex = self.logo_tex.get_or_insert_with(|| {
+            let decoder = png::Decoder::new(std::io::Cursor::new(logo_bytes));
+            let mut reader = decoder.read_info().unwrap();
+            let mut buf = vec![0; reader.output_buffer_size()];
+            let info = reader.next_frame(&mut buf).unwrap();
+            let size = [info.width as _, info.height as _];
+            let color_image = match info.color_type {
+                png::ColorType::Rgba => {
+                    egui::ColorImage::from_rgba_unmultiplied(size, &buf[..info.buffer_size()])
+                }
+                png::ColorType::Rgb => {
+                    egui::ColorImage::from_rgb(size, &buf[..info.buffer_size()])
+                }
+                _ => panic!("Unsupported logo color type"),
+            };
+            ui.ctx().load_texture("rubc-logo", color_image, egui::TextureOptions::LINEAR)
+        });
+
+        ui.centered_and_justified(|ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.3);
+                let size = egui::vec2(tex.size()[0] as f32, tex.size()[1] as f32);
+                // Scale down if needed
+                let avail = ui.available_size();
+                let scale = (avail.x * 0.5 / size.x).min(avail.y * 0.5 / size.y).min(1.0);
+                ui.add(egui::Image::new(egui::load::SizedTexture::new(tex.id(), size * scale)));
+                ui.add_space(20.0);
+                ui.label(
+                    egui::RichText::new("Drop a ROM or use File \u{2192} Load ROM")
+                        .color(egui::Color32::from_gray(150))
+                        .size(16.0)
+                );
+            });
+        });
+    }
+
+    fn load_rom_dialog(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Game Boy ROM", &["gb", "gbc", "zip"])
+            .pick_file()
+        {
+            self.load_rom_path(&path);
+        }
+    }
+
+    fn load_rom_path(&mut self, path: &std::path::Path) {
+        let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        let bytes = if ext == "zip" {
+            match std::fs::File::open(path) {
+                Ok(file) => {
+                    match zip::ZipArchive::new(file) {
+                        Ok(mut archive) => {
+                            let mut found = None;
+                            for i in 0..archive.len() {
+                                if let Ok(file) = archive.by_index(i) {
+                                    if file.is_file() {
+                                        let name = file.name().to_lowercase();
+                                        if !name.contains("__macosx/") && (name.ends_with(".gb") || name.ends_with(".gbc")) {
+                                            found = Some(i);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(i) = found {
+                                let mut file = archive.by_index(i).unwrap();
+                                let mut buf = Vec::new();
+                                if let Err(e) = std::io::Read::read_to_end(&mut file, &mut buf) {
+                                    self.error_msg = Some(format!("Failed to read ROM from zip: {e}"));
+                                    return;
+                                }
+                                buf
+                            } else {
+                                self.error_msg = Some("No .gb or .gbc file found in zip".to_string());
+                                return;
+                            }
+                        }
+                        Err(e) => {
+                            self.error_msg = Some(format!("Failed to open zip archive: {e}"));
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.error_msg = Some(format!("Failed to open zip file: {e}"));
+                    return;
+                }
+            }
+        } else {
+            match std::fs::read(path) {
+                Ok(b) => b,
+                Err(e) => {
+                    self.error_msg = Some(format!("Failed to read ROM file: {e}"));
+                    return;
+                }
+            }
+        };
+
+        let mut machine = boot_bytes(&bytes, self.force_dmg, self.force_cgb);
+        let save_path = sav_path(path.to_str().unwrap_or(""));
+        if machine.has_battery() {
+            load_save(&mut machine, &save_path);
+        }
+        if let Some(audio) = &self.audio {
+            machine.bus.apu.set_sample_rate(audio.sample_rate());
+        }
+        self.machine = Some(machine);
+        self.save_path = Some(save_path);
+        self.last_frame = Instant::now();
+        self.next_deadline = self.last_frame + self.fps_target;
+    }
 }
 
 impl eframe::App for RubcApp {
@@ -512,38 +639,40 @@ impl eframe::App for RubcApp {
         // Backspace was already the effective Select key).
         use rubc_core::bus::Button;
         let esc = ctx.input(|i| {
-            self.machine
-                .set_button(Button::Up, i.key_down(egui::Key::ArrowUp));
-            self.machine
-                .set_button(Button::Down, i.key_down(egui::Key::ArrowDown));
-            self.machine
-                .set_button(Button::Left, i.key_down(egui::Key::ArrowLeft));
-            self.machine
-                .set_button(Button::Right, i.key_down(egui::Key::ArrowRight));
-            self.machine.set_button(Button::A, i.key_down(egui::Key::X));
-            self.machine.set_button(Button::B, i.key_down(egui::Key::Z));
-            self.machine
-                .set_button(Button::Start, i.key_down(egui::Key::Enter));
-            self.machine.set_button(
-                Button::Select,
-                i.key_down(egui::Key::Backspace) || i.modifiers.shift,
-            );
+            if let Some(m) = &mut self.machine {
+                m.set_button(Button::Up, i.key_down(egui::Key::ArrowUp));
+                m.set_button(Button::Down, i.key_down(egui::Key::ArrowDown));
+                m.set_button(Button::Left, i.key_down(egui::Key::ArrowLeft));
+                m.set_button(Button::Right, i.key_down(egui::Key::ArrowRight));
+                m.set_button(Button::A, i.key_down(egui::Key::X));
+                m.set_button(Button::B, i.key_down(egui::Key::Z));
+                m.set_button(Button::Start, i.key_down(egui::Key::Enter));
+                m.set_button(
+                    Button::Select,
+                    i.key_down(egui::Key::Backspace) || i.modifiers.shift,
+                );
+            }
             i.key_pressed(egui::Key::Escape)
         });
         if esc {
             // Clean exit (Esc): flush the save, then ask eframe to close. The
             // window-close button is covered by `on_exit`.
-            persist_save(&self.machine, &self.save_path);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
+        if let (Some(m), Some(p)) = (&self.machine, &self.save_path) {
+            persist_save(m, p);
         }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        return;
+    }
 
+    if let Some(machine) = &mut self.machine {
         // One full Game Boy frame.
-        self.machine.step_frame();
+        machine.step_frame();
 
         // Periodic battery-save flush (best-effort, gated inside).
         if self.last_save.elapsed() >= Duration::from_secs(1) {
-            persist_save(&self.machine, &self.save_path);
+            if let Some(p) = &self.save_path {
+                persist_save(machine, p);
+            }
             self.last_save = Instant::now();
         }
 
@@ -552,14 +681,14 @@ impl eframe::App for RubcApp {
         // no resampling.
         if let Some(audio) = &self.audio {
             self.audio_scratch.clear();
-            self.machine.bus.apu.drain_samples(&mut self.audio_scratch);
+            machine.bus.apu.drain_samples(&mut self.audio_scratch);
             self.audio_frames_pushed += self.audio_scratch.len() / 2;
             audio.push_samples(&self.audio_scratch);
         }
 
         // Upload the resolved framebuffer as a NEAREST-filtered texture (updated
         // in place after the first frame -- no per-frame allocation).
-        let image = framebuffer_color_image(&self.machine);
+        let image = framebuffer_color_image(machine);
         match &mut self.screen_tex {
             Some(tex) => tex.set(image, egui::TextureOptions::NEAREST),
             None => {
@@ -574,10 +703,14 @@ impl eframe::App for RubcApp {
         // machine borrow ends before the closure runs.
         if self.debug_open.load(Ordering::Relaxed) {
             if let Ok(mut guard) = self.vram_snapshot.write() {
-                *guard = Some(vramview::VramDebugSnapshot::capture(&self.machine));
+                *guard = Some(vramview::VramDebugSnapshot::capture(machine));
             }
             self.show_vram_viewport(ctx);
         }
+    } else {
+        // If no machine, just sleep a bit to avoid spinning CPU.
+        std::thread::sleep(Duration::from_millis(16));
+    }
 
         // Pace to an ABSOLUTE per-frame deadline. Sleep until just shy of it
         // (macOS thread::sleep tends to overshoot), then spin the remainder so
@@ -644,32 +777,74 @@ impl eframe::App for RubcApp {
         // The egui UI: menubar (File -> Debug / About), About window, and the
         // embedded live VRAM viewer. Drawn before the CentralPanel so the game
         // screen fills the remaining space below the menubar.
-        self.gui.ui(ui);
+        let action = self.gui.ui(ui);
+        if let crate::gui::GuiAction::LoadRom = action {
+            self.load_rom_dialog();
+        }
 
+        let mut clear_error = false;
+        if let Some(err) = &self.error_msg {
+            let mut open = true;
+            egui::Window::new("Error")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.label(err);
+                    if ui.button("OK").clicked() {
+                        clear_error = true;
+                    }
+                });
+            if !open {
+                clear_error = true;
+            }
+        }
+        if clear_error {
+            self.error_msg = None;
+        }
         // The game screen: the framebuffer texture, aspect-preserved, centered
         // on a black field, NEAREST-filtered (no blur).
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
             .show_inside(ui, |ui| {
                 if let Some(tex) = &self.screen_tex {
-                    let avail = ui.available_size();
-                    let scale = (avail.x / WIDTH as f32)
-                        .min(avail.y / HEIGHT as f32)
-                        .max(0.0);
-                    let size = egui::vec2(WIDTH as f32 * scale, HEIGHT as f32 * scale);
-                    ui.centered_and_justified(|ui| {
-                        ui.add(
-                            egui::Image::new(egui::load::SizedTexture::new(tex.id(), size))
-                                .texture_options(egui::TextureOptions::NEAREST),
-                        );
-                    });
+                    if self.machine.is_some() {
+                        let avail = ui.available_size();
+                        let scale = (avail.x / WIDTH as f32)
+                            .min(avail.y / HEIGHT as f32)
+                            .max(0.0);
+                        let size = egui::vec2(WIDTH as f32 * scale, HEIGHT as f32 * scale);
+                        ui.centered_and_justified(|ui| {
+                            ui.add(
+                                egui::Image::new(egui::load::SizedTexture::new(tex.id(), size))
+                                    .texture_options(egui::TextureOptions::NEAREST),
+                            );
+                        });
+                    }
+                }
+                if self.machine.is_none() {
+                    self.draw_idle_screen(ui);
                 }
             });
+
+        // Handle drag-and-drop
+        if !ui.ctx().input(|i| i.raw.dropped_files.is_empty()) {
+            let dropped_files = ui.ctx().input(|i| i.raw.dropped_files.clone());
+            if let Some(file) = dropped_files.first() {
+                if let Some(path) = &file.path {
+                    self.load_rom_path(path);
+                }
+            }
+        }
     }
+
+
 
     fn on_exit(&mut self) {
         // Window-close (or any shutdown) save flush.
-        persist_save(&self.machine, &self.save_path);
+        if let (Some(m), Some(p)) = (&self.machine, &self.save_path) {
+            persist_save(m, p);
+        }
     }
 }
 
