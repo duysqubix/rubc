@@ -95,8 +95,22 @@ wasm-build:
     else
       echo "Need wasm-pack OR wasm-bindgen-cli. Install one of:"
       echo "  cargo install wasm-pack"
-      echo "  cargo install wasm-bindgen-cli --version 0.2.91"
+      echo "  cargo install wasm-bindgen-cli --version 0.2.122"
       exit 1
+    fi
+    wasm="$out/rubc_wasm_bg.wasm"
+    if [ -f "$wasm" ]; then
+      if command -v wasm-opt >/dev/null 2>&1; then
+        echo "== wasm-build: wasm-opt -O3 =>$wasm =="
+        tmp="$wasm.opt"
+        wasm-opt --enable-bulk-memory -O3 "$wasm" -o "$tmp"
+        mv -f "$tmp" "$wasm"
+      else
+        echo "warning: wasm-opt not found; skipping post-build optimization" >&2
+        echo "         install Binaryen (e.g. brew install binaryen) for smaller production wasm" >&2
+      fi
+    else
+      echo "warning: expected wasm artifact not found: $wasm" >&2
     fi
     echo "built: $out  (serve: just wasm-serve)"
 
