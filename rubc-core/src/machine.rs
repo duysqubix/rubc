@@ -9,8 +9,7 @@
 //!     L=34) reached at a `LD B,B` magic breakpoint.
 
 use crate::bus::Bus;
-use crate::cpu::{ActiveCpuCycle, Cpu, CpuCycleCompletion, CpuMode, CpuReg8Target, Exec};
-use crate::savestate::{Reader, Writer};
+use crate::cpu::{Cpu, CpuMode};
 
 const DMG_BOOT_ROM: &[u8; 256] = include_bytes!("boot/dmg_boot.bin");
 const CGB_BOOT_ROM: &[u8; 2304] = include_bytes!("boot/cgb_boot.bin");
@@ -174,16 +173,16 @@ impl Machine {
     }
 
     pub fn save_state(&self) -> Vec<u8> {
-        let mut writer = Writer::new();
-        write_cpu_state(&mut writer, self.cpu.save_state());
-        writer.finish()
+        let payload = serde_json::to_vec(&(&self.cpu, &self.bus))
+            .expect("serializing Machine save state should not fail");
+        crate::savestate::encode_payload(&payload)
     }
 
     pub fn load_state(&mut self, data: &[u8]) -> crate::Result<()> {
-        let mut reader = Reader::new(data)?;
-        let cpu = read_cpu_state(&mut reader)?;
-        reader.finish()?;
-        self.cpu.load_state(cpu);
+        let payload = crate::savestate::decode_payload(data)?;
+        let (cpu, bus) = serde_json::from_slice(payload)?;
+        self.cpu = cpu;
+        self.bus = bus;
         Ok(())
     }
 
@@ -342,258 +341,6 @@ impl Machine {
         let r = &self.cpu.r;
         [r.b, r.c, r.d, r.e, r.h, r.l] == MOONEYE_PASS
     }
-}
-
-fn write_cpu_state(writer: &mut Writer, state: crate::savestate::CpuState) {
-    crate::savestate::write_regs(writer, state.regs);
-    writer.bool(state.ime);
-    writer.bool(state.ime_pending);
-    writer.u8(state.ime_delay_boundary);
-    write_cpu_mode(writer, state.mode);
-    write_exec(writer, state.exec);
-    writer.bool(state.halt_bug);
-    writer.u8(state.tmp8);
-    writer.u16(state.tmp16);
-    match state.active_cycle {
-        Some(active) => {
-            writer.bool(true);
-            write_active_cycle(writer, active.cycle);
-            writer.u8(active.elapsed_t);
-        }
-        None => writer.bool(false),
-    }
-}
-
-fn read_cpu_state(reader: &mut Reader<'_>) -> crate::Result<crate::savestate::CpuState> {
-    let regs = crate::savestate::read_regs(reader)?;
-    let ime = reader.bool()?;
-    let ime_pending = reader.bool()?;
-    let ime_delay_boundary = reader.u8()?;
-    let mode = read_cpu_mode(reader)?;
-    let exec = read_exec(reader)?;
-    let halt_bug = reader.bool()?;
-    let tmp8 = reader.u8()?;
-    let tmp16 = reader.u16()?;
-    let active_cycle = if reader.bool()? {
-        Some(crate::savestate::ActiveCpuCycleState {
-            cycle: read_active_cycle(reader)?,
-            elapsed_t: reader.u8()?,
-        })
-    } else {
-        None
-    };
-    Ok(crate::savestate::CpuState {
-        regs,
-        ime,
-        ime_pending,
-        ime_delay_boundary,
-        mode,
-        exec,
-        halt_bug,
-        tmp8,
-        tmp16,
-        active_cycle,
-    })
-}
-
-fn write_cpu_mode(writer: &mut Writer, mode: CpuMode) {
-    match mode {
-        CpuMode::Running => writer.u8(0),
-        CpuMode::Halt => writer.u8(1),
-        CpuMode::Stopped => writer.u8(2),
-        CpuMode::InterruptDispatch {
-            phase,
-            bit,
-            vector,
-            cancelled,
-        } => {
-            writer.u8(3);
-            writer.u8(phase);
-            writer.u8(bit);
-            writer.u16(vector);
-            writer.bool(cancelled);
-        }
-    }
-}
-
-fn read_cpu_mode(reader: &mut Reader<'_>) -> crate::Result<CpuMode> {
-    Ok(match reader.u8()? {
-        0 => CpuMode::Running,
-        1 => CpuMode::Halt,
-        2 => CpuMode::Stopped,
-        3 => CpuMode::InterruptDispatch {
-            phase: reader.u8()?,
-            bit: reader.u8()?,
-            vector: reader.u16()?,
-            cancelled: reader.bool()?,
-        },
-        _ => anyhow::bail!("invalid CPU mode in save state"),
-    })
-}
-
-fn write_exec(writer: &mut Writer, exec: Exec) {
-    match exec {
-        Exec::Boundary => writer.u8(0),
-        Exec::Execute { op, phase } => {
-            writer.u8(1);
-            writer.u8(op);
-            writer.u8(phase);
-        }
-        Exec::CbExecute { op, phase } => {
-            writer.u8(2);
-            writer.u8(op);
-            writer.u8(phase);
-        }
-    }
-}
-
-fn read_exec(reader: &mut Reader<'_>) -> crate::Result<Exec> {
-    Ok(match reader.u8()? {
-        0 => Exec::Boundary,
-        1 => Exec::Execute {
-            op: reader.u8()?,
-            phase: reader.u8()?,
-        },
-        2 => Exec::CbExecute {
-            op: reader.u8()?,
-            phase: reader.u8()?,
-        },
-        _ => anyhow::bail!("invalid CPU exec state in save state"),
-    })
-}
-
-fn write_active_cycle(writer: &mut Writer, cycle: ActiveCpuCycle) {
-    match cycle {
-        ActiveCpuCycle::Idle { completion } => {
-            writer.u8(0);
-            write_cycle_completion(writer, completion);
-        }
-        ActiveCpuCycle::Fetch { addr, completion } => {
-            writer.u8(1);
-            writer.u16(addr);
-            write_cycle_completion(writer, completion);
-        }
-        ActiveCpuCycle::Read { addr, completion } => {
-            writer.u8(2);
-            writer.u16(addr);
-            write_cycle_completion(writer, completion);
-        }
-        ActiveCpuCycle::Write {
-            addr,
-            value,
-            completion,
-        } => {
-            writer.u8(3);
-            writer.u16(addr);
-            writer.u8(value);
-            write_cycle_completion(writer, completion);
-        }
-        ActiveCpuCycle::OamBugIdu { addr, completion } => {
-            writer.u8(4);
-            writer.u16(addr);
-            write_cycle_completion(writer, completion);
-        }
-        ActiveCpuCycle::OamBugReadIncDec { addr, completion } => {
-            writer.u8(5);
-            writer.u16(addr);
-            write_cycle_completion(writer, completion);
-        }
-    }
-}
-
-fn read_active_cycle(reader: &mut Reader<'_>) -> crate::Result<ActiveCpuCycle> {
-    Ok(match reader.u8()? {
-        0 => ActiveCpuCycle::Idle {
-            completion: read_cycle_completion(reader)?,
-        },
-        1 => ActiveCpuCycle::Fetch {
-            addr: reader.u16()?,
-            completion: read_cycle_completion(reader)?,
-        },
-        2 => ActiveCpuCycle::Read {
-            addr: reader.u16()?,
-            completion: read_cycle_completion(reader)?,
-        },
-        3 => ActiveCpuCycle::Write {
-            addr: reader.u16()?,
-            value: reader.u8()?,
-            completion: read_cycle_completion(reader)?,
-        },
-        4 => ActiveCpuCycle::OamBugIdu {
-            addr: reader.u16()?,
-            completion: read_cycle_completion(reader)?,
-        },
-        5 => ActiveCpuCycle::OamBugReadIncDec {
-            addr: reader.u16()?,
-            completion: read_cycle_completion(reader)?,
-        },
-        _ => anyhow::bail!("invalid active CPU cycle in save state"),
-    })
-}
-
-fn write_cycle_completion(writer: &mut Writer, completion: CpuCycleCompletion) {
-    match completion {
-        CpuCycleCompletion::None => writer.u8(0),
-        CpuCycleCompletion::FetchOpcode => writer.u8(1),
-        CpuCycleCompletion::ReadReg8 {
-            target,
-            increment_pc,
-            finish,
-        } => {
-            writer.u8(2);
-            write_reg8_target(writer, target);
-            writer.bool(increment_pc);
-            writer.bool(finish);
-        }
-        CpuCycleCompletion::DispatchIdleToSpDec => writer.u8(3),
-        CpuCycleCompletion::DispatchSpDec => writer.u8(4),
-        CpuCycleCompletion::DispatchPushPcHigh => writer.u8(5),
-        CpuCycleCompletion::DispatchPushPcLow => writer.u8(6),
-        CpuCycleCompletion::DispatchFinish => writer.u8(7),
-    }
-}
-
-fn read_cycle_completion(reader: &mut Reader<'_>) -> crate::Result<CpuCycleCompletion> {
-    Ok(match reader.u8()? {
-        0 => CpuCycleCompletion::None,
-        1 => CpuCycleCompletion::FetchOpcode,
-        2 => CpuCycleCompletion::ReadReg8 {
-            target: read_reg8_target(reader)?,
-            increment_pc: reader.bool()?,
-            finish: reader.bool()?,
-        },
-        3 => CpuCycleCompletion::DispatchIdleToSpDec,
-        4 => CpuCycleCompletion::DispatchSpDec,
-        5 => CpuCycleCompletion::DispatchPushPcHigh,
-        6 => CpuCycleCompletion::DispatchPushPcLow,
-        7 => CpuCycleCompletion::DispatchFinish,
-        _ => anyhow::bail!("invalid CPU cycle completion in save state"),
-    })
-}
-
-fn write_reg8_target(writer: &mut Writer, target: CpuReg8Target) {
-    writer.u8(match target {
-        CpuReg8Target::A => 0,
-        CpuReg8Target::B => 1,
-        CpuReg8Target::C => 2,
-        CpuReg8Target::D => 3,
-        CpuReg8Target::E => 4,
-        CpuReg8Target::H => 5,
-        CpuReg8Target::L => 6,
-    });
-}
-
-fn read_reg8_target(reader: &mut Reader<'_>) -> crate::Result<CpuReg8Target> {
-    Ok(match reader.u8()? {
-        0 => CpuReg8Target::A,
-        1 => CpuReg8Target::B,
-        2 => CpuReg8Target::C,
-        3 => CpuReg8Target::D,
-        4 => CpuReg8Target::E,
-        5 => CpuReg8Target::H,
-        6 => CpuReg8Target::L,
-        _ => anyhow::bail!("invalid CPU register target in save state"),
-    })
 }
 
 #[cfg(test)]

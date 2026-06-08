@@ -14,7 +14,7 @@
 
 use super::stubs::Interrupts;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Timer {
     div: u16,
     tima: u8,
@@ -24,7 +24,7 @@ pub struct Timer {
     reload: Reload,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Reload {
     None,
     Pending(u8),      // ticks remaining before reload

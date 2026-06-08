@@ -30,6 +30,7 @@ fn cart_has_battery(cart_type: u8) -> bool {
 }
 
 /// A loaded cartridge. Owns the full ROM image and any banking state.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub enum Cartridge {
     /// No MBC (MBC0): up to 32 KiB ROM mapped flat, with external RAM ONLY when
     /// the header declares it (cart type 0x08/0x09).
@@ -202,6 +203,7 @@ impl Cartridge {
 /// MBC0 / ROM-only. External RAM exists ONLY when the header declares it
 /// (cart type 0x08/0x09); a ROM-only `0x00` cart has no RAM, so reads of the
 /// `0xA000..=0xBFFF` region return `0xFF` and writes are ignored.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct NoMbc {
     rom: Vec<u8>,
     ram: Vec<u8>,
@@ -254,6 +256,7 @@ impl NoMbc {
 ///   - `0x2000..=0x3FFF`  ROM bank number, low 5 bits (0 -> 1 quirk)
 ///   - `0x4000..=0x5FFF`  RAM bank / upper ROM bank bits (2 bits)
 ///   - `0x6000..=0x7FFF`  banking mode select (0 = ROM, 1 = RAM/advanced)
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Mbc1 {
     rom: Vec<u8>,
     ram: Vec<u8>,
@@ -385,8 +388,11 @@ impl Mbc1 {
 /// MBC2 controller. Up to 16 ROM banks (256 KiB) and a built-in 512 x 4-bit
 /// RAM (no external RAM chip). The single control register region is split by
 /// address bit 8: bit 8 = 0 -> RAM enable, bit 8 = 1 -> ROM bank (low 4 bits).
+#[serde_with::serde_as]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Mbc2 {
     rom: Vec<u8>,
+    #[serde_as(as = "Box<[_; 512]>")]
     /// 512 nibbles, one per addressable cell; only the low 4 bits are stored.
     ram: Box<[u8; 512]>,
     num_rom_banks: usize,
@@ -460,6 +466,7 @@ impl Mbc2 {
 /// MBC3 controller. Up to 128 ROM banks (2 MiB), 4 RAM banks (32 KiB), and a
 /// built-in Real-Time Clock. The RTC here is a latch-able register file (the
 /// halt bit + write are honoured); wall-clock ticking is not yet wired.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Mbc3 {
     rom: Vec<u8>,
     ram: Vec<u8>,
@@ -589,6 +596,7 @@ impl Mbc3 {
 /// MBC5 controller. Up to 512 ROM banks (8 MiB) via a 9-bit bank register, up
 /// to 16 RAM banks (128 KiB), and optional rumble (rumble maps to RAM-bank bit
 /// 3 and is ignored for storage). Unlike MBC1/3, bank 0 is NOT remapped.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Mbc5 {
     rom: Vec<u8>,
     ram: Vec<u8>,

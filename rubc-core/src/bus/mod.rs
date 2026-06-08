@@ -163,7 +163,7 @@ pub struct BusFlightFields {
 }
 
 /// OAM DMA state for the per-M-cycle beat.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 struct OamDma {
     active: bool,
     source_hi: u8,
@@ -181,7 +181,7 @@ struct OamDma {
 
 /// CGB VRAM DMA (HDMA1-5, $FF51-$FF55): copies ROM/RAM -> VRAM either all at
 /// once (General-Purpose DMA, CPU halted) or $10 bytes per HBlank (HBlank DMA).
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 struct Hdma {
     /// Source address (HDMA1/2), low 4 bits forced to 0.
     source: u16,
@@ -198,36 +198,47 @@ struct Hdma {
 /// The whole non-CPU machine. Owns all memory + tickable peripherals. The CPU
 /// borrows this `&mut` for one `*_m` call at a time; no peripheral holds a
 /// reference back, so the borrow checker stays happy.
+#[serde_with::serde_as]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Bus {
     // Memory regions (flat placeholders; banking lands in MBC/CGB waves).
     pub cart: Cartridge,
+    #[serde_as(as = "Option<Box<[_; 256]>>")]
     /// Optional 256-byte DMG boot ROM overlay. When mapped, reads from
     /// $0000-$00FF come from this ROM until the cartridge writes $FF50 bit 0.
     pub boot_rom: Option<Box<[u8; 256]>>,
+    #[serde_as(as = "Option<Box<[_; 2304]>>")]
     /// Optional 2304-byte CGB boot ROM overlay. CGB keeps the cartridge header
     /// visible, so this maps only $0000-$00FF and $0200-$08FF until $FF50 bit 0.
     pub cgb_boot_rom: Option<Box<[u8; 2304]>>,
     pub boot_rom_mapped: bool,
+    #[serde_as(as = "[[_; 4096]; 8]")]
     /// WRAM: 8 banks of 4 KiB. DMG uses banks 0-1 flat; CGB fixes bank 0 at
     /// C000-CFFF and selects banks 1-7 at D000-DFFF via SVBK ($FF70).
     pub wram: [[u8; 0x1000]; 8],
     /// Active high WRAM bank (SVBK $FF70 bits 0-2; 0 remaps to 1). DMG: always 1.
     pub svbk: u8,
+    #[serde_as(as = "[_; 127]")]
     pub hram: [u8; 0x7F],
+    #[serde_as(as = "[[_; 8192]; 2]")]
     /// VRAM: 2 banks of 8 KiB. DMG uses only bank 0; CGB selects via VBK ($FF4F).
     pub vram: [[u8; 0x2000]; 2],
     /// Active VRAM bank (VBK $FF4F bit 0). Always 0 in DMG mode.
     pub vbk: u8,
+    #[serde_as(as = "[_; 64]")]
     /// CGB background palette RAM: 8 palettes x 4 colors x 2 bytes = 64 bytes,
     /// RGB555 little-endian. Addressed via BCPS ($FF68), data via BCPD ($FF69).
     pub bg_palette_ram: [u8; 64],
+    #[serde_as(as = "[_; 64]")]
     /// CGB object palette RAM: same layout, via OCPS ($FF6A) / OCPD ($FF6B).
     pub obj_palette_ram: [u8; 64],
     /// BCPS ($FF68): bit 7 = auto-increment, bits 5-0 = bg_palette_ram index.
     bcps: u8,
     /// OCPS ($FF6A): bit 7 = auto-increment, bits 5-0 = obj_palette_ram index.
     ocps: u8,
+    #[serde_as(as = "[_; 160]")]
     pub oam: [u8; 0xA0],
+    #[serde_as(as = "[_; 128]")]
     pub io: [u8; 0x80],
 
     pub interrupts: Interrupts,

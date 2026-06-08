@@ -6,7 +6,7 @@ const SC_INTERNAL_CLOCK: u8 = 0x01;
 const SERIAL_INTERRUPT_BIT: u8 = 3;
 const SERIAL_CLOCK_PHASE: u16 = 52;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct Serial {
     sb: u8,
     sc: u8,

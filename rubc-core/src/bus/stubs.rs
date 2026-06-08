@@ -9,7 +9,7 @@
 ///
 /// IRQ sources latch IF immediately on the T-cycle that requests them. The CPU
 /// still decides whether to dispatch only at an instruction boundary.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct Interrupts {
     pub ie: u8,
     pub if_: u8,
@@ -42,7 +42,7 @@ impl Interrupts {
 /// which line is read (bit 5 = action buttons, bit 4 = d-pad); bits 3-0 report
 /// the selected line. We store the logical pressed/not-pressed state per button
 /// (true = pressed) and synthesize the register on read.
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Joypad {
     // Action buttons (selected when P1 bit 5 == 0).
     pub a: bool,
@@ -60,7 +60,7 @@ pub struct Joypad {
 }
 
 /// One of the eight Game Boy buttons, for the public input API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Button {
     A,
     B,
@@ -143,7 +143,7 @@ impl Joypad {
 }
 
 /// CGB clock/speed state.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CgbState {
     /// True when running as a Game Boy Color. DMG has no speed switch, so KEY1
     /// writes are inert and STOP always halts. Set by `Machine::boot_cgb`.

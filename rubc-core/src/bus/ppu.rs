@@ -57,7 +57,7 @@ const INT_STAT: u8 = 1;
 /// PPU at emission time (Oracle ses_1651a4026: palette selection is part of
 /// rendering, not presentation). On DMG this is a 2-bit shade (post-BGP/OBP);
 /// the `CgbRgb555` variant is reserved for the CGB color wave (rubc-5a0).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FramePixel {
     /// Post-palette DMG shade, 0 (lightest) ..= 3 (darkest).
     DmgShade(u8),
@@ -85,7 +85,7 @@ impl FramePixel {
 }
 
 /// Which DMG palette a FIFO pixel resolves through at emission time.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum DmgPaletteSource {
     #[default]
     Bg,
@@ -97,7 +97,7 @@ const DMG_OUTPUT_LATENCY_DOTS: usize = 4;
 
 /// DMG pixel after BG/OBJ priority has been resolved, but before the live
 /// BGP/OBP palette register maps the raw 2-bit color index to a shade.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct DmgRawPixel {
     ly: u8,
     x: usize,
@@ -105,8 +105,10 @@ struct DmgRawPixel {
     palette: DmgPaletteSource,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[serde_with::serde_as]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 struct DmgOutputPipe {
+    #[serde_as(as = "[_; 4]")]
     pixels: [DmgRawPixel; DMG_OUTPUT_LATENCY_DOTS],
     len: usize,
 }
@@ -148,7 +150,7 @@ impl DmgOutputPipe {
 }
 
 /// Live DMG palette registers, snapshotted from the bus each `tick_dot`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct DmgPalettes {
     pub bgp: u8,
     pub obp0: u8,
@@ -175,7 +177,7 @@ struct SpriteOverlay {
     cgb_priority: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct FifoPixel {
     color: u8,
     bg_priority: bool,
@@ -189,8 +191,10 @@ struct FifoPixel {
     oam_index: u8,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[serde_with::serde_as]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 struct PixelFifo {
+    #[serde_as(as = "[_; 8]")]
     pixels: [FifoPixel; FIFO_CAPACITY],
     len: usize,
 }
@@ -304,7 +308,7 @@ impl PixelFifo {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct ScanlineSprite {
     y: u8,
     x: u8,
@@ -313,7 +317,7 @@ struct ScanlineSprite {
     oam_index: u8,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 enum FetchStep {
     #[default]
     TileNo,
@@ -322,7 +326,7 @@ enum FetchStep {
     Push,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct BgFetcher {
     step: FetchStep,
     step_ticks: u8,
@@ -370,6 +374,8 @@ impl BgFetcher {
 ///
 /// The public fields `ly`, `mode`, and `dot_ticks` preserve the old `PpuStub`
 /// interface so the bus tick loop and flight recorder need no changes.
+#[serde_with::serde_as]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Ppu {
     /// Total dot-ticks since power-on (diagnostic; was `PpuStub::dot_ticks`).
     pub dot_ticks: u64,
@@ -379,6 +385,7 @@ pub struct Ppu {
     pub mode: u8,
     /// Fully-resolved framebuffer: the PPU applies BGP/OBP at emission time, so
     /// each pixel is a post-palette `FramePixel` (DMG shade now; CGB RGB later).
+    #[serde_as(as = "Box<[_; 23040]>")]
     pub framebuffer: Box<[FramePixel; FRAMEBUFFER_PIXELS]>,
 
     /// DMG palette registers, snapshotted from the bus on each `tick_dot` so the
@@ -390,7 +397,9 @@ pub struct Ppu {
     /// When set, pixels resolve through RGB555 palette RAM (`CgbRgb555`); when
     /// clear, the DMG BGP/OBP path emits `DmgShade`.
     cgb_mode: bool,
+    #[serde_as(as = "[_; 64]")]
     cgb_bg_palette_ram: [u8; 64],
+    #[serde_as(as = "[_; 64]")]
     cgb_obj_palette_ram: [u8; 64],
 
     /// LCD master enable (LCDC bit 7).
@@ -430,6 +439,7 @@ pub struct Ppu {
     dmg_output_pipe: DmgOutputPipe,
     bg_fetcher: BgFetcher,
     tile_sel_glitch: bool,
+    #[serde_as(as = "[_; 10]")]
     scanline_sprites: [ScanlineSprite; MAX_SPRITES_PER_LINE],
     scanline_sprite_count: usize,
     next_sprite: usize,

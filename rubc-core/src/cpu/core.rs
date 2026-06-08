@@ -9,7 +9,7 @@ use crate::bus::CpuBus;
 use super::regs::Regs;
 
 /// High-level CPU mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CpuMode {
     Running,
     Halt,
@@ -24,7 +24,7 @@ pub enum CpuMode {
 }
 
 /// Where we are within the current instruction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Exec {
     /// Between instructions: poll interrupts / promote EI, then fetch.
     Boundary,
@@ -34,7 +34,7 @@ pub enum Exec {
     CbExecute { op: u8, phase: u8 },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CpuReg8Target {
     A,
     B,
@@ -45,7 +45,7 @@ pub enum CpuReg8Target {
     L,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CpuCycleCompletion {
     None,
     FetchOpcode,
@@ -61,7 +61,7 @@ pub enum CpuCycleCompletion {
     DispatchFinish,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ActiveCpuCycle {
     Idle {
         completion: CpuCycleCompletion,
@@ -89,7 +89,7 @@ pub enum ActiveCpuCycle {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ActiveCpuCycleState {
     cycle: ActiveCpuCycle,
     elapsed_t: u8,
@@ -199,6 +199,7 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
 
 /// The SM83 CPU.
 #[cfg_attr(test, derive(Clone))]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Cpu {
     pub r: Regs,
     pub ime: bool,
@@ -233,40 +234,6 @@ impl Cpu {
             tmp16: 0,
             active_cycle: None,
         }
-    }
-
-    pub(crate) fn save_state(&self) -> crate::savestate::CpuState {
-        crate::savestate::CpuState {
-            regs: self.r,
-            ime: self.ime,
-            ime_pending: self.ime_pending,
-            ime_delay_boundary: self.ime_delay_boundary,
-            mode: self.mode,
-            exec: self.exec,
-            halt_bug: self.halt_bug,
-            tmp8: self.tmp8,
-            tmp16: self.tmp16,
-            active_cycle: self.active_cycle.map(|state| crate::savestate::ActiveCpuCycleState {
-                cycle: state.cycle,
-                elapsed_t: state.elapsed_t,
-            }),
-        }
-    }
-
-    pub(crate) fn load_state(&mut self, state: crate::savestate::CpuState) {
-        self.r = state.regs;
-        self.ime = state.ime;
-        self.ime_pending = state.ime_pending;
-        self.ime_delay_boundary = state.ime_delay_boundary;
-        self.mode = state.mode;
-        self.exec = state.exec;
-        self.halt_bug = state.halt_bug;
-        self.tmp8 = state.tmp8;
-        self.tmp16 = state.tmp16;
-        self.active_cycle = state.active_cycle.map(|state| ActiveCpuCycleState {
-            cycle: state.cycle,
-            elapsed_t: state.elapsed_t,
-        });
     }
 
     pub fn active_cpu_cycle(&self) -> Option<ActiveCpuCycle> {
