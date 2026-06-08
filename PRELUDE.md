@@ -48,7 +48,7 @@ My involvement? I provided the documentation, a rough architectural suggestion, 
 
 Take it for what it's worth. You don't have to agree with my methods, and you're free to be skeptical—skepticism is healthy. But going from zero to a finished product that rivals today's heavyweights (SameBoy, BGB, Emulicious) in a ridiculously short amount of time is not a feat we can just hand-wave away.
 
-Here's the part I want to be precise about, though, because it's where most of these conversations go sideways. The experiment didn't work because the AI is magic. It worked because the *vision* was already there. I knew what an emulator should look like, what "hardware-accurate" actually means, which tests were the ones that mattered, and what a cut corner smells like. Hand the same tools to someone who's never built one, and you don't get `rubc`—you get a confident pile of code that runs Tetris and silently mangles everything subtle. The AI was an extraordinary paintbrush. It was not the painter.
+Here is where I need to clear... The experiment didn't work because the AI is magic. It worked because the *vision* was already there. I knew what an emulator should look like, what "hardware-accurate" actually means, which tests were the ones that mattered, and what a cut corner smells like. Hand the same tools to someone who's never built one, and you don't get `rubc`—you get a confident pile of code that runs Tetris and silently mangles everything subtle. The AI was an extraordinary paintbrush. It was not the painter.
 
 So whether you're a doomsday prepper, a tech utopian, or somewhere in between, the biggest question on everyone's mind is: *Will AI replace my job as a software developer?*
 
