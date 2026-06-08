@@ -54,32 +54,44 @@ const DMG_SHADES: [[u8; 3]; 4] = [
 pub struct VramDebugSnapshot {
     /// Both VRAM banks (`$8000-$9FFF`). Bank 1 holds CGB tile attributes.
     pub vram: [[u8; VRAM_BANK_LEN]; 2],
+    pub oam: [u8; 0xA0],
+    pub framebuffer: Vec<u8>,
     pub lcdc: u8,
     pub bgp: u8,
+    pub obp0: u8,
+    pub obp1: u8,
     /// CGB background palette RAM (8 palettes x 4 colors x RGB555 LE).
     pub bg_palette_ram: [u8; 64],
+    pub obj_palette_ram: [u8; 64],
     pub scx: u8,
     pub scy: u8,
     pub wx: u8,
     pub wy: u8,
     pub cgb: bool,
+    pub frame: u64,
 }
 
 impl VramDebugSnapshot {
     /// Extract a read-only snapshot from the machine bus. Pure reads only --
     /// never mutates emulator state and has no timing side effects.
-    pub fn capture(machine: &Machine) -> Self {
+    pub fn capture(machine: &Machine, frame: u64) -> Self {
         let bus = &machine.bus;
         Self {
             vram: bus.vram,
+            oam: bus.oam,
+            framebuffer: crate::capture::framebuffer_rgba(machine),
             lcdc: bus.ppu.read_lcdc(),
             bgp: bus.dmg_bgp(),
+            obp0: bus.dmg_obp0(),
+            obp1: bus.dmg_obp1(),
             bg_palette_ram: bus.bg_palette_ram,
+            obj_palette_ram: bus.obj_palette_ram,
             scx: bus.ppu.read_scx(),
             scy: bus.ppu.read_scy(),
             wx: bus.ppu.read_wx(),
             wy: bus.ppu.read_wy(),
             cgb: bus.cgb.cgb_mode,
+            frame,
         }
     }
 }
@@ -130,6 +142,11 @@ enum ViewMode {
     Tiles,
     /// 32x32 background tilemap, resolved + palette-applied.
     Tilemap,
+    /// OAM sprites rendered at their live X/Y positions.
+    Sprites,
+    /// Composited live-screen view (PPU output).
+    /// Composited live-screen view (PPU output).
+    Screen,
 }
 
 /// The File -> Debug VRAM viewer window state.
@@ -197,6 +214,10 @@ impl VramView {
                     snap.vram[1].hash(&mut h);
                 }
             }
+            ViewMode::Sprites | ViewMode::Screen => {
+                // These views are inherently live and should update every frame.
+                snap.frame.hash(&mut h);
+            }
         }
         h.finish()
     }
@@ -206,6 +227,8 @@ impl VramView {
         match self.view {
             ViewMode::Tiles => self.build_tiles_image(snap),
             ViewMode::Tilemap => self.build_tilemap_image(snap),
+            ViewMode::Sprites => self.build_sprites_image(snap),
+            ViewMode::Screen => self.build_screen_image(snap),
         }
     }
 
@@ -279,6 +302,88 @@ impl VramView {
     }
 
     /// Apply the keyboard shortcuts (only while the window is open): mirrors
+    fn build_sprites_image(&self, snap: &VramDebugSnapshot) -> ColorImage {
+        let mut img = ColorImage::filled([VIEW_W, VIEW_H], Color32::BLACK);
+        let obj_size_16 = (snap.lcdc & 0x04) != 0;
+        let height = if obj_size_16 { 16 } else { 8 };
+
+        for i in (0..40).rev() {
+            let off = i * 4;
+            let y_pos = snap.oam[off] as i32 - 16;
+            let x_pos = snap.oam[off + 1] as i32 - 8;
+            let mut tile_idx = snap.oam[off + 2];
+            if obj_size_16 {
+                tile_idx &= 0xFE;
+            }
+            let attr = snap.oam[off + 3];
+            let xflip = (attr & 0x20) != 0;
+            let yflip = (attr & 0x40) != 0;
+            let dmg_palette = if (attr & 0x10) != 0 {
+                snap.obp1
+            } else {
+                snap.obp0
+            };
+            let cgb_palette = attr & 0x07;
+            let vram_bank = if snap.cgb {
+                ((attr & 0x08) >> 3) as usize
+            } else {
+                0
+            };
+
+            for row in 0..height {
+                let srow = if yflip { height - 1 - row } else { row };
+                let tile_offset = if srow < 8 {
+                    tile_idx as usize * 16
+                } else {
+                    (tile_idx as usize + 1) * 16
+                };
+                let tile_row = srow % 8;
+                let tile: &[u8; 16] = snap.vram[vram_bank][tile_offset..tile_offset + 16]
+                    .try_into()
+                    .unwrap();
+                let px = decode_tile_2bpp(tile);
+
+                for col in 0..8 {
+                    let scol = if xflip { 7 - col } else { col };
+                    let color = px[tile_row * 8 + scol];
+                    if color == 0 {
+                        continue; // Transparent
+                    }
+                    let c = if snap.cgb {
+                        cgb_color(&snap.obj_palette_ram, cgb_palette, color)
+                    } else {
+                        dmg_color(dmg_palette, color)
+                    };
+                    let draw_x = x_pos + col as i32;
+                    let draw_y = y_pos + row as i32;
+                    if draw_x >= 0
+                        && draw_x < VIEW_W as i32
+                        && draw_y >= 0
+                        && draw_y < VIEW_H as i32
+                    {
+                        img[(draw_x as usize, draw_y as usize)] = c;
+                    }
+                }
+            }
+        }
+        img
+    }
+
+    fn build_screen_image(&self, snap: &VramDebugSnapshot) -> ColorImage {
+        let mut img = ColorImage::filled([VIEW_W, VIEW_H], Color32::BLACK);
+        for y in 0..VIEW_H {
+            for x in 0..VIEW_W {
+                let off = (y * VIEW_W + x) * 4;
+                let r = snap.framebuffer[off];
+                let g = snap.framebuffer[off + 1];
+                let b = snap.framebuffer[off + 2];
+                let a = snap.framebuffer[off + 3];
+                img[(x, y)] = Color32::from_rgba_unmultiplied(r, g, b, a);
+            }
+        }
+        img
+    }
+
     /// gobc -- T toggles tile addressing, B toggles BG-map base, V toggles the
     /// raw-tile bank, Tab switches between the tiles and tilemap views.
     fn handle_shortcuts(&mut self, ctx: &Context) {
@@ -302,7 +407,9 @@ impl VramView {
         if tab {
             self.view = match self.view {
                 ViewMode::Tiles => ViewMode::Tilemap,
-                ViewMode::Tilemap => ViewMode::Tiles,
+                ViewMode::Tilemap => ViewMode::Sprites,
+                ViewMode::Sprites => ViewMode::Screen,
+                ViewMode::Screen => ViewMode::Tiles,
             };
         }
     }
@@ -338,6 +445,8 @@ impl VramView {
         let view = match self.view {
             ViewMode::Tiles => "BG Tiles",
             ViewMode::Tilemap => "Tilemap",
+            ViewMode::Sprites => "OAM Sprites",
+            ViewMode::Screen => "Live Screen",
         };
         let bg = if self.map_9c00 { 0x9C00 } else { 0x9800 };
         let tile = if self.tile_8000 { 0x8000 } else { 0x8800 };
@@ -353,8 +462,12 @@ impl VramView {
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.view, ViewMode::Tiles, "BG Tiles (raw)");
             ui.selectable_value(&mut self.view, ViewMode::Tilemap, "Tilemap (rendered)");
+            ui.selectable_value(&mut self.view, ViewMode::Sprites, "OAM Sprites");
+            ui.selectable_value(&mut self.view, ViewMode::Screen, "Live Screen");
             ui.separator();
             ui.label("Tab: switch view");
+            ui.separator();
+            ui.label(format!("● LIVE (Frame {})", snap.frame));
         });
         ui.horizontal(|ui| {
             let tile_label = if self.tile_8000 {
