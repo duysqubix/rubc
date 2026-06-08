@@ -16,12 +16,14 @@
 FROM rust:1.83-bookworm AS wasm-builder
 
 # wasm-bindgen-cli version must match the wasm-bindgen crate dependency.
-ARG WASM_BINDGEN_VERSION=0.2.91
+ARG WASM_BINDGEN_VERSION=0.2.122
 
 WORKDIR /build
 
-# Install the bindgen CLI first (independent of the workspace toolchain).
-RUN cargo install wasm-bindgen-cli --version "${WASM_BINDGEN_VERSION}" --locked
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends binaryen \
+ && rm -rf /var/lib/apt/lists/* \
+ && cargo install wasm-bindgen-cli --version "${WASM_BINDGEN_VERSION}" --locked
 
 # Copy the workspace. .dockerignore keeps target/, reference/, and the
 # generated pkg/ out of the build context.
@@ -37,7 +39,12 @@ RUN rustup target add wasm32-unknown-unknown
 RUN cargo build -p rubc-wasm --target wasm32-unknown-unknown --release \
  && wasm-bindgen target/wasm32-unknown-unknown/release/rubc_wasm.wasm \
       --target web \
-      --out-dir rubc-wasm/web/pkg
+      --out-dir rubc-wasm/web/pkg \
+ && wasm-opt --enable-bulk-memory -O3 \
+      rubc-wasm/web/pkg/rubc_wasm_bg.wasm \
+      -o rubc-wasm/web/pkg/rubc_wasm_bg.wasm.opt \
+ && mv -f rubc-wasm/web/pkg/rubc_wasm_bg.wasm.opt \
+      rubc-wasm/web/pkg/rubc_wasm_bg.wasm
 
 # ---- Stage 2: serve the static demo -----------------------------------------
 FROM nginx:1.27-alpine AS runtime
