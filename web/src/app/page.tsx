@@ -61,7 +61,7 @@ function Hero() {
         <img
           src="/logo.png"
           alt="rubc"
-          style={{ height: 44, imageRendering: "pixelated", marginBottom: 24 }}
+          style={{ height: 120, width: "auto", imageRendering: "pixelated", marginBottom: 28 }}
         />
         <div
           style={{

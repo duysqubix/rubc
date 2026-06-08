@@ -25,11 +25,13 @@ function fmtAgo(ms: number): string {
 
 function Logo({ h = 30 }: { h?: number }) {
   return (
-    <img
-      src="/logo.png"
-      alt="rubc"
-      style={{ height: h, width: "auto", imageRendering: "pixelated", objectFit: "contain" }}
-    />
+    <a href="/" aria-label="rubc home" style={{ display: "inline-flex", lineHeight: 0 }}>
+      <img
+        src="/logo.png"
+        alt="rubc"
+        style={{ height: h, width: "auto", imageRendering: "pixelated", objectFit: "contain" }}
+      />
+    </a>
   );
 }
 
@@ -124,6 +126,7 @@ function RailGroup({ label, children }: { label: string; children: React.ReactNo
 function LibraryRail({ emu }: { emu: EmulatorContextValue }) {
   const games = emu.ROMS.filter((r) => !r.id.includes("test"));
   const tests = emu.ROMS.filter((r) => r.id.includes("test"));
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
     <aside
       style={{
@@ -137,8 +140,19 @@ function LibraryRail({ emu }: { emu: EmulatorContextValue }) {
       }}
     >
       <div style={{ padding: "14px 14px 10px", borderBottom: "1px solid var(--border)" }}>
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".gb,.gbc,.zip"
+          style={{ display: "none" }}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) emu.loadFile(file);
+            e.target.value = "";
+          }}
+        />
         <button
-          onClick={() => emu.boot("crystal")}
+          onClick={() => inputRef.current?.click()}
           style={{
             width: "100%",
             display: "flex",
@@ -489,9 +503,21 @@ function RightPanel({ emu }: { emu: EmulatorContextValue }) {
 
 function DeskToolbar({ emu }: { emu: EmulatorContextValue }) {
   const { phase, settings: s, rom } = emu;
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
-      <Button variant="primary" onClick={() => (rom ? emu.reset() : emu.boot("crystal"))}>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".gb,.gbc,.zip"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) emu.loadFile(file);
+          e.target.value = "";
+        }}
+      />
+      <Button variant="primary" onClick={() => (rom ? emu.reset() : inputRef.current?.click())}>
         {rom ? "↻ Reset" : "Load ROM"}
       </Button>
       <Button variant="secondary" disabled={phase === "empty"} onClick={emu.togglePause}>

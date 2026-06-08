@@ -72,7 +72,7 @@ function TopBar({ emu }: { emu: ReturnType<typeof useEmulator> }) {
             </div>
           </>
         ) : (
-          <span style={{ fontFamily: "var(--font-pixel)", fontSize: 22, color: "var(--accent)", letterSpacing: "0.02em" }}>rubc</span>
+          <a href="/" aria-label="rubc home" style={{ fontFamily: "var(--font-pixel)", fontSize: 22, color: "var(--accent)", letterSpacing: "0.02em", textDecoration: "none" }}>rubc</a>
         )}
       </div>
       <IconBtn label="Menu" onClick={() => emu.setMenuOpen(true)} disabled={!rom}>≡</IconBtn>
