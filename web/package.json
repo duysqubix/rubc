@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test:store": "node test-store.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
