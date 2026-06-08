@@ -9,9 +9,9 @@ export function playHref() {
     const mobile =
       /Android|iPhone|iPod|Mobile/i.test(ua) ||
       (window.matchMedia && window.matchMedia("(max-width: 820px)").matches);
-    return mobile ? "rubc Mobile.html" : "rubc Desktop.html";
+    return mobile ? "/play/mobile" : "/play/desktop";
   } catch (e) {
-    return "rubc Desktop.html";
+    return "/play/desktop";
   }
 }
 
@@ -22,7 +22,7 @@ export function PlayNow({
   size?: "sm" | "md" | "lg";
   children?: React.ReactNode;
 }) {
-  const [href, setHref] = useState("rubc Desktop.html");
+  const [href, setHref] = useState("/play/desktop");
 
   useEffect(() => {
     setHref(playHref());

@@ -574,7 +574,7 @@ function CTA() {
       </p>
       <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
         <PlayNow size="lg">▸ Play Now</PlayNow>
-        <a href="rubc Mobile.html" style={{ textDecoration: "none" }}>
+        <a href="/play/mobile" style={{ textDecoration: "none" }}>
           <Button variant="secondary" size="lg">
             On mobile ▸
           </Button>
@@ -652,8 +652,8 @@ function Footer() {
             { t: "ACCURACY.md", href: "https://github.com/duysqubix/rubc" },
           ])}
           {col("Play", [
-            { t: "Browser player", href: "rubc Desktop.html" },
-            { t: "Mobile PWA", href: "rubc Mobile.html" },
+            { t: "Browser player", href: "/play/desktop" },
+            { t: "Mobile PWA", href: "/play/mobile" },
           ])}
         </div>
       </div>
