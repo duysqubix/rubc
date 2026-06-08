@@ -539,6 +539,7 @@ export function DesktopApp() {
   const [pressedDir, setPressedDir] = useState<string | null>(null);
   const dirT = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { phase, rom, settings: s } = emu;
+  const [dragging, setDragging] = useState(false);
 
   const onDir = (d: string) => {
     if (phase !== "running") return;
@@ -608,6 +609,20 @@ export function DesktopApp() {
 
   return (
     <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!dragging) setDragging(true);
+      }}
+      onDragLeave={(e) => {
+        // only clear when leaving the window, not when moving between children
+        if (e.relatedTarget === null) setDragging(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        const file = e.dataTransfer.files?.[0];
+        if (file) void emu.loadFile(file);
+      }}
       style={{
         position: "absolute",
         inset: 0,
@@ -758,6 +773,32 @@ export function DesktopApp() {
           }}
         >
           {emu.toast}
+        </div>
+      )}
+      {dragging && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            pointerEvents: "none",
+            background: "color-mix(in srgb, var(--bg-deep) 72%, transparent)",
+            border: "3px dashed var(--accent)",
+            borderRadius: 0,
+          }}
+        >
+          <span
+            style={{
+              fontFamily: "var(--font-pixel)",
+              fontSize: 32,
+              color: "var(--text-strong)",
+            }}
+          >
+            ▸ drop rom to play
+          </span>
         </div>
       )}
     </div>
