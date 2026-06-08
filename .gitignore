@@ -28,9 +28,8 @@ Cargo.lock
 # Cloned locally for reference only; .git stripped. NEVER commit to rubc.
 /reference/
 
-# Local-only agent / tooling scaffolding (issue tracker, agent configs, skills).
-# Kept per-machine; never committed.
-/.beads/
+# Local-only agent / tooling scaffolding (agent configs, skills).
+# Kept per-machine; never committed. (.beads IS tracked — it bootstraps the issue tracker.)
 /.claude/
 /.codex/
 /.omo/
