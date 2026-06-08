@@ -7,8 +7,9 @@ import { Button } from "./ui/Button";
 import { Viewport } from "./Viewport";
 import { Gamepad, OverlayControls } from "./Gamepad";
 import { Settings } from "./Settings";
-import { RomLoader } from "./RomLoader";
-import { emulator, BTN, getRomKey } from "@/lib/emulator";
+import { Library } from "./Library";
+import { QuickMenu } from "./QuickMenu";
+import { emulator, BTN } from "@/lib/emulator";
 
 // small square icon button used in chrome
 function IconBtn({ children, onClick, active, disabled, label }: { children: React.ReactNode, onClick?: () => void, active?: boolean, disabled?: boolean, label: string }) {
@@ -240,15 +241,11 @@ export function App() {
       <TopBar emu={emu} />
       <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column", overflowY: emu.view === "play" ? "hidden" : "auto" }}>
         {emu.view === "play" && <PlayScreen emu={emu} pressedDir={pressedDir} />}
-        {emu.view === "library" && <div style={{ padding: "16px 16px 0" }}><RomLoader onRomLoaded={(bytes) => {
-          const id = getRomKey(bytes);
-          emu.boot(id);
-          emu.setView("play");
-        }} /></div>}
+        {emu.view === "library" && <Library />}
         {emu.view === "settings" && <div style={{ padding: "16px 16px 0" }}><Settings /></div>}
       </div>
 
-      {/* emu.menuOpen && <QuickMenu emu={emu} /> */}
+      <QuickMenu open={emu.menuOpen} onClose={() => emu.setMenuOpen(false)} />
       <Toast msg={emu.toast} />
     </div>
   );
