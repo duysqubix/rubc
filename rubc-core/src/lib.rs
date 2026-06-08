@@ -4,6 +4,7 @@ pub mod bus;
 pub mod cpu;
 pub mod logger;
 pub mod machine;
+mod savestate;
 
 #[cfg(feature = "diagnostics")]
 pub mod diag;

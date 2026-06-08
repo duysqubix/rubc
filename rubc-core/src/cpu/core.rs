@@ -235,6 +235,40 @@ impl Cpu {
         }
     }
 
+    pub(crate) fn save_state(&self) -> crate::savestate::CpuState {
+        crate::savestate::CpuState {
+            regs: self.r,
+            ime: self.ime,
+            ime_pending: self.ime_pending,
+            ime_delay_boundary: self.ime_delay_boundary,
+            mode: self.mode,
+            exec: self.exec,
+            halt_bug: self.halt_bug,
+            tmp8: self.tmp8,
+            tmp16: self.tmp16,
+            active_cycle: self.active_cycle.map(|state| crate::savestate::ActiveCpuCycleState {
+                cycle: state.cycle,
+                elapsed_t: state.elapsed_t,
+            }),
+        }
+    }
+
+    pub(crate) fn load_state(&mut self, state: crate::savestate::CpuState) {
+        self.r = state.regs;
+        self.ime = state.ime;
+        self.ime_pending = state.ime_pending;
+        self.ime_delay_boundary = state.ime_delay_boundary;
+        self.mode = state.mode;
+        self.exec = state.exec;
+        self.halt_bug = state.halt_bug;
+        self.tmp8 = state.tmp8;
+        self.tmp16 = state.tmp16;
+        self.active_cycle = state.active_cycle.map(|state| ActiveCpuCycleState {
+            cycle: state.cycle,
+            elapsed_t: state.elapsed_t,
+        });
+    }
+
     pub fn active_cpu_cycle(&self) -> Option<ActiveCpuCycle> {
         self.active_cycle.map(|state| state.cycle)
     }
