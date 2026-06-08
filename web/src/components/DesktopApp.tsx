@@ -26,7 +26,7 @@ function fmtAgo(ms: number): string {
 function Logo({ h = 30 }: { h?: number }) {
   return (
     <img
-      src="assets/rubc-logo.png"
+      src="/logo.png"
       alt="rubc"
       style={{ height: h, width: "auto", imageRendering: "pixelated", objectFit: "contain" }}
     />
