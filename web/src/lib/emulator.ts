@@ -234,15 +234,25 @@ export class EmulatorCore {
 
   drawFrame() {
     if (!this.emu || !this.canvasCtx || !this.imageData) return;
-    const ptr = this.emu.frame_rgba();
-    const view = new Uint8ClampedArray(this.wasm.memory.buffer, ptr, this.emu.frame_len);
-    this.imageData.data.set(view);
-    this.canvasCtx.putImageData(this.imageData, 0, 0);
+    try {
+      const ptr = this.emu.frame_rgba();
+      // Rebuild the view every frame: wasm memory can grow and detach the buffer.
+      const view = new Uint8ClampedArray(this.wasm.memory.buffer, ptr, this.emu.frame_len);
+      this.imageData.data.set(view);
+      this.canvasCtx.putImageData(this.imageData, 0, 0);
+    } catch {
+      // Detached buffer / torn-down emu mid-frame: skip this frame quietly.
+    }
   }
 
   loop(now: number) {
+    // If the game was torn down, stop the loop entirely (do NOT reschedule).
+    if (!this.emu) {
+      this.rafId = null;
+      return;
+    }
     this.rafId = requestAnimationFrame(this.loop);
-    if (this.paused || !this.emu) {
+    if (this.paused) {
       this.lastFrameTime = now;
       return;
     }
@@ -296,11 +306,22 @@ export class EmulatorCore {
   }
 
   async loadRom(bytes: Uint8Array, canvas: HTMLCanvasElement) {
+    // Tear down any previous game first so reopening is a clean restart.
     await this.flushSave();
     if (this.saveTimer !== null) {
       clearInterval(this.saveTimer);
       this.saveTimer = null;
     }
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    if (this.emu) {
+      this.emu.free();
+      this.emu = null;
+    }
+    this.lastFrameTime = null;
+    this.frameAccumulator = 0;
 
     const rate = this.ensureAudio().sampleRate;
     this.emu = new RubcWasm(bytes, rate);
@@ -316,20 +337,35 @@ export class EmulatorCore {
     if (this.canvasCtx) {
       this.imageData = this.canvasCtx.createImageData(this.emu.width, this.emu.height);
     }
-    
+
     this.paused = false;
-    if (this.rafId === null) this.rafId = requestAnimationFrame(this.loop);
+    this.rafId = requestAnimationFrame(this.loop);
   }
 
   setButton(btn: number, pressed: boolean) {
     if (this.emu) this.emu.set_button(btn, pressed);
   }
 
-  destroy() {
-    this.flushSave();
-    if (this.rafId !== null) cancelAnimationFrame(this.rafId);
-    if (this.saveTimer !== null) clearInterval(this.saveTimer);
-    if (this.emu) this.emu.free();
+  async destroy() {
+    // Stop the loop BEFORE freeing wasm so loop() can never touch freed memory.
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
+    if (this.saveTimer !== null) {
+      clearInterval(this.saveTimer);
+      this.saveTimer = null;
+    }
+    // Await the save so we never free() wasm while save_ram() is still reading it.
+    await this.flushSave();
+    if (this.emu) {
+      this.emu.free();
+      this.emu = null;
+    }
+    this.canvasCtx = null;
+    this.imageData = null;
+    this.lastFrameTime = null;
+    this.frameAccumulator = 0;
   }
 }
 
