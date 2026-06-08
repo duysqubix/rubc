@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Pixelify_Sans, IBM_Plex_Mono, IBM_Plex_Sans } from "next/font/google";
 import "./globals.css";
 import { PwaRegister } from "@/components/PwaRegister";
+import { EmulatorProvider } from "@/lib/store";
 
 const pixelifySans = Pixelify_Sans({
   subsets: ["latin"],
@@ -43,7 +44,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${pixelifySans.variable} ${ibmPlexMono.variable} ${ibmPlexSans.variable} antialiased`}>
-        {children}
+        <EmulatorProvider>{children}</EmulatorProvider>
         <PwaRegister />
       </body>
     </html>

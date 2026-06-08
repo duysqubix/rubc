@@ -1,5 +1,6 @@
 import React from "react";
-import { Button, Badge, Screen } from "@/components/ui";
+import { Button, Badge } from "@/components/ui";
+import { HeroPlayer } from "@/components/marketing/HeroPlayer";
 import { PlayNow } from "@/components/marketing/PlayNow";
 
 function Nav() {
@@ -57,6 +58,11 @@ function Hero() {
       }}
     >
       <div>
+        <img
+          src="/logo.png"
+          alt="rubc"
+          style={{ height: 44, imageRendering: "pixelated", marginBottom: 24 }}
+        />
         <div
           style={{
             fontFamily: "var(--font-mono)",
@@ -127,30 +133,7 @@ function Hero() {
           <Badge tone="pass">0 unsafe</Badge>
         </div>
       </div>
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          gap: 14,
-        }}
-      >
-        <Screen
-          src="/crystal-intro.gif"
-          scale={3}
-          status="Pokémon Crystal — CGB mode · 59.7275 Hz · save persisted."
-        />
-        <div
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            color: "var(--text-faint)",
-            letterSpacing: "0.04em",
-          }}
-        >
-          ▸ live WebAssembly build · your ROM never leaves your machine
-        </div>
-      </div>
+      <HeroPlayer />
     </section>
   );
 }
