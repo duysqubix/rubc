@@ -119,15 +119,21 @@ export function Viewport(props: ViewportProps) {
     return () => ro.disconnect();
   }, []);
 
+  const showCanvas = phase === "booting" || phase === "running" || phase === "paused";
+
+  // Re-attach whenever the canvas becomes shown (phase leaves "empty") so the
+  // store can bind it to the emulator core and start rendering. The player
+  // routes mount Viewport at phase="empty" with a hidden canvas, so a
+  // mount-only attach would hand the store a canvas it never wires up.
   useEffect(() => {
     store.attachCanvas(canvasRef.current);
-  }, [store.attachCanvas]);
+  }, [store.attachCanvas, showCanvas]);
 
   const innerW = scaling === "integer" && boxW
     ? Math.max(160, Math.floor(boxW / 160) * 160)
     : "100%";
 
-  const showCanvas = phase === "booting" || phase === "running" || phase === "paused";
+
 
   return (
     <div
