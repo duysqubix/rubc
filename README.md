@@ -14,10 +14,13 @@
 <a href="#license"><img src="https://img.shields.io/badge/license-MIT-lightgrey" alt="License"></a>
 </p>
 
-**rubc** is a Game Boy / Game Boy Color emulator written in safe Rust. Standing on the
-shoulders of giants — Pan Docs, SameBoy, GBEDG, mooneye, gbdev — it aims to be
-a small, hackable, hardware-accurate emulator with a real focus on passing the
-canonical test suites (Blargg, Mooneye, acid2) rather than just "running games".
+> 📖 **Please read [PRELUDE.md](./PRELUDE.md) first** — a short disclaimer and the developer's story behind this project. rubc is the result of an experiment: handing an emulator project over to an AI team to see how far it could get. For contrast, check out its fully human-coded sister project, [**gobc**](https://github.com/duysqubix/gobc) — a Game Boy emulator written in Go (and not *quite* as accurate as this one 🙃) — which is what sparked the whole thing. That one was hand-written, by a human.
+
+**rubc** is a Game Boy / Game Boy Color emulator written in safe Rust. It's built to
+*play your games* — full color, real sound, battery saves, keyboard and (on the web) touch — and
+it's hardware-accurate enough to prove it, rendering pixel-exact on some of the
+toughest PPU test ROMs out there. Standing on the shoulders of giants — Pan Docs,
+SameBoy, GBEDG, mooneye, gbdev.
 
 [**📊 Accuracy breakdown →**](docs/ACCURACY.md) &nbsp;&nbsp;
 [**📖 Usage guide →**](docs/USAGE.md) &nbsp;&nbsp;
@@ -37,6 +40,16 @@ canonical test suites (Blargg, Mooneye, acid2) rather than just "running games".
 </table>
 
 *Pokémon Crystal running on rubc — color, sound, saves, and all.*
+
+## What it's like to play
+
+Drop in a `.gb`, `.gbc`, or `.zip` and rubc just plays it. Game Boy Color titles
+run in full color; the four-channel sound chip plays through your speakers; and
+battery games like Pokémon Crystal write a `.sav` next to the ROM and pick up right
+where you left off. Play on the desktop with the keyboard, or
+[in your browser](#play-in-your-browser) — installable, offline, with on-screen touch
+controls and gamepad support on mobile. It runs at a true ~59.7 Hz, so games feel
+exactly like they did on the original hardware.
 
 ## Feature matrix
 
@@ -216,17 +229,22 @@ output running each test ROM to completion:
 
 ## Why rubc?
 
-- **Correctness first.** Every subsystem is gated against a real hardware test ROM before
-  it's considered done. The CPU advances one M-cycle at a time, ticking four T-cycles
+- **It actually plays games.** Color, sound, battery saves, keyboard, gamepad, and touch —
+  Pokémon Crystal runs start to finish, in color, at the right speed. Accuracy isn't the
+  goal in itself; it's how rubc makes your games look and sound the way they should.
+- **Correctness you can trust.** Every subsystem is gated against a real hardware test ROM
+  before it's considered done. The CPU advances one M-cycle at a time, ticking four T-cycles
   internally; memory access is observable at individual T-cycles within each M-cycle, so
   memory and timer ordering matches the real machine.
 - **DMG + CGB from the ground up.** Dual-mode is a first-class design target, not a
   retrofit — color, double-speed, VRAM/WRAM banking, and HDMA are all native.
 - **Genuinely safe.** The emulation core is `#![forbid(unsafe_code)]` with no C bindings, no
   `-sys` crates, and no FFI. It builds anywhere Rust does, with no system libraries to chase.
-- **Hackable.** A feature-gated diagnostics layer (flight recorder, BGB-format trace, state
-  hashing, snapshots) makes hard timing bugs reconstructable from artifacts alone — and
-  compiles to nothing when disabled.
+
+Under the hood there's also a feature-gated diagnostics layer (flight recorder, BGB-format
+trace, state hashing, snapshots) that made the hard timing bugs reconstructable from
+artifacts alone. It's internal tooling — off by default and compiled to nothing — not
+something you need to play games, but it's how the accuracy above got built.
 
 ## Testing
 
