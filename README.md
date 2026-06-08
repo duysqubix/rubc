@@ -194,7 +194,7 @@ cargo run -p rubc -- cartdump ROM   # inspect a cartridge header
 ```sh
 just run path/to/game.gb    # run quietly
 just trun path/to/game.gb   # run with debug logging
-just unit-test              # core unit tests
+just test                   # core unit tests
 just wasm-build             # build the browser (WebAssembly) bundle
 just check                  # fmt + clippy + build + test
 ```

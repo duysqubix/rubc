@@ -14,8 +14,8 @@ JSON files in `assets/sm83/v1/`.
 Structure: `{initial: {pc,sp,a,b,c,d,e,f,h,l,ram:[[addr,val]...]}, final: {...}}`.
 
 ## HOW TO RUN
-- `just unit-test`: `cargo test -p rubc-core`
-- `just test-opcodes`: `cargo test -p rubc-core -- --show-output`
+- `just test`: `cargo test -p rubc-core`
+- `just sm83`: `cargo test -p rubc-core --lib cpu::core::tests::vector_run -- --show-output`
 - `just regression-test`: Runs `assets/cpu_instrs/cpu_instrs.gb` via `cargo run`.
 
 ## WHERE TO ADD NEW HARNESSES

@@ -279,8 +279,8 @@ is the tiebreaker for any timing disagreement.
 ## Build / Test Commands (justfile)
 
 ```bash
-just unit-test        # cargo test -p rubc-core
-just test-opcodes     # SM83 JSON opcode vectors
+just test             # cargo test -p rubc-core
+just sm83             # SM83 JSON opcode vectors
 just regression-test  # run blargg cpu_instrs.gb (serial output)
 just run <args>       # LOG_LEVEL=warn cargo run
 just trun <args>      # LOG_LEVEL=debug cargo run
