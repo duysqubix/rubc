@@ -314,6 +314,14 @@ impl Bus {
         self.io[0x47]
     }
 
+    pub fn dmg_obp0(&self) -> u8 {
+        self.io[0x48]
+    }
+
+    pub fn dmg_obp1(&self) -> u8 {
+        self.io[0x49]
+    }
+
     /// Set a joypad button's pressed state. A fresh press of a selected-line
     /// button raises the joypad interrupt (IF bit 4).
     pub fn set_button(&mut self, button: Button, pressed: bool) {
