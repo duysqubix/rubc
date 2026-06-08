@@ -238,6 +238,7 @@ export class EmulatorCore {
   // Speed is purely a frontend-loop concern: step_frame() is one GB frame, so
   // Nx = N step_frame() calls per display refresh. No core change needed.
   speed = 1;
+  prevSpeed = 1;
   
   onReady: () => void = () => {};
   onError: (err: Error) => void = () => {};
@@ -339,10 +340,19 @@ export class EmulatorCore {
 
     if (steps > 0) {
       this.drawFrame();
-      // At >1x the core produces audio faster than realtime; pumping it would
-      // overrun the buffer and crackle. Only feed audio at normal speed.
-      if (speed === 1) this.pumpAudio();
+      // Resync audio scheduling on any speed change: nextAudioTime can be stale
+      // (in the past) after a transition, so buffers would be scheduled in the
+      // past and silently dropped -> sound never recovers.
+      if (speed !== this.prevSpeed && this.audioCtx) {
+        this.nextAudioTime = this.audioCtx.currentTime + 0.02;
+      }
+      // Always pump audio, including at turbo. At >1x the core produces audio
+      // faster than realtime, so it plays back faster/pitched-up -- that's the
+      // expected turbo sound (and it keeps draining the wasm buffer so the APU
+      // never stalls). pumpAudio caps how far ahead it schedules.
+      this.pumpAudio();
     }
+    this.prevSpeed = speed;
     
     this.pollGamepad();
   }
