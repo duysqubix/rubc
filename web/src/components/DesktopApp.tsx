@@ -124,7 +124,38 @@ function RailGroup({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
-function LibraryRail({ emu }: { emu: EmulatorContextValue }) {
+function CollapsedStrip({ side, label, onExpand }: { side: "left" | "right"; label: string; onExpand: () => void }) {
+  return (
+    <button
+      onClick={onExpand}
+      aria-label={`Expand ${label}`}
+      title={`Show ${label}`}
+      style={{
+        width: 30,
+        flexShrink: 0,
+        cursor: "pointer",
+        background: "var(--surface-sunken)",
+        border: "none",
+        borderRight: side === "left" ? "1px solid var(--border)" : "none",
+        borderLeft: side === "right" ? "1px solid var(--border)" : "none",
+        color: "var(--text-muted)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        letterSpacing: "0.1em",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 10,
+      }}
+    >
+      <span style={{ fontSize: 15 }}>{side === "left" ? "›" : "‹"}</span>
+      <span style={{ writingMode: "vertical-rl", textTransform: "uppercase" }}>{label}</span>
+    </button>
+  );
+}
+
+function LibraryRail({ emu, onCollapse }: { emu: EmulatorContextValue; onCollapse: () => void }) {
   const games = emu.ROMS.filter((r) => !r.id.includes("test"));
   const tests = emu.ROMS.filter((r) => r.id.includes("test"));
   const inputRef = useRef<HTMLInputElement>(null);
@@ -141,6 +172,19 @@ function LibraryRail({ emu }: { emu: EmulatorContextValue }) {
       }}
     >
       <div style={{ padding: "14px 14px 10px", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+          <button
+            onClick={onCollapse}
+            aria-label="Collapse library"
+            title="Collapse"
+            style={{
+              width: 22, height: 22, borderRadius: "var(--radius)", cursor: "pointer",
+              border: "1px solid var(--border-strong)", background: "var(--surface-raised)",
+              color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 13, lineHeight: 1,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}
+          >‹</button>
+        </div>
         <input
           ref={inputRef}
           type="file"
@@ -450,7 +494,7 @@ function SavesTab({ emu }: { emu: EmulatorContextValue }) {
   );
 }
 
-function RightPanel({ emu }: { emu: EmulatorContextValue }) {
+function RightPanel({ emu, onCollapse }: { emu: EmulatorContextValue; onCollapse: () => void }) {
   const [tab, setTab] = useState<"controls" | "accuracy" | "settings" | "saves">("controls");
   const tabs = [
     { id: "controls", label: "Controls" },
@@ -470,7 +514,18 @@ function RightPanel({ emu }: { emu: EmulatorContextValue }) {
         minHeight: 0,
       }}
     >
-      <div style={{ display: "flex", borderBottom: "1px solid var(--border)" }}>
+      <div style={{ display: "flex", alignItems: "stretch", borderBottom: "1px solid var(--border)" }}>
+        <button
+          onClick={onCollapse}
+          aria-label="Collapse panel"
+          title="Collapse"
+          style={{
+            width: 30, flexShrink: 0, cursor: "pointer",
+            background: "transparent", border: "none",
+            borderRight: "1px solid var(--border)",
+            color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 14,
+          }}
+        >›</button>
         {tabs.map((t) => (
           <button
             key={t.id}
@@ -540,6 +595,8 @@ export function DesktopApp() {
   const dirT = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { phase, rom, settings: s } = emu;
   const [dragging, setDragging] = useState(false);
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
 
   const onDir = (d: string) => {
     if (phase !== "running") return;
@@ -693,7 +750,11 @@ export function DesktopApp() {
 
       {/* body */}
       <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <LibraryRail emu={emu} />
+        {leftOpen ? (
+          <LibraryRail emu={emu} onCollapse={() => setLeftOpen(false)} />
+        ) : (
+          <CollapsedStrip side="left" label="Library" onExpand={() => setLeftOpen(true)} />
+        )}
         {/* center stage */}
         <main
           style={{
@@ -751,7 +812,11 @@ export function DesktopApp() {
             </span>
           </div>
         </main>
-        <RightPanel emu={emu} />
+        {rightOpen ? (
+          <RightPanel emu={emu} onCollapse={() => setRightOpen(false)} />
+        ) : (
+          <CollapsedStrip side="right" label="Panel" onExpand={() => setRightOpen(true)} />
+        )}
       </div>
 
       {emu.toast && (
