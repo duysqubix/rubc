@@ -105,19 +105,8 @@ export function Viewport(props: ViewportProps) {
   const glow = props.glow ?? true;
   const fullBleed = props.fullBleed ?? false;
 
-  const [boxW, setBoxW] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    if (!ref.current) return;
-    const ro = new ResizeObserver(([e]) => {
-      if (e) setBoxW(e.contentRect.width);
-    });
-    ro.observe(ref.current);
-    setBoxW(ref.current.clientWidth);
-    return () => ro.disconnect();
-  }, []);
 
   const showCanvas = phase === "booting" || phase === "running" || phase === "paused";
 
@@ -129,9 +118,7 @@ export function Viewport(props: ViewportProps) {
     store.attachCanvas(canvasRef.current);
   }, [store.attachCanvas, showCanvas]);
 
-  const innerW = scaling === "integer" && boxW
-    ? Math.max(160, Math.floor(boxW / 160) * 160)
-    : "100%";
+
 
 
 
@@ -153,8 +140,12 @@ export function Viewport(props: ViewportProps) {
         width={160}
         height={144}
         style={{
-          width: innerW, height: scaling === "integer" ? "auto" : "100%",
-          maxHeight: "100%", objectFit: "fill",
+          // Fill the aspect-ratio'd parent wrapper absolutely. Using height:"100%"
+          // relative sizing collapsed to 0 on mobile when a caller wrapper had no
+          // bounded height (audio played but nothing rendered).
+          position: "absolute", inset: 0,
+          width: "100%", height: "100%",
+          objectFit: scaling === "integer" ? "contain" : "fill",
           imageRendering: smoothing ? "auto" : "pixelated",
           display: showCanvas ? "block" : "none",
           filter: phase === "booting" ? `${filter === "none" ? "" : filter} brightness(1.05)` : (filter === "none" ? "none" : filter),

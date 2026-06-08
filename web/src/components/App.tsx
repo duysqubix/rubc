@@ -111,7 +111,7 @@ function PlayScreen({ emu, pressedDir }: { emu: ReturnType<typeof useEmulator>, 
       {overlay ? (
         // ── OVERLAY: maximized full-bleed screen, translucent controls over it ──
         <div style={{ flex: 1, position: "relative", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#000", minHeight: 0 }}>
-          <div style={{ width: "100%", position: "relative" }}>
+          <div style={{ width: "100%", maxHeight: "100%", aspectRatio: "160 / 144", position: "relative" }}>
             <Viewport phase={phase} rom={rom} filter={emu.filter}
               scaling={s.scaling} smoothing={s.smoothing} showFps={s.showFps} turbo={s.turbo}
               pressedDir={pressedDir} glow={glow} fullBleed />
