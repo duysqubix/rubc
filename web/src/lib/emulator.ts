@@ -188,7 +188,7 @@ export class EmulatorCore {
 
   async init() {
     try {
-      this.wasm = await init();
+      this.wasm = await init({ module_or_path: "/rubc_wasm_bg.wasm" });
       this.onReady();
     } catch (err: any) {
       this.onError(err);
