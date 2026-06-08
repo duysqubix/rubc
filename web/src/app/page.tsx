@@ -13,6 +13,7 @@ function Nav() {
   };
   return (
     <nav
+      className="rubc-nav"
       style={{
         position: "sticky",
         top: 0,
@@ -20,7 +21,6 @@ function Nav() {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "16px 48px",
         borderBottom: "1px solid var(--border)",
         background: "color-mix(in srgb, var(--bg) 88%, transparent)",
         backdropFilter: "blur(8px)",
@@ -48,15 +48,7 @@ function Nav() {
 
 function Hero() {
   return (
-    <section
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 520px",
-        gap: 56,
-        alignItems: "center",
-        padding: "72px 48px 64px",
-      }}
-    >
+    <section className="rubc-hero">
       <div>
         <img
           src="/logo.png"
@@ -78,7 +70,6 @@ function Hero() {
         <h1
           style={{
             fontFamily: "var(--font-pixel)",
-            fontSize: 60,
             lineHeight: 1.05,
             color: "var(--text-strong)",
             margin: 0,
@@ -173,8 +164,8 @@ function Footer() {
   );
   return (
     <footer
+      className="rubc-section"
       style={{
-        padding: "48px 48px 40px",
         borderTop: "1px solid var(--border)",
         background: "var(--surface-sunken)",
       }}

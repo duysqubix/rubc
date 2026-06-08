@@ -28,6 +28,7 @@ export function HeroPlayer() {
 
   return (
     <div
+      className="rubc-hero-player"
       style={{
         display: "flex",
         flexDirection: "column",
