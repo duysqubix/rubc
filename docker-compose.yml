@@ -1,11 +1,14 @@
-# Docker Compose for the rubc WebAssembly demo.
+# Docker Compose for the rubc web app.
 #
-#   docker compose up --build        # build the wasm bundle + serve it
-#   open http://localhost:8080/      # load a .gb/.gbc ROM and play
+# PRODUCTION (static export served by nginx):
+#   docker compose up --build rubc-wasm   # then open http://localhost:8080/
 #
-# The image is fully self-contained: it compiles rubc-core to WebAssembly,
-# generates the JS glue, and serves the static demo through nginx. No ROMs
-# are bundled — you load your own from the browser file picker.
+# DEVELOPMENT (live hot-reload — watch the UI evolve as you edit web/):
+#   docker compose up web-dev             # then open http://localhost:3000/
+#
+# The prod image compiles rubc-core to WebAssembly + serves the static demo.
+# The dev service bind-mounts ./web and runs `next dev` (Turbopack HMR); the
+# committed wasm bundle (web/src/lib/wasm/) means dev never recompiles Rust.
 
 services:
   rubc-wasm:
@@ -17,4 +20,28 @@ services:
     ports:
       # host:container — change the host port if 8080 is taken.
       - "8080:80"
+    restart: unless-stopped
+
+  # Live-reload dev server. Edits to ./web hot-reload in the browser instantly.
+  web-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    image: rubc-web-dev:latest
+    container_name: rubc-web-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      # Bind-mount the web app so host edits are seen live by `next dev`.
+      - ./web:/web
+      # Anonymous volume keeps the image's node_modules (built for the
+      # container's platform) from being shadowed by the host bind-mount.
+      - /web/node_modules
+      # Keep Next's build cache out of the host tree too.
+      - /web/.next
+    environment:
+      # Reliable file-watching across the macOS bind-mount boundary.
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
+      - NEXT_TELEMETRY_DISABLED=1
     restart: unless-stopped
