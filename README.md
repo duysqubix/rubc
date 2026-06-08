@@ -34,12 +34,19 @@ suites.
 
 It's small, fast, dependency-light, and written entirely in safe Rust.
 
+> **A note on accuracy.** rubc renders **pixel-exact** on `dmg-acid2`, `cgb-acid2`,
+> *and* `cgb-acid-hell` — Matt Currie's deliberately-undocumented CGB PPU torture
+> test that hammers `LCDC` mid-scanline and trips up most emulators. Getting the
+> final two pixels right meant emulating the obscure CGB tile-select bus conflict,
+> cross-checked dot-for-dot against SameBoy. We sweat the details so your games
+> look exactly like they did on real silicon.
+
 ## Features
 
 - 🎮 **Plays DMG & CGB games** — full Game Boy and Game Boy Color support, with
   automatic detection from the cartridge header.
 - 🌈 **Accurate color** — CGB palettes, per-tile attributes, and color mixing,
-  pixel-exact on the `cgb-acid2` reference test.
+  pixel-exact on the `cgb-acid2` *and* `cgb-acid-hell` reference tests.
 - 🔊 **Real sound** — all four audio channels (two pulse, wave, noise) with the
   full envelope/sweep/length hardware, output through your speakers.
 - 💾 **Battery saves** — games like Pokémon Crystal write a `.sav` file next to

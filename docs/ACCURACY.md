@@ -43,14 +43,14 @@ rubc's own rendered output running each suite to completion:
 |------|--------|
 | `dmg-acid2` | ✅ Pixel-exact (0/23040) |
 | `cgb-acid2` | ✅ Pixel-exact (0/23040) |
-| `cgb-acid-hell` | ◐ 23038/23040 (two-pixel mid-scanline scroll edge) |
+| `cgb-acid-hell` | ✅ Pixel-exact (0/23040) |
 | `mealybug-tearoom` | 🚧 mid-mode-3 register-write timing in progress |
 
 <table>
   <tr>
     <td align="center"><img src="media/tests/dmg-acid2.png" width="200"><br><sub>dmg-acid2 — pixel-exact</sub></td>
     <td align="center"><img src="media/tests/cgb-acid2.png" width="200"><br><sub>cgb-acid2 — pixel-exact</sub></td>
-    <td align="center"><img src="media/tests/cgb-acid-hell.png" width="200"><br><sub>cgb-acid-hell — 23038/23040</sub></td>
+    <td align="center"><img src="media/tests/cgb-acid-hell.png" width="200"><br><sub>cgb-acid-hell — pixel-exact</sub></td>
   </tr>
 </table>
 ## Mooneye acceptance (`mooneye-test-suite`)
