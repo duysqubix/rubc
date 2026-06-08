@@ -950,7 +950,11 @@ pub fn format_cart_header(rom: &[u8]) -> String {
     let ram_code = rom.get(0x0149).copied().unwrap_or(0);
 
     let mut out = String::new();
-    out.push_str(&format!("size:      {} bytes ({} KiB)\n", rom.len(), rom.len() / 1024));
+    out.push_str(&format!(
+        "size:      {} bytes ({} KiB)\n",
+        rom.len(),
+        rom.len() / 1024
+    ));
     out.push_str(&format!("title:     {title}\n"));
     out.push_str(&format!(
         "cgb flag:  {cgb:#04X} ({})\n",
@@ -960,9 +964,18 @@ pub fn format_cart_header(rom: &[u8]) -> String {
             _ => "DMG",
         }
     ));
-    out.push_str(&format!("cart type: {cart_type:#04X} ({})\n", cart_type_name(cart_type)));
-    out.push_str(&format!("rom size:  {rom_code:#04X} ({})\n", rom_size_str(rom_code)));
-    out.push_str(&format!("ram size:  {ram_code:#04X} ({})\n", ram_size_str(ram_code)));
+    out.push_str(&format!(
+        "cart type: {cart_type:#04X} ({})\n",
+        cart_type_name(cart_type)
+    ));
+    out.push_str(&format!(
+        "rom size:  {rom_code:#04X} ({})\n",
+        rom_size_str(rom_code)
+    ));
+    out.push_str(&format!(
+        "ram size:  {ram_code:#04X} ({})\n",
+        ram_size_str(ram_code)
+    ));
     out
 }
 
