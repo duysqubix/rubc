@@ -805,9 +805,20 @@ impl eframe::App for RubcApp {
         // The egui UI: menubar (File -> Debug / About), About window, and the
         // embedded live VRAM viewer. Drawn before the CentralPanel so the game
         // screen fills the remaining space below the menubar.
-        let action = self.gui.ui(ui);
-        if let crate::gui::GuiAction::LoadRom = action {
-            self.load_rom_dialog();
+        let action = self.gui.ui(ui, self.machine.is_some());
+        match action {
+            crate::gui::GuiAction::LoadRom => self.load_rom_dialog(),
+            crate::gui::GuiAction::CartInfo => {
+                if let Some(machine) = &self.machine {
+                    // Read the header straight from the live cartridge (bank 0,
+                    // 0x0000-0x014F is always present), then format + show it.
+                    let header: Vec<u8> = (0x0000..=0x014Fu16)
+                        .map(|a| machine.bus.cart.read(a))
+                        .collect();
+                    self.gui.show_cart_info(format_cart_header(&header));
+                }
+            }
+            crate::gui::GuiAction::None => {}
         }
 
         let mut clear_error = false;
@@ -895,47 +906,8 @@ fn cartdump(rom_path: &str, raw: bool, output: Option<&str>) -> anyhow::Result<(
     let rom = std::fs::read(rom_path)
         .map_err(|e| anyhow::anyhow!("failed to read ROM {rom_path:?}: {e}"))?;
 
-    let mut out = String::new();
-    let title: String = rom
-        .get(0x0134..=0x0143)
-        .unwrap_or(&[])
-        .iter()
-        .take_while(|&&b| b != 0)
-        .filter(|&&b| (0x20..0x7F).contains(&b))
-        .map(|&b| b as char)
-        .collect();
-    let cgb = rom.get(0x0143).copied().unwrap_or(0);
-    let cart_type = rom.get(0x0147).copied().unwrap_or(0);
-    let rom_code = rom.get(0x0148).copied().unwrap_or(0);
-    let ram_code = rom.get(0x0149).copied().unwrap_or(0);
-
-    out.push_str(&format!("file:      {rom_path}\n"));
-    out.push_str(&format!(
-        "size:      {} bytes ({} KiB)\n",
-        rom.len(),
-        rom.len() / 1024
-    ));
-    out.push_str(&format!("title:     {title}\n"));
-    out.push_str(&format!(
-        "cgb flag:  {cgb:#04X} ({})\n",
-        match cgb & 0xC0 {
-            0x80 => "CGB-enhanced",
-            0xC0 => "CGB-only",
-            _ => "DMG",
-        }
-    ));
-    out.push_str(&format!(
-        "cart type: {cart_type:#04X} ({})\n",
-        cart_type_name(cart_type)
-    ));
-    out.push_str(&format!(
-        "rom size:  {rom_code:#04X} ({})\n",
-        rom_size_str(rom_code)
-    ));
-    out.push_str(&format!(
-        "ram size:  {ram_code:#04X} ({})\n",
-        ram_size_str(ram_code)
-    ));
+    let mut out = format!("file:      {rom_path}\n");
+    out.push_str(&format_cart_header(&rom));
 
     if raw {
         out.push_str("\nheader bytes 0x0100-0x014F:\n");
@@ -958,6 +930,40 @@ fn cartdump(rom_path: &str, raw: bool, output: Option<&str>) -> anyhow::Result<(
         None => print!("{out}"),
     }
     Ok(())
+}
+
+/// Format the cartridge header (title, CGB flag, MBC type, ROM/RAM size) from
+/// raw ROM bytes into a human-readable block. Shared by the `cartdump`
+/// subcommand and the in-window `File -> Cart Info` popup.
+pub fn format_cart_header(rom: &[u8]) -> String {
+    let title: String = rom
+        .get(0x0134..=0x0143)
+        .unwrap_or(&[])
+        .iter()
+        .take_while(|&&b| b != 0)
+        .filter(|&&b| (0x20..0x7F).contains(&b))
+        .map(|&b| b as char)
+        .collect();
+    let cgb = rom.get(0x0143).copied().unwrap_or(0);
+    let cart_type = rom.get(0x0147).copied().unwrap_or(0);
+    let rom_code = rom.get(0x0148).copied().unwrap_or(0);
+    let ram_code = rom.get(0x0149).copied().unwrap_or(0);
+
+    let mut out = String::new();
+    out.push_str(&format!("size:      {} bytes ({} KiB)\n", rom.len(), rom.len() / 1024));
+    out.push_str(&format!("title:     {title}\n"));
+    out.push_str(&format!(
+        "cgb flag:  {cgb:#04X} ({})\n",
+        match cgb & 0xC0 {
+            0x80 => "CGB-enhanced",
+            0xC0 => "CGB-only",
+            _ => "DMG",
+        }
+    ));
+    out.push_str(&format!("cart type: {cart_type:#04X} ({})\n", cart_type_name(cart_type)));
+    out.push_str(&format!("rom size:  {rom_code:#04X} ({})\n", rom_size_str(rom_code)));
+    out.push_str(&format!("ram size:  {ram_code:#04X} ({})\n", ram_size_str(ram_code)));
+    out
 }
 
 fn cart_type_name(t: u8) -> &'static str {

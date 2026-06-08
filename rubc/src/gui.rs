@@ -14,12 +14,18 @@ use std::sync::Arc;
 pub(crate) enum GuiAction {
     None,
     LoadRom,
+    CartInfo,
 }
 
 /// The egui UI state for the rubc window.
 pub(crate) struct Gui {
     /// Only show the egui "About" window when true.
     window_open: bool,
+    /// Only show the "Cart Info" window when true.
+    cart_info_open: bool,
+    /// Formatted cartridge header for the open Cart Info window. Set by the app
+    /// (which holds the live `Machine`) when the menu item is clicked.
+    cart_info_text: String,
     /// Shared File -> Debug toggle for the detached VRAM viewport. Flipped by
     /// the menu; also cleared by the viewport's OS close button (in `logic`).
     debug_open: Arc<AtomicBool>,
@@ -30,12 +36,20 @@ impl Gui {
     pub(crate) fn new(debug_open: Arc<AtomicBool>) -> Self {
         Self {
             window_open: false,
+            cart_info_open: false,
+            cart_info_text: String::new(),
             debug_open,
         }
     }
 
-    /// Create the UI using egui.
-    pub(crate) fn ui(&mut self, ui: &mut egui::Ui) -> GuiAction {
+    /// Open the Cart Info window and fill it with the given formatted header.
+    pub(crate) fn show_cart_info(&mut self, header: String) {
+        self.cart_info_text = header;
+        self.cart_info_open = true;
+    }
+
+    /// Create the UI using egui. `rom_loaded` gates ROM-specific menu items.
+    pub(crate) fn ui(&mut self, ui: &mut egui::Ui, rom_loaded: bool) -> GuiAction {
         let mut action = GuiAction::None;
         // Cheap (Arc) clone so the floating window below can borrow the egui
         // context after the menubar panel has finished borrowing `ui`.
@@ -46,6 +60,13 @@ impl Gui {
                 ui.menu_button("File", |ui| {
                     if ui.button("Load ROM...").clicked() {
                         action = GuiAction::LoadRom;
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(rom_loaded, egui::Button::new("Cart Info..."))
+                        .clicked()
+                    {
+                        action = GuiAction::CartInfo;
                         ui.close();
                     }
                     if ui.button("Debug...").clicked() {
@@ -70,6 +91,14 @@ impl Gui {
             .show(&ctx, |ui| {
                 ui.label("rubc -- a safe-Rust Game Boy (DMG/CGB) emulator.");
                 ui.label("File -> Debug opens the live VRAM viewer in its own window.");
+            });
+
+        egui::Window::new("Cartridge")
+            .open(&mut self.cart_info_open)
+            .collapsible(false)
+            .resizable(false)
+            .show(&ctx, |ui| {
+                ui.monospace(&self.cart_info_text);
             });
 
         action
