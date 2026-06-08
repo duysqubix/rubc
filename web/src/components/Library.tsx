@@ -237,15 +237,16 @@ export function Library() {
   const store = useEmulator();
 
   const handleFile = async (file: File) => {
-    const rom = await store.loadFile(file);
-    if (rom) {
-      store.setView("play");
-    }
+    // Switch to the play view FIRST so the Viewport mounts and attaches its
+    // canvas before the ROM boots -- otherwise loadCore runs with no canvas and
+    // bails, leaving a blank screen.
+    store.setView("play");
+    await store.loadFile(file);
   };
 
   const handlePlay = async (id: string) => {
-    await store.openRom(id);
     store.setView("play");
+    await store.openRom(id);
   };
 
   const games = store.roms.filter((r) => !isTestRom(r));

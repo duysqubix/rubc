@@ -126,11 +126,13 @@ export function DPad({ size = 150, dim = false }: { size?: number; dim?: boolean
 }
 
 export function ActionBtn({ label, sub, size = 74, btn, dim = false }: { label: string; sub?: string; size?: number; btn: number; dim?: boolean }) {
-  const { buzz } = useEmulator();
+  const { buzz, phase, togglePause } = useEmulator();
   const { down, handlers } = usePress(
     () => {
       emulator.setButton(btn, true);
       buzz(10);
+      // Pressing A resumes a paused game (mirrors the desktop keyboard).
+      if (btn === BTN.A && phase === "paused") togglePause();
     },
     () => {
       emulator.setButton(btn, false);
@@ -177,11 +179,13 @@ export function ActionBtn({ label, sub, size = 74, btn, dim = false }: { label: 
 }
 
 export function PillBtn({ label, btn }: { label: string; btn: number }) {
-  const { buzz } = useEmulator();
+  const { buzz, phase, togglePause } = useEmulator();
   const { down, handlers } = usePress(
     () => {
       emulator.setButton(btn, true);
       buzz(10);
+      // Pressing Start resumes a paused game (mirrors the desktop keyboard).
+      if (btn === BTN.START && phase === "paused") togglePause();
     },
     () => {
       emulator.setButton(btn, false);
