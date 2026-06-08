@@ -1,9 +1,11 @@
-const CACHE_NAME = 'rubc-v3';
+const CACHE_NAME = 'rubc-v4';
 // Precache the app shell. Hash-named build assets (JS chunks, the wasm under
 // /_next/static/media/) are cached on first fetch by the runtime handler below,
 // so the app works offline after the first online visit.
 const ASSETS = [
   '/',
+  '/play/desktop',
+  '/play/mobile',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png'
