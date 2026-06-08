@@ -46,6 +46,40 @@ const MAX_MEALYBUG_M3_LCDC_WIN_MAP_CHANGE_DIFF: usize = 1925;
 const MAX_MEALYBUG_M3_LCDC_BG_MAP_CHANGE_DIFF: usize = 845;
 const MAX_CGB_ACID_HELL_DIFF: usize = 0;
 
+const MEALYBUG_CGBC_BASELINES: &[(&str, usize)] = &[
+    ("m2_win_en_toggle", 9030),
+    ("m3_bgp_change", 15936),
+    ("m3_bgp_change_sprites", 20340),
+    ("m3_lcdc_bg_en_change", 15894),
+    ("m3_lcdc_bg_en_change2", 8096),
+    ("m3_lcdc_bg_map_change", 1362),
+    ("m3_lcdc_bg_map_change2", 7931),
+    ("m3_lcdc_obj_en_change", 206),
+    ("m3_lcdc_obj_en_change_variant", 1346),
+    ("m3_lcdc_obj_size_change", 1860),
+    ("m3_lcdc_obj_size_change_scx", 1650),
+    ("m3_lcdc_tile_sel_change", 1358),
+    ("m3_lcdc_tile_sel_change2", 3167),
+    ("m3_lcdc_tile_sel_win_change", 1204),
+    ("m3_lcdc_tile_sel_win_change2", 3624),
+    ("m3_lcdc_win_en_change_multiple", 18990),
+    ("m3_lcdc_win_en_change_multiple_wx", 1173),
+    ("m3_lcdc_win_map_change", 1102),
+    ("m3_lcdc_win_map_change2", 4064),
+    ("m3_obp0_change", 432),
+    ("m3_scx_high_5_bits", 17419),
+    ("m3_scx_high_5_bits_change2", 8061),
+    ("m3_scx_low_3_bits", 540),
+    ("m3_scy_change", 18188),
+    ("m3_scy_change2", 8172),
+    ("m3_window_timing", 21687),
+    ("m3_window_timing_wx_0", 21942),
+    ("m3_wx_4_change", 1173),
+    ("m3_wx_4_change_sprites", 650),
+    ("m3_wx_5_change", 1173),
+    ("m3_wx_6_change", 1173),
+];
+
 fn suites_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../reference/test-suites")
 }
@@ -317,6 +351,60 @@ fn mealybug_report() {
         exact >= MIN_MEALYBUG_DMG_EXACT,
         "mealybug DMG must keep at least {MIN_MEALYBUG_DMG_EXACT}/{total} pixel-exact ROMs (got {exact})"
     );
+}
+
+#[test]
+fn cgb_mealybug_report() {
+    let raw_dir = suites_dir().join("mealybug/expected/CGB-C-rgb555");
+    let Ok(entries) = std::fs::read_dir(&raw_dir) else {
+        eprintln!("mealybug CGB-C: RGB555 refs absent -- skipping");
+        return;
+    };
+    let mut refs: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("bin"))
+        .collect();
+    refs.sort();
+
+    let mut total = 0usize;
+    let mut exact = 0usize;
+    for ref_path in &refs {
+        let name = ref_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let Some(reference) = std::fs::read(ref_path)
+            .ok()
+            .filter(|d| d.len() == FRAMEBUFFER_PIXELS * 2)
+            .map(|d| {
+                d.chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]) & 0x7FFF)
+                    .collect::<Vec<_>>()
+            })
+        else {
+            continue;
+        };
+        let Some(frame) = render_cgb(&format!("mealybug/{name}.gb")) else {
+            println!("mealybug CGB-C {name}: no breakpoint");
+            continue;
+        };
+        let Some((_, max_diff)) = MEALYBUG_CGBC_BASELINES
+            .iter()
+            .find(|(baseline_name, _)| *baseline_name == name)
+        else {
+            panic!("mealybug CGB-C {name}: missing baseline gate");
+        };
+        total += 1;
+        let diff = pixel_diff_rgb555(&frame, &reference);
+        if diff == 0 {
+            exact += 1;
+        }
+        println!("mealybug CGB-C {name}: {diff} px differ");
+        assert!(
+            diff <= *max_diff,
+            "mealybug CGB-C {name} must stay <= {max_diff} pixels ({diff} differ)"
+        );
+    }
+    println!("----");
+    println!("mealybug CGB-C: {exact}/{total} pixel-exact");
 }
 
 /// cgb-acid-hell is an extremely demanding CGB PPU test (mid-scanline
