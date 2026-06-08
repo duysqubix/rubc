@@ -88,19 +88,19 @@ assert.equal(patched.settings.controls, "overlay");
 assert.equal(patched.settings.palette, "auto");
 
 const withElapsed = { ...running, elapsed: 42 };
-const saved = emulatorReducer(withElapsed, {
-  type: "saveTo",
-  index: 1,
-  now: 1234,
-  rom: { id: "PKMN:2097152", title: "Pokémon Crystal", thumb: null, live: null },
-});
-assert.deepEqual(saved.slots[1], {
+const slotSnapshot = {
   at: 1234,
   romId: "PKMN:2097152",
   thumb: null,
   label: "Pokémon Crystal",
   elapsed: 42,
+};
+const saved = emulatorReducer(withElapsed, {
+  type: "saveTo",
+  index: 1,
+  slot: slotSnapshot,
 });
+assert.deepEqual(saved.slots[1], slotSnapshot);
 assert.equal(saved.slots[0], null);
 
 const loaded = emulatorReducer({ ...saved, romId: "other", menuOpen: true, phase: "paused" }, { type: "loadFrom", index: 1 });

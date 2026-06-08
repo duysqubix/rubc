@@ -265,9 +265,17 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   const saveTo = useCallback(
     (index: number) => {
       const currentRom = findRom(roms, stateRef.current.romId);
-      dispatch({ type: "saveTo", index, now: Date.now(), rom: currentRom });
-      buzz(14, stateRef.current.settings.haptics);
-      showToast(`State saved · slot ${index + 1}`);
+      if (!currentRom) return;
+      void (async () => {
+        const slot = await emulator.saveState(index, { label: currentRom.title, elapsed: stateRef.current.elapsed });
+        if (!slot) {
+          showToast(`Could not save state · slot ${index + 1}`);
+          return;
+        }
+        dispatch({ type: "saveTo", index, slot });
+        buzz(14, stateRef.current.settings.haptics);
+        showToast(`State saved · slot ${index + 1}`);
+      })();
     },
     [roms, showToast],
   );
@@ -275,11 +283,21 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   const loadFrom = useCallback(
     (index: number) => {
       const slot = stateRef.current.slots[index] as SaveSlot | null | undefined;
-      if (!slot) return;
-      dispatch({ type: "loadFrom", index });
-      if (slot.romId) void loadCore(slot.romId, slot.romId !== lastLoadedRomRef.current);
-      buzz(14, stateRef.current.settings.haptics);
-      showToast(`State loaded · slot ${index + 1}`);
+      if (!slot?.romId) return;
+      const romId = slot.romId;
+      void (async () => {
+        if (romId !== lastLoadedRomRef.current || !emulator.emu) {
+          await loadCore(romId, romId !== lastLoadedRomRef.current);
+        }
+        const loadedSlot = await emulator.loadState(index);
+        if (!loadedSlot) {
+          showToast(`Could not load state · slot ${index + 1}`);
+          return;
+        }
+        dispatch({ type: "loadFrom", index, slot: loadedSlot });
+        buzz(14, stateRef.current.settings.haptics);
+        showToast(`State loaded · slot ${index + 1}`);
+      })();
     },
     [loadCore, showToast],
   );

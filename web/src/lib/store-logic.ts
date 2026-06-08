@@ -69,8 +69,8 @@ export type EmulatorAction =
   | { type: "togglePause" }
   | { type: "reset" }
   | { type: "powerOff" }
-  | { type: "saveTo"; index: number; now: number; rom: EmulatorRom | null }
-  | { type: "loadFrom"; index: number }
+  | { type: "saveTo"; index: number; slot: SaveSlot }
+  | { type: "loadFrom"; index: number; slot?: SaveSlot }
   | { type: "tick"; seconds?: number }
   | { type: "flash"; message: string }
   | { type: "clearToast" };
@@ -139,9 +139,9 @@ export function emulatorReducer(state: EmulatorState, action: EmulatorAction): E
     case "powerOff":
       return { ...state, phase: "empty", romId: null, menuOpen: false, elapsed: 0 };
     case "saveTo":
-      return saveToSlot(state, action.index, action.now, action.rom);
+      return saveToSlot(state, action.index, action.slot);
     case "loadFrom":
-      return loadFromSlot(state, action.index);
+      return loadFromSlot(state, action.index, action.slot);
     case "tick":
       return { ...state, elapsed: state.elapsed + (action.seconds ?? 1) };
     case "flash":
@@ -190,25 +190,22 @@ export function hydrateState(state: EmulatorState, persisted: EmulatorPersistenc
   };
 }
 
-function saveToSlot(state: EmulatorState, index: number, now: number, rom: EmulatorRom | null): EmulatorState {
+function saveToSlot(state: EmulatorState, index: number, slot: SaveSlot): EmulatorState {
   if (!isSlotIndex(index)) return state;
   const slots = state.slots.slice() as SaveSlots;
-  slots[index] = {
-    at: now,
-    romId: rom ? rom.id : null,
-    thumb: rom ? rom.live ?? rom.thumb : null,
-    label: rom ? rom.title : "—",
-    elapsed: state.elapsed,
-  };
+  slots[index] = slot;
   return { ...state, slots };
 }
 
-function loadFromSlot(state: EmulatorState, index: number): EmulatorState {
+function loadFromSlot(state: EmulatorState, index: number, loadedSlot?: SaveSlot): EmulatorState {
   if (!isSlotIndex(index)) return state;
-  const slot = state.slots[index];
+  const slot = loadedSlot ?? state.slots[index];
   if (!slot) return state;
+  const slots = state.slots.slice() as SaveSlots;
+  slots[index] = slot;
   return {
     ...state,
+    slots,
     romId: slot.romId || state.romId,
     elapsed: slot.elapsed || 0,
     phase: "running",

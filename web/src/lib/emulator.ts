@@ -1,4 +1,13 @@
 import init, { RubcWasm } from "./wasm/rubc_wasm.js";
+import type { InitOutput } from "./wasm/rubc_wasm.js";
+import {
+  createSaveStateRecord,
+  isSaveStateSlotIndex,
+  normalizeSaveStateRecord,
+  saveStateRecordKey,
+  slotFromSaveStateRecord,
+} from "./save-state-record";
+import type { SaveStateRecord, SaveStateSlotMetadata } from "./save-state-record";
 
 export const BTN = { A: 0, B: 1, SELECT: 2, START: 3, RIGHT: 4, LEFT: 5, UP: 6, DOWN: 7 };
 
@@ -7,6 +16,13 @@ export interface LoadedRom {
   /** Resolved ROM filename (the inner entry when a .zip was supplied). */
   name: string;
 }
+
+export interface SaveStateDetails {
+  label?: string;
+  elapsed?: number;
+}
+
+type AudioWindow = Window & { webkitAudioContext?: typeof AudioContext };
 
 function isRomName(name: string): boolean {
   const n = name.toLowerCase();
@@ -50,14 +66,16 @@ export async function loadRomFile(file: File): Promise<LoadedRom> {
 const SAVE_DB = "rubc-saves";
 const SAVE_STORE = "sav";
 const ROM_STORE = "rom";
+const SAVE_STATE_STORE = "state";
 
 function openSaveDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const req = indexedDB.open(SAVE_DB, 2);
+    const req = indexedDB.open(SAVE_DB, 3);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(SAVE_STORE)) db.createObjectStore(SAVE_STORE);
       if (!db.objectStoreNames.contains(ROM_STORE)) db.createObjectStore(ROM_STORE);
+      if (!db.objectStoreNames.contains(SAVE_STATE_STORE)) db.createObjectStore(SAVE_STATE_STORE);
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
@@ -134,6 +152,44 @@ export async function loadRomBytes(key: string): Promise<Uint8Array | null> {
   }
 }
 
+export async function storeSaveStateRecord(slot: number, record: SaveStateRecord): Promise<boolean> {
+  if (!isSaveStateSlotIndex(slot)) return false;
+  try {
+    const db = await openSaveDb();
+    const key = saveStateRecordKey(record.romId, slot);
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(SAVE_STATE_STORE, "readwrite");
+      tx.objectStore(SAVE_STATE_STORE).put(record, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    return true;
+  } catch (e) {
+    console.warn("state store failed:", e);
+    return false;
+  }
+}
+
+export async function loadSaveStateRecord(romId: string, slot: number): Promise<SaveStateRecord | null> {
+  if (!isSaveStateSlotIndex(slot)) return null;
+  try {
+    const db = await openSaveDb();
+    const key = saveStateRecordKey(romId, slot);
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction(SAVE_STATE_STORE, "readonly");
+      const req = tx.objectStore(SAVE_STATE_STORE).get(key);
+      req.onsuccess = () => {
+        const result: unknown = req.result;
+        resolve(normalizeSaveStateRecord(result));
+      };
+      req.onerror = () => reject(req.error);
+    });
+  } catch (e) {
+    console.warn("state load failed:", e);
+    return null;
+  }
+}
+
 export async function deleteRomBytes(key: string): Promise<void> {
   try {
     const db = await openSaveDb();
@@ -166,7 +222,7 @@ export async function importSave(key: string, file: File): Promise<void> {
 }
 
 export class EmulatorCore {
-  wasm: any = null;
+  wasm: InitOutput | null = null;
   emu: RubcWasm | null = null;
   audioCtx: AudioContext | null = null;
   nextAudioTime = 0;
@@ -175,7 +231,7 @@ export class EmulatorCore {
   rafId: number | null = null;
   paused = false;
   currentSaveKey: string | null = null;
-  saveTimer: any = null;
+  saveTimer: ReturnType<typeof setInterval> | null = null;
   lastFrameTime: number | null = null;
   frameAccumulator = 0;
   
@@ -190,14 +246,16 @@ export class EmulatorCore {
     try {
       this.wasm = await init({ module_or_path: "/rubc_wasm_bg.wasm" });
       this.onReady();
-    } catch (err: any) {
-      this.onError(err);
+    } catch (err: unknown) {
+      this.onError(err instanceof Error ? err : new Error("Could not initialize emulator core."));
     }
   }
 
   ensureAudio() {
     if (this.audioCtx) return this.audioCtx;
-    this.audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const AudioContextCtor = window.AudioContext ?? (window as AudioWindow).webkitAudioContext;
+    if (!AudioContextCtor) throw new Error("Web Audio is not available in this browser.");
+    this.audioCtx = new AudioContextCtor();
     this.nextAudioTime = this.audioCtx.currentTime;
     return this.audioCtx;
   }
@@ -233,7 +291,7 @@ export class EmulatorCore {
   }
 
   drawFrame() {
-    if (!this.emu || !this.canvasCtx || !this.imageData) return;
+    if (!this.emu || !this.wasm || !this.canvasCtx || !this.imageData) return;
     try {
       const ptr = this.emu.frame_rgba();
       // Rebuild the view every frame: wasm memory can grow and detach the buffer.
@@ -305,6 +363,56 @@ export class EmulatorCore {
     await storeSaveRam(this.currentSaveKey, ram);
   }
 
+  async saveState(slot: number, details: SaveStateDetails = {}): Promise<SaveStateSlotMetadata | null> {
+    if (!isSaveStateSlotIndex(slot) || !this.emu || !this.currentSaveKey) return null;
+    try {
+      const record = createSaveStateRecord({
+        romId: this.currentSaveKey,
+        thumb: this.captureThumbnail(),
+        label: details.label ?? this.currentSaveKey.split(":")[0],
+        elapsed: details.elapsed ?? 0,
+        data: this.emu.save_state(),
+      });
+      const stored = await storeSaveStateRecord(slot, record);
+      return stored ? slotFromSaveStateRecord(record) : null;
+    } catch (e) {
+      console.warn("state save failed:", e);
+      return null;
+    }
+  }
+
+  async loadState(slot: number): Promise<SaveStateSlotMetadata | null> {
+    if (!isSaveStateSlotIndex(slot) || !this.emu || !this.currentSaveKey) return null;
+    const record = await loadSaveStateRecord(this.currentSaveKey, slot);
+    if (!record) return null;
+    if (record.romId !== this.currentSaveKey) {
+      console.warn("state load rejected: ROM mismatch");
+      return null;
+    }
+    try {
+      if (!this.emu.load_state(record.data)) {
+        console.warn("state load rejected: incompatible snapshot");
+        return null;
+      }
+      this.drawFrame();
+      return slotFromSaveStateRecord(record);
+    } catch (e) {
+      console.warn("state load failed:", e);
+      return null;
+    }
+  }
+
+  private captureThumbnail(): string | null {
+    if (!this.canvasCtx) return null;
+    this.drawFrame();
+    try {
+      return this.canvasCtx.canvas.toDataURL("image/png");
+    } catch (e) {
+      console.warn("state thumbnail failed:", e);
+      return null;
+    }
+  }
+
   async loadRom(bytes: Uint8Array, canvas: HTMLCanvasElement) {
     // Tear down any previous game first so reopening is a clean restart.
     await this.flushSave();
@@ -362,6 +470,7 @@ export class EmulatorCore {
       this.emu.free();
       this.emu = null;
     }
+    this.currentSaveKey = null;
     this.canvasCtx = null;
     this.imageData = null;
     this.lastFrameTime = null;
