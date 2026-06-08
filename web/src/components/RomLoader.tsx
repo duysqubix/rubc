@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { getRomKey, exportSave, importSave } from "@/lib/emulator";
+import { getRomKey, exportSave, importSave, loadRomFile } from "@/lib/emulator";
 
 interface RecentRom {
   key: string;
@@ -27,25 +27,27 @@ export function RomLoader({ onRomLoaded }: { onRomLoaded: (bytes: Uint8Array) =>
   }, []);
 
   const handleFile = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith('.gb') && !file.name.toLowerCase().endsWith('.gbc')) {
-      alert("Please select a .gb or .gbc file");
+    let rom;
+    try {
+      rom = await loadRomFile(file);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Could not load that file.");
       return;
     }
-    const buffer = await file.arrayBuffer();
-    const bytes = new Uint8Array(buffer);
+    const { bytes, name } = rom;
     const key = getRomKey(bytes);
-    
+
     const newRecent = {
       key,
-      name: file.name,
+      name,
       size: bytes.length,
       lastPlayed: Date.now()
     };
-    
+
     const updated = [newRecent, ...recentRoms.filter(r => r.key !== key)].slice(0, 5);
     setRecentRoms(updated);
     localStorage.setItem("rubc-recent-roms", JSON.stringify(updated));
-    
+
     onRomLoaded(bytes);
   };
 
@@ -85,14 +87,14 @@ export function RomLoader({ onRomLoaded }: { onRomLoaded: (bytes: Uint8Array) =>
           </svg>
         </div>
         <div className="text-center">
-          <p className="text-zinc-200 font-medium">Drop ROM file here</p>
-          <p className="text-zinc-500 text-sm mt-1">or click to browse (.gb, .gbc)</p>
+          <p className="text-zinc-200 font-medium">Drop ROM or .zip here</p>
+          <p className="text-zinc-500 text-sm mt-1">or click to browse (.gb, .gbc, .zip)</p>
         </div>
         <input 
           type="file" 
           ref={fileInputRef} 
           className="hidden" 
-          accept=".gb,.gbc" 
+          accept=".gb,.gbc,.zip" 
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} 
         />
       </div>

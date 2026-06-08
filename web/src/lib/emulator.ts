@@ -2,6 +2,51 @@ import init, { RubcWasm } from "./wasm/rubc_wasm.js";
 
 export const BTN = { A: 0, B: 1, SELECT: 2, START: 3, RIGHT: 4, LEFT: 5, UP: 6, DOWN: 7 };
 
+export interface LoadedRom {
+  bytes: Uint8Array;
+  /** Resolved ROM filename (the inner entry when a .zip was supplied). */
+  name: string;
+}
+
+function isRomName(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.endsWith(".gb") || n.endsWith(".gbc");
+}
+
+/**
+ * Resolve a dropped/picked file into ROM bytes. Accepts a raw `.gb`/`.gbc`
+ * file directly, or a `.zip` from which the first Game Boy ROM is extracted.
+ * Throws with a user-facing message when no playable ROM is found.
+ */
+export async function loadRomFile(file: File): Promise<LoadedRom> {
+  const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+
+  if (isRomName(file.name)) {
+    return { bytes, name: file.name };
+  }
+
+  if (file.name.toLowerCase().endsWith(".zip")) {
+    const { unzipSync } = await import("fflate");
+    let entries: Record<string, Uint8Array>;
+    try {
+      entries = unzipSync(bytes);
+    } catch {
+      throw new Error("Could not read that .zip file.");
+    }
+    // Skip macOS resource forks / directory entries; pick the first ROM.
+    const romName = Object.keys(entries)
+      .filter((n) => !n.startsWith("__MACOSX/") && !n.endsWith("/"))
+      .find(isRomName);
+    if (!romName) {
+      throw new Error("No .gb or .gbc ROM found inside that .zip.");
+    }
+    return { bytes: entries[romName], name: romName.split("/").pop() || romName };
+  }
+
+  throw new Error("Please select a .gb, .gbc, or .zip file.");
+}
+
 const SAVE_DB = "rubc-saves";
 const SAVE_STORE = "sav";
 
