@@ -197,15 +197,9 @@ diag-clean:
 test:
     cargo test -p {{core}}
 
-# Alias kept for muscle memory.
-unit-test: test
-
 # SM83 JSON opcode vectors (the CPU-core acceptance suite, assets/sm83/v1/).
 sm83:
     cargo test -p {{core}} --lib cpu::core::tests::vector_run -- --show-output
-
-# Alias kept for muscle memory.
-test-opcodes: sm83
 
 # Per-opcode M-cycle count traces (branch-timing regression; legacy name, still useful on the per-T CPU).
 mcycle:
@@ -229,11 +223,8 @@ blargg name="cpu_instrs":
     echo "== blargg: $rom =="
     LOG_LEVEL=warn cargo run -q -- run --no-gui --test blargg "$rom"
 
-# Run the blargg cpu_instrs sub-tests through the machine harness (rubc-core::machine integration tests) -- the source-of-truth CPU regression.
-cpu-roms:
-    cargo test -p rubc-core machine::tests::blargg -- --show-output
-
-# All machine integration tests (serial capture, mooneye signature, blargg).
+# All machine integration tests (serial capture, mooneye signature, blargg
+# cpu_instrs through the machine harness -- the source-of-truth CPU regression).
 machine-test:
     cargo test -p rubc-core machine::
 
