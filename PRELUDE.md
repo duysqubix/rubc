@@ -56,4 +56,4 @@ I'd argue we need to be more pedantic about it: **AI will replace whatever it is
 
 Adapt the way you work, or don't. But don't mistake the tool for the threat.
 
-Don't be the next Blockbuster.
+Don't be the next [Blockbuster](https://en.wikipedia.org/wiki/Blockbuster_(retailer)).
