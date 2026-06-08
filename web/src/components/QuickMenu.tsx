@@ -81,10 +81,9 @@ interface SlotCardProps {
   mode: "load" | "save";
   onSave: (index: number) => void;
   onLoad: (index: number) => void;
-  
 }
 
-function SlotCard({ slot, index, mode, onSave, onLoad, currentRom }: SlotCardProps) {
+function SlotCard({ slot, index, mode, onSave, onLoad }: SlotCardProps) {
   const filled = !!slot;
   const tap = () => {
     if (mode === "save") onSave(index);
