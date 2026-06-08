@@ -44,7 +44,7 @@ rubc's own rendered output running each suite to completion:
 | `dmg-acid2` | ✅ Pixel-exact (0/23040) |
 | `cgb-acid2` | ✅ Pixel-exact (0/23040) |
 | `cgb-acid-hell` | ✅ Pixel-exact (0/23040) |
-| `mealybug-tearoom` | 🚧 mid-mode-3 register-write timing in progress |
+| `mealybug-tearoom` | ◑ Partial — see note below |
 
 <table>
   <tr>
@@ -53,6 +53,20 @@ rubc's own rendered output running each suite to completion:
     <td align="center"><img src="media/tests/cgb-acid-hell.png" width="200"><br><sub>cgb-acid-hell — pixel-exact</sub></td>
   </tr>
 </table>
+
+> **A note on mealybug-tearoom.** This suite probes the hardest class of PPU
+> behaviour: writing `SCY`, `BGP`, `LCDC`, and `WX` *mid-scanline*, during the
+> few dozen dots of mode 3 while the background fetcher is mid-fetch. A handful
+> of these ROMs render pixel-exact; the rest are gated at their current
+> measured pixel difference so they can never regress. The remaining failures
+> all share one root cause: the exact dot at which a CPU register write becomes
+> visible to a *concurrent* background fetch. Reproducing it faithfully needs a
+> timestamped sub-dot event scheduler for CPU bus accesses, STAT/mode edges,
+> and fetcher VRAM reads — a different model from the cycle-stepped CPU↔PPU
+> coupling rubc uses today (which is itself what makes `dmg-acid2`, `cgb-acid2`,
+> and the brutal `cgb-acid-hell` render pixel-exact). These are documented as a
+> known limitation rather than chased with timing hacks that would risk the
+> pixel-exact acid2 results.
 ## Mooneye acceptance (`mooneye-test-suite`)
 
 **93 / 115** overall, targeting **DMG revisions A/B/C** and **Game Boy Color**.
