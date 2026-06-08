@@ -39,6 +39,7 @@ export class RubcWasm {
      * right after constructing the machine, before the first frame.
      */
     load_ram(data: Uint8Array): void;
+    load_state(data: Uint8Array): boolean;
     /**
      * Boot a machine from a raw ROM image.
      *
@@ -53,6 +54,7 @@ export class RubcWasm {
      * has no battery.
      */
     save_ram(): Uint8Array;
+    save_state(): Uint8Array;
     /**
      * Set a joypad button's pressed state. `button` is one of the codes
      * documented on [`button_from_code`] (0=A, 1=B, 2=Select, 3=Start,
@@ -92,24 +94,25 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_rubcwasm_free: (a: number, b: number) => void;
-    readonly rubcwasm_drain_audio: (a: number) => [number, number];
+    readonly rubcwasm_drain_audio: (a: number, b: number) => void;
     readonly rubcwasm_frame_len: (a: number) => number;
     readonly rubcwasm_frame_rgba: (a: number) => number;
-    readonly rubcwasm_frame_rgba_copy: (a: number) => [number, number];
+    readonly rubcwasm_frame_rgba_copy: (a: number, b: number) => void;
     readonly rubcwasm_has_battery: (a: number) => number;
     readonly rubcwasm_height: (a: number) => number;
     readonly rubcwasm_is_cgb: (a: number) => number;
     readonly rubcwasm_load_ram: (a: number, b: number, c: number) => void;
+    readonly rubcwasm_load_state: (a: number, b: number, c: number) => number;
     readonly rubcwasm_new: (a: number, b: number, c: number) => number;
-    readonly rubcwasm_save_ram: (a: number) => [number, number];
+    readonly rubcwasm_save_ram: (a: number, b: number) => void;
+    readonly rubcwasm_save_state: (a: number, b: number) => void;
     readonly rubcwasm_set_button: (a: number, b: number, c: number) => void;
     readonly rubcwasm_step_frame: (a: number) => void;
     readonly rubcwasm_width: (a: number) => number;
-    readonly __wbindgen_free: (a: number, b: number, c: number) => void;
-    readonly __wbindgen_malloc: (a: number, b: number) => number;
-    readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;
-    readonly __wbindgen_externrefs: WebAssembly.Table;
-    readonly __wbindgen_start: () => void;
+    readonly __wbindgen_export: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_export2: (a: number, b: number) => number;
+    readonly __wbindgen_export3: (a: number, b: number, c: number, d: number) => number;
+    readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;
