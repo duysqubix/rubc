@@ -103,7 +103,7 @@ wasm-build:
       if command -v wasm-opt >/dev/null 2>&1; then
         echo "== wasm-build: wasm-opt -O3 =>$wasm =="
         tmp="$wasm.opt"
-        wasm-opt --enable-bulk-memory -O3 "$wasm" -o "$tmp"
+        wasm-opt --enable-bulk-memory --enable-sign-ext --enable-mutable-globals --enable-nontrapping-float-to-int -O3 "$wasm" -o "$tmp"
         mv -f "$tmp" "$wasm"
       else
         echo "warning: wasm-opt not found; skipping post-build optimization" >&2

@@ -13,7 +13,7 @@
 # then open http://localhost:8080/ and load a .gb/.gbc ROM.
 
 # ---- Stage 1: build the wasm bundle -----------------------------------------
-FROM rust:1.83-bookworm AS wasm-builder
+FROM rust:1.88-bookworm AS wasm-builder
 
 # wasm-bindgen-cli version must match the wasm-bindgen crate dependency.
 ARG WASM_BINDGEN_VERSION=0.2.122
@@ -40,7 +40,7 @@ RUN cargo build -p rubc-wasm --target wasm32-unknown-unknown --release \
  && wasm-bindgen target/wasm32-unknown-unknown/release/rubc_wasm.wasm \
       --target web \
       --out-dir rubc-wasm/web/pkg \
- && wasm-opt --enable-bulk-memory -O3 \
+ && wasm-opt --enable-bulk-memory --enable-sign-ext --enable-mutable-globals --enable-nontrapping-float-to-int -O3 \
       rubc-wasm/web/pkg/rubc_wasm_bg.wasm \
       -o rubc-wasm/web/pkg/rubc_wasm_bg.wasm.opt \
  && mv -f rubc-wasm/web/pkg/rubc_wasm_bg.wasm.opt \
