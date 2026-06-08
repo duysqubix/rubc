@@ -62,10 +62,16 @@ export function RomLoader({ onRomLoaded }: { onRomLoaded: (bytes: Uint8Array) =>
 
   return (
     <div className="flex flex-col items-center justify-center w-full max-w-md mx-auto min-h-[80vh] p-6">
-      <div className="text-center mb-12">
-        <h1 className="text-4xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-zinc-100 to-zinc-500 mb-2">
-          rubc
-        </h1>
+      <div className="text-center mb-12 flex flex-col items-center">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/logo.png"
+          alt="rubc"
+          width={144}
+          height={144}
+          className="w-36 h-36 object-contain mb-2 select-none drop-shadow-[0_0_24px_rgba(255,140,40,0.25)]"
+          draggable={false}
+        />
         <p className="text-zinc-400 text-sm font-medium tracking-wide">GAMEBOY EMULATOR</p>
       </div>
 
