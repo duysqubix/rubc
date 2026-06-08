@@ -234,6 +234,10 @@ export class EmulatorCore {
   saveTimer: ReturnType<typeof setInterval> | null = null;
   lastFrameTime: number | null = null;
   frameAccumulator = 0;
+  // Emulation speed multiplier (1 = normal ~59.7Hz). Turbo sets this to 2+.
+  // Speed is purely a frontend-loop concern: step_frame() is one GB frame, so
+  // Nx = N step_frame() calls per display refresh. No core change needed.
+  speed = 1;
   
   onReady: () => void = () => {};
   onError: (err: Error) => void = () => {};
@@ -319,19 +323,25 @@ export class EmulatorCore {
     this.lastFrameTime = now;
 
     const FRAME_MS = 1000 / 59.7275;
+    const speed = this.speed >= 1 ? this.speed : 1;
+    // Cap catch-up at 4 display-frames worth of work, scaled by speed.
+    const maxSteps = 4 * speed;
     let steps = 0;
-    while (this.frameAccumulator >= FRAME_MS && steps < 4) {
-      this.emu.step_frame();
+    while (this.frameAccumulator >= FRAME_MS && steps < maxSteps) {
+      // Advance `speed` emulated frames per consumed display-frame budget.
+      for (let i = 0; i < speed; i++) this.emu.step_frame();
       this.frameAccumulator -= FRAME_MS;
       steps++;
     }
-    if (steps === 4 && this.frameAccumulator >= FRAME_MS) {
+    if (steps >= maxSteps && this.frameAccumulator >= FRAME_MS) {
       this.frameAccumulator = 0;
     }
 
     if (steps > 0) {
       this.drawFrame();
-      this.pumpAudio();
+      // At >1x the core produces audio faster than realtime; pumping it would
+      // overrun the buffer and crackle. Only feed audio at normal speed.
+      if (speed === 1) this.pumpAudio();
     }
     
     this.pollGamepad();

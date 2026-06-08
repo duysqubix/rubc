@@ -2,6 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { useEmulator } from "@/lib/store";
+import { emulator, BTN } from "@/lib/emulator";
 import type { EmulatorRom, EmulatorContextValue } from "@/lib/store";
 import { Button, Badge, StatusPill, Kbd, Switch } from "@/components/ui";
 import { Viewport, CartIcon } from "@/components/Viewport";
@@ -550,25 +551,59 @@ export function DesktopApp() {
   };
 
   useEffect(() => {
-    const map: Record<string, string> = {
-      ArrowLeft: "left",
-      ArrowRight: "right",
-      ArrowUp: "up",
-      ArrowDown: "down",
+    // Map keyboard -> GameBoy buttons. Arrows = d-pad, X=A, Z=B, Enter=Start,
+    // Shift/Backspace=Select. Space toggles pause. These actually drive the core
+    // via emulator.setButton (the d-pad pulse + resume are just UX on top).
+    const dirMap: Record<string, [string, number]> = {
+      ArrowLeft: ["left", BTN.LEFT],
+      ArrowRight: ["right", BTN.RIGHT],
+      ArrowUp: ["up", BTN.UP],
+      ArrowDown: ["down", BTN.DOWN],
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (map[e.key]) {
+    const btnMap: Record<string, number> = {
+      x: BTN.A, X: BTN.A,
+      z: BTN.B, Z: BTN.B,
+      Enter: BTN.START,
+      Shift: BTN.SELECT, Backspace: BTN.SELECT,
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      const dir = dirMap[e.key];
+      if (dir) {
         e.preventDefault();
-        onDir(map[e.key]);
-      } else if (e.key === "x" || e.key === "X" || e.key === "Enter") {
-        resumeIf();
-      } else if (e.key === " ") {
+        emulator.setButton(dir[1], true);
+        onDir(dir[0]);
+        return;
+      }
+      if (e.key in btnMap) {
+        e.preventDefault();
+        emulator.setButton(btnMap[e.key], true);
+        if (e.key === "x" || e.key === "X" || e.key === "Enter") resumeIf();
+        return;
+      }
+      if (e.key === " ") {
         e.preventDefault();
         if (phase !== "empty") emu.togglePause();
       }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    const onKeyUp = (e: KeyboardEvent) => {
+      const dir = dirMap[e.key];
+      if (dir) {
+        e.preventDefault();
+        emulator.setButton(dir[1], false);
+        return;
+      }
+      if (e.key in btnMap) {
+        e.preventDefault();
+        emulator.setButton(btnMap[e.key], false);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, [phase, emu]);
 
   return (

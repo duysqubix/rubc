@@ -356,10 +356,19 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   }, [loadCore, ready, state.romId, state.phase]);
 
   useEffect(() => {
-    if (!state.settings.sound && emulator.audioCtx) {
+    if (!emulator.audioCtx) return;
+    if (state.settings.sound) {
+      // Resume was missing -> sound toggle was one-way (off worked, on didn't).
+      void emulator.audioCtx.resume();
+    } else {
       void emulator.audioCtx.suspend();
     }
   }, [state.settings.sound]);
+
+  useEffect(() => {
+    // Turbo is a frontend speed multiplier; the core needs no speed concept.
+    emulator.speed = state.settings.turbo ? 2 : 1;
+  }, [state.settings.turbo]);
 
   const value = useMemo<EmulatorContextValue>(
     () => ({
