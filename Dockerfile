@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 #
-# rubc WebAssembly demo — multi-stage build.
+# rubc WebAssembly PWA — multi-stage build.
 #
-# Stage 1 compiles the rubc-core emulator to WebAssembly and runs
-# wasm-bindgen to generate the `pkg/` JS glue. Stage 2 is a tiny nginx
-# image that serves the static demo (index.html + index.js + pkg/) with the
-# correct `application/wasm` MIME type and the headers ES modules need.
+# Stage 1 compiles the rubc-core emulator to WebAssembly (wasm-bindgen +
+# wasm-opt). Stage 2 builds the Next.js mobile PWA (static export) against that
+# wasm. Stage 3 is a tiny nginx image serving the exported site with the correct
+# `application/wasm` MIME type and the headers ES modules need.
 #
 # Build + run with `docker compose up` (see docker-compose.yml), or directly:
 #   docker build -t rubc-wasm .
@@ -46,15 +46,31 @@ RUN cargo build -p rubc-wasm --target wasm32-unknown-unknown --release \
  && mv -f rubc-wasm/web/pkg/rubc_wasm_bg.wasm.opt \
       rubc-wasm/web/pkg/rubc_wasm_bg.wasm
 
-# ---- Stage 2: serve the static demo -----------------------------------------
+# ---- Stage 2: build the Next.js PWA (static export) -------------------------
+FROM node:22-bookworm-slim AS web-builder
+WORKDIR /web
+
+# Install deps against the committed lockfile (cached unless package*.json change).
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+
+# App sources, then overlay the freshly-optimized wasm from stage 1 so the
+# bundle never ships a stale hand-committed binary.
+COPY web/ ./
+COPY --from=wasm-builder /build/rubc-wasm/web/pkg/rubc_wasm_bg.wasm ./src/lib/wasm/rubc_wasm_bg.wasm
+COPY --from=wasm-builder /build/rubc-wasm/web/pkg/rubc_wasm.js       ./src/lib/wasm/rubc_wasm.js
+
+# Produce the static export in /web/out.
+RUN npm run build
+
+# ---- Stage 3: serve the static export --------------------------------------
 FROM nginx:1.27-alpine AS runtime
 
 # Replace the default site config with one that serves .wasm correctly.
 COPY deploy/nginx.conf /etc/nginx/conf.d/default.conf
 
-# Static demo: index.html + index.js + the generated pkg/ from stage 1.
-COPY rubc-wasm/web/index.html rubc-wasm/web/index.js /usr/share/nginx/html/
-COPY --from=wasm-builder /build/rubc-wasm/web/pkg /usr/share/nginx/html/pkg
+# The Next.js static export (HTML, hashed JS/wasm under _next/, manifest, sw.js).
+COPY --from=web-builder /web/out /usr/share/nginx/html
 
 EXPOSE 80
 

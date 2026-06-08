@@ -1,36 +1,51 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# rubc web
 
-## Getting Started
+A mobile-first, installable PWA front-end for the `rubc` Game Boy (DMG/CGB)
+emulator. The emulator core runs entirely in the browser as WebAssembly — ROMs
+and saves never leave the device.
 
-First, run the development server:
+## Features
+
+- **Client-side only** — load your own `.gb`/`.gbc` ROM; it stays on your device.
+- **Local saves** — battery RAM persists per-ROM in IndexedDB, with manual
+  `.sav` export (download) and import (upload) for backup or transfer.
+- **Touch + keyboard + gamepad** — on-screen D-pad/buttons (multi-touch), desktop
+  keyboard, and the Gamepad API for Bluetooth/USB controllers.
+- **Installable, offline** — full PWA (manifest + service worker); after the
+  first visit the app shell and wasm are cached for offline play.
+
+## The wasm module
+
+The app calls the `RubcWasm` class from `rubc-wasm` (built with
+`wasm-bindgen --target web`). The generated glue lives in `src/lib/wasm/`:
+
+- `rubc_wasm.js` / `rubc_wasm.d.ts` — ES-module glue + types
+- `rubc_wasm_bg.wasm` — the emulator binary
+
+To refresh it from a fresh emulator build, from the repo root:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+just wasm-build                                   # writes rubc-wasm/web/pkg/
+cp rubc-wasm/web/pkg/rubc_wasm.js        web/src/lib/wasm/
+cp rubc-wasm/web/pkg/rubc_wasm_bg.wasm   web/src/lib/wasm/
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The production Docker build does this overlay automatically against the
+wasm-opt-optimized binary, so the committed copy is only a dev convenience.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Develop
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+npm run dev          # http://localhost:3000
+```
 
-## Learn More
+## Static export
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+npm run build        # output: 'export' -> ./out
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`out/` is a fully static site. The repo's `Dockerfile` builds it and serves it
+through nginx (`deploy/nginx.conf`) with the correct `application/wasm` MIME and
+PWA caching headers. From the repo root: `docker compose up --build`.
