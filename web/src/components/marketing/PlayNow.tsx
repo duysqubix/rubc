@@ -62,9 +62,12 @@ export function PlayNow({
   children?: React.ReactNode;
 }) {
   const installEvent = useRef<BeforeInstallPromptEvent | null>(null);
+  const [href, setHref] = useState("/play/mobile");
   const [iosSheet, setIosSheet] = useState(false);
 
   useEffect(() => {
+    // Resolve the real destination on mount (the static export prerenders one).
+    setHref(playHref());
     const onBip = (e: Event) => {
       e.preventDefault();
       installEvent.current = e as BeforeInstallPromptEvent;
@@ -73,50 +76,47 @@ export function PlayNow({
     return () => window.removeEventListener("beforeinstallprompt", onBip);
   }, []);
 
-  const onClick = async (e: React.MouseEvent) => {
-    e.preventDefault();
+  // Render a REAL <a href> -- identical to the footer 'Mobile PWA' link that works
+  // reliably on iOS. We only intercept the click for the two non-navigation cases
+  // (Android native install prompt, iOS Add-to-Home-Screen modal); otherwise we let
+  // the browser follow the anchor natively (no JS navigation that iOS can drop).
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    // Already installed -> let the anchor navigate to /play/mobile natively.
+    if (isStandalone()) return;
 
-    // Desktop -> straight to the desktop player.
-    if (!isMobile()) {
-      window.location.assign("/play/desktop");
-      return;
-    }
-
-    // Already installed / running standalone -> just open the mobile player.
-    if (isStandalone()) {
-      window.location.assign("/play/mobile");
-      return;
-    }
-
-    // Android / Chrome: fire the native install prompt if we captured it.
-    if (installEvent.current) {
-      try {
-        await installEvent.current.prompt();
-        const choice = await installEvent.current.userChoice;
+    // Android/Chrome with a captured prompt -> intercept and show native install.
+    if (isMobile() && installEvent.current) {
+      e.preventDefault();
+      const ev = installEvent.current;
+      void (async () => {
+        try {
+          await ev.prompt();
+          await ev.userChoice;
+        } catch {
+          /* ignore */
+        }
         installEvent.current = null;
-        if (choice.outcome === "accepted") return;
-      } catch {
-        // fall through to the instruction sheet / player
-      }
-      window.location.assign("/play/mobile");
+      })();
       return;
     }
 
-    // iOS (any browser) has no install API -> show the Add-to-Home-Screen modal.
-    if (isIos()) {
+    // iOS (any browser) -> intercept and show the Add-to-Home-Screen modal.
+    if (isMobile() && isIos()) {
+      e.preventDefault();
       setIosSheet(true);
       return;
     }
 
-    // Other mobile with no install prompt available -> just open the player.
-    setIosSheet(true);
+    // Everything else (desktop, mobile-no-install) -> native anchor navigation.
   };
 
   return (
     <>
-      <Button variant="primary" size={size} onClick={onClick}>
-        {children || "Play Now ▸"}
-      </Button>
+      <a href={href} onClick={onClick} style={{ textDecoration: "none", display: "inline-flex" }}>
+        <Button variant="primary" size={size}>
+          {children || "Play Now ▸"}
+        </Button>
+      </a>
       {iosSheet && <IosInstallSheet onClose={() => setIosSheet(false)} />}
     </>
   );

@@ -3,13 +3,6 @@ import { Button, Badge } from "@/components/ui";
 import { PlayNow } from "@/components/marketing/PlayNow";
 
 function Nav() {
-  const linkStyle: React.CSSProperties = {
-    fontFamily: "var(--font-mono)",
-    fontSize: 13,
-    color: "var(--text-muted)",
-    textDecoration: "none",
-    letterSpacing: "0.02em",
-  };
   return (
     <nav
       className="rubc-nav"
@@ -25,21 +18,7 @@ function Nav() {
         backdropFilter: "blur(8px)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 36 }}>
-        <img
-          src="/logo.png"
-          alt="rubc"
-          style={{ height: 30, imageRendering: "pixelated" }}
-        />
-        <a
-          href="https://github.com/duysqubix/rubc"
-          target="_blank"
-          rel="noreferrer"
-          style={linkStyle}
-        >
-          GitHub ↗
-        </a>
-      </div>
+      <span />
       <PlayNow size="sm" />
     </nav>
   );
