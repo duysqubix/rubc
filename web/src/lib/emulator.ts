@@ -470,6 +470,19 @@ export class EmulatorCore {
     this.rafId = requestAnimationFrame(this.loop);
   }
 
+  // Retarget the draw surface to a new canvas WITHOUT reloading the ROM. Needed
+  // when the Viewport remounts (e.g. switching to Library and back): the running
+  // emulator keeps drawing, but to a now-detached canvas, leaving the new one
+  // black. Rebind the 2D context + imageData so drawFrame paints the live canvas.
+  setCanvas(canvas: HTMLCanvasElement) {
+    if (!this.emu) return;
+    this.canvasCtx = canvas.getContext("2d");
+    if (this.canvasCtx) {
+      this.imageData = this.canvasCtx.createImageData(this.emu.width, this.emu.height);
+      this.drawFrame();
+    }
+  }
+
   setButton(btn: number, pressed: boolean) {
     if (this.emu) this.emu.set_button(btn, pressed);
   }

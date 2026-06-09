@@ -218,7 +218,14 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   const attachCanvas = useCallback(
     (canvas: HTMLCanvasElement | null) => {
       canvasRef.current = canvas;
-      if (canvas && stateRef.current.romId && stateRef.current.phase !== "empty") {
+      if (!canvas || !stateRef.current.romId || stateRef.current.phase === "empty") return;
+      // If the emulator is already running this ROM (e.g. the Viewport just
+      // remounted after a view switch), rebind the live canvas instead of
+      // reloading -- loadCore(force=false) would bail and leave the new canvas
+      // black. Otherwise load the core normally.
+      if (emulator.emu && lastLoadedRomRef.current === stateRef.current.romId) {
+        emulator.setCanvas(canvas);
+      } else {
         void loadCore(stateRef.current.romId, false);
       }
     },
