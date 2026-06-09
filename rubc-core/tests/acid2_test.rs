@@ -562,6 +562,23 @@ fn ppu_scy_change_per_line_diff_distribution() {
         eprintln!("m3_scy_change: reference wrong size -- skipping");
         return;
     }
+    diff_distribution("m3_scy_change", &frame);
+}
+
+/// Shared per-line diff localiser for a DMG mealybug ROM (ADR 0001 stage 6
+/// diagnose). Prints total, first-wrong pixel, and the worst lines.
+#[cfg(feature = "trace")]
+fn diff_distribution(name: &str, frame: &[u8]) {
+    let Ok(reference) =
+        std::fs::read(suites_dir().join(format!("mealybug/expected/DMG-raw/{name}.bin")))
+    else {
+        eprintln!("{name}: reference absent -- skipping");
+        return;
+    };
+    if reference.len() != FRAMEBUFFER_PIXELS {
+        eprintln!("{name}: reference wrong size -- skipping");
+        return;
+    }
     let mut per_line = [0u32; 144];
     let mut first_wrong: Option<(usize, usize, u8, u8)> = None;
     for (y, line_count) in per_line.iter_mut().enumerate() {
@@ -578,11 +595,10 @@ fn ppu_scy_change_per_line_diff_distribution() {
         }
     }
     let total: u32 = per_line.iter().sum();
-    println!("---- m3_scy_change per-line diff (total {total}) ----");
+    println!("---- {name} per-line diff (total {total}) ----");
     if let Some((x, y, got, want)) = first_wrong {
         println!("first wrong pixel: x={x} y={y} got={got} want={want}");
     }
-    // Lines with the most diffs, to see if it's localised or spread.
     let mut lines: Vec<(usize, u32)> = per_line
         .iter()
         .copied()
@@ -591,7 +607,27 @@ fn ppu_scy_change_per_line_diff_distribution() {
         .collect();
     lines.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
     println!("lines with diffs: {} of 144", lines.len());
-    for (y, c) in lines.iter().take(20) {
+    for (y, c) in lines.iter().take(12) {
         println!("  LY{y}: {c} wrong");
+    }
+}
+
+/// ADR 0001 stage 6: localise the near-zero DMG facets (independent of the
+/// m3_scy_change SCY-race ceiling). Prints each facet's diff distribution.
+#[cfg(feature = "trace")]
+#[test]
+fn mealybug_near_zero_facet_diffs() {
+    for name in [
+        "m3_scx_high_5_bits",
+        "m3_window_timing",
+        "m3_lcdc_obj_size_change",
+        "m3_lcdc_obj_en_change",
+        "m3_obp0_change",
+    ] {
+        let Some(frame) = render_dmg_with_bootrom(&format!("mealybug/{name}.gb")) else {
+            eprintln!("{name}: no breakpoint -- skipping");
+            continue;
+        };
+        diff_distribution(name, &frame);
     }
 }
