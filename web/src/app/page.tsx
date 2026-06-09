@@ -64,8 +64,7 @@ function Hero() {
             textWrap: "balance",
           }}
         >
-          Game Boy,<br />exactly as the<br />
-          <span style={{ color: "var(--accent)" }}>silicon</span> meant it.
+          <span style={{ color: "var(--accent)" }}>rubc</span> —<br />Hardware Accurate<br />Game Boy Emulator<br />written in Rust
         </h1>
         <p
           style={{
