@@ -196,6 +196,20 @@ body {
   font-family: var(--font-sans);
 }
 
+/* iOS standalone PWA hardening:
+   - touch-action: manipulation defeats the WebKit double-tap/zoom tap-delay +
+     gesture-swallowing that can make taps dead in a Home Screen web app
+     (more reliable than the user-scalable=no meta tag in standalone).
+   - nextjs-portal pointer-events:none ensures a dev error overlay (if any) can't
+     act as an invisible event-absorbing pane over the UI. Harmless in the static
+     export (no portal exists there). */
+button, a, [role="button"], input, label, summary {
+  touch-action: manipulation;
+}
+nextjs-portal {
+  pointer-events: none !important;
+}
+
 /* ---- Homepage responsive ---- */
 .rubc-nav {
   padding: 16px 48px;
