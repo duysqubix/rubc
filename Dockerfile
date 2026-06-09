@@ -21,7 +21,7 @@ ARG WASM_BINDGEN_VERSION=0.2.122
 WORKDIR /build
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends binaryen \
+ && apt-get install -y --no-install-recommends binaryen clang \
  && rm -rf /var/lib/apt/lists/* \
  && cargo install wasm-bindgen-cli --version "${WASM_BINDGEN_VERSION}" --locked
 
