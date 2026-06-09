@@ -133,3 +133,31 @@ scaffolding + the trace instrument are kept as a net improvement and the tool
 that proved this. Remaining mealybug facets that do *not* write `SCY` mid-mode-3
 (palette/window/obj/tile classes) and `oam_bug` subtest 7 may have independent,
 fixable mechanisms and are assessed separately.
+
+## Stage 6 outcome (2026-06-09): the near-zero facets are not independently winnable
+
+After the stage-5 ceiling, the near-zero DMG facets were investigated as
+potentially-independent bugs (a `PpuPhaseTrace`-backed per-line/per-pixel
+localiser was added). Each was empirically falsified or proved coupled, all
+reverted clean with the crown jewels at 0/0:
+
+- **`m3_lcdc_obj_size_change`** (150px, sprite-fetch path): hypothesis was a
+  too-late `LCDC.2` (OBJ height) sample. A latch sweep showed the opposite —
+  fetch-start=190, mid-fetch=170, load (current)=150. Sampling *earlier*
+  monotonically worsens it, so the load-time sample is already optimal; the
+  residual is the same cross-actor CPU-write-vs-fetch race as `m3_scy_change`.
+- **`m3_window_timing`** (103px, window-FIFO path): genuinely a distinct
+  mechanism (the ROM writes WX 0..7 across LY0-8; the reference wants a stable
+  3-leading-zero window start). But the fix (cancel the WX-derived
+  `scx_discard` at the off-edge window start) regressed every sibling window
+  facet — `m3_wx_4_change` 3077→9800, `m3_window_timing_wx_0` 1346→2783,
+  `m3_lcdc_win_en_change_multiple_wx` 952→970. The variable `scx_discard` is
+  load-bearing across the coupled window model; it cannot be fixed in isolation.
+
+**Verdict (Oracle, binding):** the entire mid-mode-3 facet class is either the
+lockstep cross-actor ceiling or a coupled-model problem where an isolated fix
+regresses siblings. None is independently winnable under the current
+architecture. The honest, no-fake-passes outcome is to gate the class at
+baseline (exact diffs visible) and pursue the CPU/PPU co-scheduler (`rubc-t2qr`)
+as a deliberate, separately-reviewed future effort — not an autonomous rewrite
+that risks the shipped pixel-exact crown jewels.
