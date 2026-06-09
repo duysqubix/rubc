@@ -463,8 +463,7 @@ fn cgb_acid_hell_report() {
 /// ADR 0001 stage 3: prove the PPU phase trace actually captures per-fetch-step
 /// register samples on a mid-mode-3 ROM. This is the instrument the stage-5
 /// calibration is judged by: "at tile 0x42 on LY 0, the LOW-byte fetch sampled
-/// SCY=X while the HIGH-byte fetch sampled SCY=Y". Stage 3 only asserts the
-/// trace RECORDS those samples in phase order; stage 5 will assert the values.
+/// SCY=2 while the HIGH-byte fetch sampled SCY=3".
 #[cfg(feature = "trace")]
 #[test]
 fn ppu_phase_trace_captures_scy_change_fetch_steps() {
@@ -500,17 +499,41 @@ fn ppu_phase_trace_captures_scy_change_fetch_steps() {
         has_full_fetch,
         "trace must capture a TileNo->Low->High fetch sequence on LY 0"
     );
-    // The fetch steps appear in canonical order; the trace is the instrument that
-    // proved m3_scy_change is a CPU-instruction-vs-PPU-dot phase ceiling (the BG
-    // TileNo fetch and the colliding SCY write share a dot_ticks but the write
-    // commits after the fetch within that dot -- see docs/adr/0001).
-    let tileno_samples = samples
-        .iter()
-        .filter(|s| s.phase == rubc_core::diag::ppu_trace::PpuPhase::TileNo)
-        .count();
+    let target_fetch = samples
+        .windows(2)
+        .find(|w| {
+            w[0].ly == 0
+                && w[0].tile == 0x42
+                && w[0].phase == PpuPhase::TileDataLow
+                && w[1].ly == 0
+                && w[1].tile == 0x42
+                && w[1].phase == PpuPhase::TileDataHigh
+        })
+        .expect("trace must capture LY0 tile 0x42 LOW->HIGH fetch");
+    let low = target_fetch[0];
+    let high = target_fetch[1];
+    assert_eq!(
+        low.scy, 2,
+        "LY0 tile 0x42 LOW fetch must see SCY=2 at dot {}",
+        low.line_dot
+    );
+    assert_eq!(
+        high.scy, 3,
+        "LY0 tile 0x42 HIGH fetch must see SCY=3 at dot {} after LOW dot {}",
+        high.line_dot, low.line_dot
+    );
+
+    let has_colliding_write = trace.writes().iter().any(|w| {
+        w.ly == 0
+            && w.addr == 0xFF42
+            && w.value == 3
+            && low.dot_ticks < w.dot_ticks
+            && w.dot_ticks <= high.dot_ticks
+    });
     assert!(
-        tileno_samples > 0,
-        "trace must record TileNo Y-latch samples"
+        has_colliding_write,
+        "SCY=3 write must land between LOW dot {} and HIGH dot {} for tile 0x42",
+        low.dot_ticks, high.dot_ticks
     );
 }
 

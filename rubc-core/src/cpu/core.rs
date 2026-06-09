@@ -9,6 +9,8 @@ use crate::bus::CpuBus;
 
 use super::regs::Regs;
 
+const PPU_IRQ_BITS: u8 = 0x03;
+
 fn time_after(start: Time, offset: u8) -> Time {
     Time(start.0 + u64::from(offset))
 }
@@ -229,6 +231,10 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
         self.inner.advance_to(target);
     }
 
+    fn sync_ppu_to_cpu(&mut self) {
+        self.inner.sync_ppu_to_cpu();
+    }
+
     fn end_cpu_cycle(&mut self) {
         self.inner.end_cpu_cycle();
     }
@@ -287,6 +293,18 @@ impl Cpu {
             elapsed_t: 0,
             plan: None,
         });
+    }
+
+    fn sync_ppu_if_irq_can_affect_boundary<B: CpuBus>(&self, bus: &mut B) {
+        if bus.ie() & PPU_IRQ_BITS != 0 {
+            bus.sync_ppu_to_cpu();
+        }
+    }
+
+    fn sync_ppu_if_halt_can_wake<B: CpuBus>(&self, bus: &mut B) {
+        if bus.ie() & PPU_IRQ_BITS != 0 {
+            bus.sync_ppu_to_cpu();
+        }
     }
 
     pub fn step_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
@@ -358,6 +376,7 @@ impl Cpu {
                             self.ime_delay_boundary -= 1;
                         }
                     }
+                    self.sync_ppu_if_irq_can_affect_boundary(bus);
                     bus.boundary();
                     if self.try_dispatch_interrupt(bus) {
                         self.step_dispatch(bus);
@@ -413,6 +432,7 @@ impl Cpu {
                             self.ime_delay_boundary -= 1;
                         }
                     }
+                    self.sync_ppu_if_irq_can_affect_boundary(bus);
                     bus.boundary();
                     if self.try_dispatch_interrupt(bus) {
                         self.step_dispatch_via_t(bus);
@@ -455,6 +475,7 @@ impl Cpu {
         loop {
             match self.mode {
                 CpuMode::Halt => {
+                    self.sync_ppu_if_halt_can_wake(bus);
                     bus.boundary();
                     if bus.irq_pending_mask() != 0 {
                         self.mode = CpuMode::Running;
@@ -488,6 +509,7 @@ impl Cpu {
                                 self.ime_delay_boundary -= 1;
                             }
                         }
+                        self.sync_ppu_if_irq_can_affect_boundary(bus);
                         bus.boundary();
                         if self.try_dispatch_interrupt(bus) {
                             continue;
@@ -562,6 +584,7 @@ impl Cpu {
         loop {
             match self.mode {
                 CpuMode::Halt => {
+                    self.sync_ppu_if_halt_can_wake(bus);
                     bus.boundary();
                     if bus.irq_pending_mask() != 0 {
                         self.mode = CpuMode::Running;
@@ -589,6 +612,7 @@ impl Cpu {
                                 self.ime_delay_boundary -= 1;
                             }
                         }
+                        self.sync_ppu_if_irq_can_affect_boundary(bus);
                         bus.boundary();
                         if self.try_dispatch_interrupt(bus) {
                             continue;
@@ -704,7 +728,8 @@ impl Cpu {
         self.ime_delay_boundary = 0;
     }
 
-    pub(super) fn enter_halt<B: CpuBus>(&mut self, bus: &B) {
+    pub(super) fn enter_halt<B: CpuBus>(&mut self, bus: &mut B) {
+        self.sync_ppu_if_halt_can_wake(bus);
         if !self.ime && bus.irq_pending_mask() != 0 {
             // HALT bug: PC fails to increment on the next fetch.
             self.halt_bug = true;

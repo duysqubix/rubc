@@ -424,7 +424,7 @@ fn halt_bug_fetch_fixture() -> (Cpu, FlatBus) {
     bus.poke(0x0100, 0x00);
     bus.set_ie(0x01);
     bus.set_if(0x01);
-    cpu.enter_halt(&bus);
+    cpu.enter_halt(&mut bus);
     (cpu, bus)
 }
 

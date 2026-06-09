@@ -136,13 +136,16 @@ impl Machine {
     pub fn step_frame(&mut self) {
         // Step out of any in-progress VBlank first so we stop on the NEXT entry.
         let mut guard: u32 = 0;
+        self.bus.sync_ppu_to_cpu();
         while self.bus.ppu.mode == crate::bus::ppu::mode::VBLANK && guard < 200_000 {
             self.step_instruction();
+            self.bus.sync_ppu_to_cpu();
             guard += 1;
         }
         guard = 0;
         while self.bus.ppu.mode != crate::bus::ppu::mode::VBLANK && guard < 200_000 {
             self.step_instruction();
+            self.bus.sync_ppu_to_cpu();
             guard += 1;
         }
     }
@@ -321,6 +324,7 @@ impl Machine {
                 return RunStop::Stuck;
             }
             if self.opcode_at_pc() == 0x40 {
+                self.bus.sync_ppu_to_cpu();
                 return RunStop::MooneyeBreakpoint;
             }
             self.step_instruction();
