@@ -185,6 +185,33 @@ fn pixel_diff(frame: &[u8], reference: &[u8]) -> usize {
         .count()
 }
 
+fn framebuffer_hash(frame: &[u8]) -> u64 {
+    frame.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+#[test]
+fn dmg_acid2_framebuffer_characterization_hash_stays_stable() {
+    const EXPECTED_HASH: u64 = 0xf272_a8ff_e3db_4c16;
+    const EXPECTED_PREFIX: [u8; 32] = [0; 32];
+
+    let Some(frame) = render("acid2/dmg-acid2.gb", false) else {
+        eprintln!("dmg-acid2 characterization: ROM absent -- skipping");
+        return;
+    };
+
+    let hash = framebuffer_hash(&frame);
+    let prefix = &frame[..EXPECTED_PREFIX.len()];
+    println!("dmg-acid2 characterization hash: {hash:#018x}; prefix: {prefix:?}");
+
+    assert_eq!(
+        hash, EXPECTED_HASH,
+        "dmg-acid2 framebuffer hash changed: {hash:#018x}; prefix: {prefix:?}"
+    );
+    assert_eq!(prefix, EXPECTED_PREFIX);
+}
+
 #[test]
 fn dmg_acid2_renders_exactly() {
     let Some(frame) = render("acid2/dmg-acid2.gb", false) else {

@@ -595,6 +595,20 @@ impl Ppu {
         palettes: DmgPalettes,
         cgb: CgbRenderState,
     ) {
+        if !self.phase_dot_start(palettes, cgb) {
+            return;
+        }
+        if !self.phase_mode_edge_line_advance(irq) {
+            return;
+        }
+        if self.ly <= LAST_VISIBLE_LINE {
+            self.phase_mode_edge_visible_preamble();
+            self.phase_mode_body(vram, oam, irq);
+        }
+        self.phase_stat_settle(irq);
+    }
+
+    fn phase_dot_start(&mut self, palettes: DmgPalettes, cgb: CgbRenderState<'_>) -> bool {
         self.bgp = palettes.bgp;
         self.obp0 = palettes.obp0;
         self.obp1 = palettes.obp1;
@@ -604,55 +618,76 @@ impl Ppu {
         self.dot_ticks += 1;
         if !self.enabled {
             self.tile_sel_glitch = false;
-            return;
+            return false;
         }
 
+        true
+    }
+
+    fn phase_mode_edge_line_advance(&mut self, irq: &mut Interrupts) -> bool {
         self.line_dot += 1;
         if self.line_dot >= self.dots_this_line() {
             self.start_next_scanline(irq);
-            self.update_stat_line(irq);
-            return;
+            self.phase_stat_settle(irq);
+            return false;
         }
 
-        if self.ly <= LAST_VISIBLE_LINE {
-            if self.lcd_on_line1_coincidence_delay && self.line_dot >= 4 {
-                self.update_coincidence();
-                self.lcd_on_line1_coincidence_delay = false;
-            }
+        true
+    }
 
-            self.update_visible_stat_read_mode();
-
-            if self.line_dot == DOTS_PER_LINE - 4 && self.ly == LAST_VISIBLE_LINE && self.cgb_mode {
-                self.stat_mode2_pulse = true;
-            }
-
-            match self.mode {
-                mode::OAM_SCAN => {
-                    self.tick_oam_scan(oam);
-                    if self.line_dot >= MODE2_DOTS {
-                        self.lcd_on_line1_delayed_mode2 = false;
-                        self.enter_drawing(irq);
-                    }
-                }
-                mode::DRAWING => self.tick_drawing(vram, irq),
-                mode::HBLANK => {
-                    if self.lcd_on_line1_delayed_mode2 && self.line_dot >= 4 {
-                        self.begin_oam_scan();
-                        self.set_mode(mode::OAM_SCAN, irq);
-                        self.stat_read_mode = mode::OAM_SCAN;
-                        self.stat_mode2_pulse = true;
-                    } else if self.first_line_after_lcd_on
-                        && self.ly == 0
-                        && self.line_dot >= LCD_ON_FIRST_MODE3_START
-                        && self.lcd_x == 0
-                    {
-                        self.enter_drawing(irq);
-                    }
-                }
-                _ => {}
-            }
+    fn phase_mode_edge_visible_preamble(&mut self) {
+        if self.lcd_on_line1_coincidence_delay && self.line_dot >= 4 {
+            self.update_coincidence();
+            self.lcd_on_line1_coincidence_delay = false;
         }
 
+        self.update_visible_stat_read_mode();
+
+        if self.line_dot == DOTS_PER_LINE - 4 && self.ly == LAST_VISIBLE_LINE && self.cgb_mode {
+            self.stat_mode2_pulse = true;
+        }
+    }
+
+    fn phase_mode_body(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        oam: &[u8; 0xA0],
+        irq: &mut Interrupts,
+    ) {
+        match self.mode {
+            mode::OAM_SCAN => {
+                self.phase_oam_scan(oam);
+                self.phase_oam_to_drawing_edge(irq);
+            }
+            mode::DRAWING => self.phase_drawing_dot(vram, irq),
+            mode::HBLANK => self.phase_hblank_mode_edge(irq),
+            _ => {}
+        }
+    }
+
+    fn phase_oam_to_drawing_edge(&mut self, irq: &mut Interrupts) {
+        if self.line_dot >= MODE2_DOTS {
+            self.lcd_on_line1_delayed_mode2 = false;
+            self.enter_drawing(irq);
+        }
+    }
+
+    fn phase_hblank_mode_edge(&mut self, irq: &mut Interrupts) {
+        if self.lcd_on_line1_delayed_mode2 && self.line_dot >= 4 {
+            self.begin_oam_scan();
+            self.set_mode(mode::OAM_SCAN, irq);
+            self.stat_read_mode = mode::OAM_SCAN;
+            self.stat_mode2_pulse = true;
+        } else if self.first_line_after_lcd_on
+            && self.ly == 0
+            && self.line_dot >= LCD_ON_FIRST_MODE3_START
+            && self.lcd_x == 0
+        {
+            self.enter_drawing(irq);
+        }
+    }
+
+    fn phase_stat_settle(&mut self, irq: &mut Interrupts) {
         self.update_stat_line(irq);
     }
 
@@ -766,7 +801,7 @@ impl Ppu {
         }
     }
 
-    fn tick_oam_scan(&mut self, oam: &[u8; 0xA0]) {
+    fn phase_oam_scan(&mut self, oam: &[u8; 0xA0]) {
         if self.line_dot == 1 {
             self.begin_oam_scan();
         }
@@ -846,31 +881,77 @@ impl Ppu {
         self.set_mode(mode::DRAWING, irq);
     }
 
-    fn tick_drawing(&mut self, vram: &[[u8; 0x2000]; 2], irq: &mut Interrupts) {
-        self.drawing_dots += 1;
+    fn phase_drawing_dot(&mut self, vram: &[[u8; 0x2000]; 2], irq: &mut Interrupts) {
+        self.phase_drawing_dot_start();
+        if self.phase_sprite_idle(vram) {
+            return;
+        }
+        if self.phase_pending_sprite_fetch(vram) {
+            return;
+        }
 
+        self.phase_window_compare_pre_sprite();
+        self.phase_window_glitch_pixel();
+        if self.phase_try_start_sprite_fetch(vram) {
+            return;
+        }
+
+        self.phase_bg_fetcher(vram);
+        if self.phase_pixel_shift_or_emit(irq) {
+            self.phase_window_compare_post_emit();
+        }
+    }
+
+    fn phase_drawing_dot_start(&mut self) {
+        self.drawing_dots += 1;
+    }
+
+    fn phase_sprite_idle(&mut self, vram: &[[u8; 0x2000]; 2]) -> bool {
         if self.sprite_idle_ticks > 0 {
             self.clock_bg_fetcher(vram);
             self.sprite_idle_ticks -= 1;
-            return;
+            return true;
         }
 
+        false
+    }
+
+    fn phase_pending_sprite_fetch(&mut self, vram: &[[u8; 0x2000]; 2]) -> bool {
         if self.pending_sprite.is_some() {
             self.advance_sprite_fetch(vram);
-            return;
+            return true;
         }
 
+        false
+    }
+
+    fn phase_window_compare_pre_sprite(&mut self) {
         self.maybe_start_window();
+    }
+
+    fn phase_window_glitch_pixel(&mut self) {
         self.maybe_push_window_glitch_pixel();
+    }
+
+    fn phase_try_start_sprite_fetch(&mut self, vram: &[[u8; 0x2000]; 2]) -> bool {
         if self.try_start_sprite_fetch() {
             self.advance_sprite_fetch(vram);
-            return;
+            return true;
         }
 
+        false
+    }
+
+    fn phase_bg_fetcher(&mut self, vram: &[[u8; 0x2000]; 2]) {
         self.clock_bg_fetcher(vram);
-        if self.shift_pixel(irq) {
-            self.maybe_start_window();
-        }
+    }
+
+    fn phase_pixel_shift_or_emit(&mut self, irq: &mut Interrupts) -> bool {
+        self.shift_pixel(irq)
+    }
+
+    fn phase_window_compare_post_emit(&mut self) {
+        self.maybe_start_window();
     }
 
     fn finish_drawing(&mut self, irq: &mut Interrupts) {
@@ -887,6 +968,23 @@ impl Ppu {
     }
 
     fn clock_bg_fetcher(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        self.phase_bg_window_resume_gate();
+        if self.phase_fifo_push() {
+            return;
+        }
+        if !self.phase_bg_fetcher_tick_counter() {
+            return;
+        }
+
+        match self.bg_fetcher.step {
+            FetchStep::TileNo => self.phase_bg_tile_no_sample(vram),
+            FetchStep::TileDataLow => self.phase_bg_low_sample(vram),
+            FetchStep::TileDataHigh => self.phase_bg_high_sample(vram),
+            FetchStep::Push => unreachable!("push step handled before tick accounting"),
+        }
+    }
+
+    fn phase_bg_window_resume_gate(&mut self) {
         if self.window_disable_pending && self.bg_fifo.is_empty() {
             if self.lcdc & 0x20 == 0 {
                 self.stop_window_fetcher_for_bg_resume();
@@ -894,7 +992,9 @@ impl Ppu {
                 self.window_disable_pending = false;
             }
         }
+    }
 
+    fn phase_fifo_push(&mut self) -> bool {
         if self.bg_fetcher.step == FetchStep::Push {
             if self.bg_fifo.is_empty() {
                 let x_flip = self.cgb_mode && self.bg_fetcher.attr & 0x20 != 0;
@@ -914,76 +1014,78 @@ impl Ppu {
                 self.bg_fetcher.step = FetchStep::TileNo;
                 self.bg_fetcher.step_ticks = 0;
             }
-            return;
+            return true;
         }
 
+        false
+    }
+
+    fn phase_bg_fetcher_tick_counter(&mut self) -> bool {
         self.bg_fetcher.step_ticks += 1;
         if self.bg_fetcher.step_ticks < 2 {
-            return;
+            return false;
         }
         self.bg_fetcher.step_ticks = 0;
 
-        match self.bg_fetcher.step {
-            FetchStep::TileNo => {
-                // Latch map/window Y at TileNo. DMG can re-sample SCY before
-                // the low data byte below; CGB-D+ keeps this TileNo Y for data.
-                self.bg_fetcher.y = if self.bg_fetcher.window {
-                    self.bg_fetcher.y
-                } else {
-                    self.ly.wrapping_add(self.scy)
-                };
-                self.bg_fetcher.scy_at_tile_no = self.scy;
+        true
+    }
 
-                let (tile, attr) = self.fetch_bg_tile_no(vram);
-                self.bg_fetcher.tile = tile;
-                self.bg_fetcher.attr = attr;
-                #[cfg(feature = "trace")]
-                self.trace_sample(
-                    crate::diag::ppu_trace::PpuPhase::TileNo,
-                    self.bg_fetcher.fetcher_x,
-                    tile,
-                );
-                self.bg_fetcher.step = FetchStep::TileDataLow;
-            }
-            FetchStep::TileDataLow => {
-                if !self.bg_fetcher.window
-                    && !self.cgb_mode
-                    && self.scy != self.bg_fetcher.scy_at_tile_no
-                {
-                    self.bg_fetcher.y = self.ly.wrapping_add(self.scy);
-                    let (tile, attr) = self.fetch_bg_tile_no(vram);
-                    self.bg_fetcher.tile = tile;
-                    self.bg_fetcher.attr = attr;
-                }
-                let addr = self.fetch_bg_tile_data_addr();
-                self.bg_fetcher.low = self.fetch_bg_tile_data_byte(vram, addr);
-                #[cfg(feature = "trace")]
-                self.trace_sample(
-                    crate::diag::ppu_trace::PpuPhase::TileDataLow,
-                    self.bg_fetcher.fetcher_x,
-                    self.bg_fetcher.tile,
-                );
-                self.bg_fetcher.step = FetchStep::TileDataHigh;
-            }
-            FetchStep::TileDataHigh => {
-                let addr = self.fetch_bg_tile_data_addr() + 1;
-                self.bg_fetcher.high = self.fetch_bg_tile_data_byte(vram, addr);
-                #[cfg(feature = "trace")]
-                self.trace_sample(
-                    crate::diag::ppu_trace::PpuPhase::TileDataHigh,
-                    self.bg_fetcher.fetcher_x,
-                    self.bg_fetcher.tile,
-                );
-                if self.bg_fetcher.dummy_fetch_done {
-                    self.bg_fetcher.step = FetchStep::Push;
-                } else {
-                    // First high-byte completion on a scanline is the documented
-                    // dummy fetch: reset to step 1, creating the 12-dot startup.
-                    self.bg_fetcher.dummy_fetch_done = true;
-                    self.bg_fetcher.step = FetchStep::TileNo;
-                }
-            }
-            FetchStep::Push => unreachable!("push step handled before tick accounting"),
+    fn phase_bg_tile_no_sample(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        // Latch map/window Y at TileNo. DMG can re-sample SCY before
+        // the low data byte below; CGB-D+ keeps this TileNo Y for data.
+        self.bg_fetcher.y = if self.bg_fetcher.window {
+            self.bg_fetcher.y
+        } else {
+            self.ly.wrapping_add(self.scy)
+        };
+        self.bg_fetcher.scy_at_tile_no = self.scy;
+
+        let (tile, attr) = self.fetch_bg_tile_no(vram);
+        self.bg_fetcher.tile = tile;
+        self.bg_fetcher.attr = attr;
+        #[cfg(feature = "trace")]
+        self.trace_sample(
+            crate::diag::ppu_trace::PpuPhase::TileNo,
+            self.bg_fetcher.fetcher_x,
+            tile,
+        );
+        self.bg_fetcher.step = FetchStep::TileDataLow;
+    }
+
+    fn phase_bg_low_sample(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        if !self.bg_fetcher.window && !self.cgb_mode && self.scy != self.bg_fetcher.scy_at_tile_no {
+            self.bg_fetcher.y = self.ly.wrapping_add(self.scy);
+            let (tile, attr) = self.fetch_bg_tile_no(vram);
+            self.bg_fetcher.tile = tile;
+            self.bg_fetcher.attr = attr;
+        }
+        let addr = self.fetch_bg_tile_data_addr();
+        self.bg_fetcher.low = self.fetch_bg_tile_data_byte(vram, addr);
+        #[cfg(feature = "trace")]
+        self.trace_sample(
+            crate::diag::ppu_trace::PpuPhase::TileDataLow,
+            self.bg_fetcher.fetcher_x,
+            self.bg_fetcher.tile,
+        );
+        self.bg_fetcher.step = FetchStep::TileDataHigh;
+    }
+
+    fn phase_bg_high_sample(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        let addr = self.fetch_bg_tile_data_addr() + 1;
+        self.bg_fetcher.high = self.fetch_bg_tile_data_byte(vram, addr);
+        #[cfg(feature = "trace")]
+        self.trace_sample(
+            crate::diag::ppu_trace::PpuPhase::TileDataHigh,
+            self.bg_fetcher.fetcher_x,
+            self.bg_fetcher.tile,
+        );
+        if self.bg_fetcher.dummy_fetch_done {
+            self.bg_fetcher.step = FetchStep::Push;
+        } else {
+            // First high-byte completion on a scanline is the documented
+            // dummy fetch: reset to step 1, creating the 12-dot startup.
+            self.bg_fetcher.dummy_fetch_done = true;
+            self.bg_fetcher.step = FetchStep::TileNo;
         }
     }
 
