@@ -20,6 +20,7 @@ pub mod apu;
 pub mod cartridge;
 pub mod flat;
 pub mod ppu;
+pub mod scheduler;
 pub mod serial;
 pub mod sm83_vectors;
 pub mod stubs;
@@ -251,6 +252,11 @@ pub struct Bus {
     dma: OamDma,
     hdma: Hdma,
 
+    /// Sub-dot timing clock (ADR 0001). Stage 1: advances in lockstep with
+    /// `t_tick_count` and changes no behavior; later stages give CPU writes and
+    /// PPU fetch samples explicit sub-dot ordering relative to this clock.
+    #[serde(default)]
+    clock: scheduler::Time,
     /// Test/diagnostic hook: total `tick_cpu_t` calls so far this run.
     t_tick_count: u64,
     /// Snapshot of `t_tick_count` taken at the last latched access (for tests
@@ -290,6 +296,7 @@ impl Default for Bus {
             dma: OamDma::default(),
             hdma: Hdma::default(),
             t_tick_count: 0,
+            clock: scheduler::Time::ZERO,
             ticks_at_last_sample: 0,
             serial_out: Vec::new(),
         }
@@ -355,6 +362,13 @@ impl Bus {
 
     pub fn total_ticks(&self) -> u64 {
         self.t_tick_count
+    }
+
+    /// The sub-dot timing clock (ADR 0001). Stage 1 invariant: its whole-T count
+    /// equals `total_ticks()`; later stages may add intra-T sub-phase ordering
+    /// but the whole-T count must always track the T-cycle count.
+    pub fn clock(&self) -> scheduler::Time {
+        self.clock
     }
 
     /// Build a flight record from the current (post-M-cycle) bus state. The CPU
@@ -455,6 +469,14 @@ impl Bus {
 
     fn tick_cpu_t(&mut self) {
         self.t_tick_count += 1;
+        // Stage 1 (ADR 0001): advance the sub-dot clock one whole T in lockstep
+        // with t_tick_count. Behavior-preserving -- nothing reads `clock` yet.
+        self.clock.advance_t();
+        debug_assert_eq!(
+            self.clock.t(),
+            self.t_tick_count,
+            "sub-dot clock must track t_tick_count in lockstep (ADR 0001 stage 1)"
+        );
 
         let div_apu_before = self.div_apu_bit_high();
         self.timer.tick_t(&mut self.interrupts);
