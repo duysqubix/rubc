@@ -124,6 +124,7 @@ function IosInstallSheet({ onClose }: { onClose: () => void }) {
         alignItems: "flex-end",
         justifyContent: "center",
         background: "color-mix(in srgb, var(--bg-deep) 70%, transparent)",
+        cursor: "pointer",
       }}
     >
       <div
@@ -176,11 +177,14 @@ function IosInstallSheet({ onClose }: { onClose: () => void }) {
           <Button variant="ghost" size="md" onClick={onClose}>
             Close
           </Button>
-          <a href="/play/mobile" style={{ textDecoration: "none", flex: 1 }}>
-            <Button variant="secondary" size="md" block>
-              Play in browser instead
-            </Button>
-          </a>
+          <Button
+            variant="secondary"
+            size="md"
+            block
+            onClick={() => window.location.assign("/play/mobile")}
+          >
+            Play in browser instead
+          </Button>
         </div>
       </div>
     </div>
