@@ -34,6 +34,8 @@ const TITLE: &str = "rubc";
 const FPS_US: u64 = 16_743;
 /// Generous instruction budget for headless test-ROM runs.
 const HEADLESS_MAX_INSTRUCTIONS: u64 = 250_000_000;
+/// How long an on-screen toast ("State saved" / "State loaded") stays visible.
+const TOAST_SECS: f32 = 1.6;
 
 /// Keyboard -> Game Boy controls, shown in `--help` and `rubc controls`.
 const CONTROLS_HELP: &str = "\
@@ -101,6 +103,10 @@ enum Command {
         /// Nearest-neighbour upscale factor (1 = native 160x144).
         #[arg(long, default_value_t = 1)]
         scale: u32,
+        /// Run until the ROM's `LD B,B` completion breakpoint instead of a fixed
+        /// frame count (acid/mooneye test ROMs only show their final image then).
+        #[arg(long)]
+        until_breakpoint: bool,
         /// Force DMG mode regardless of the cartridge CGB flag.
         #[arg(long, conflicts_with = "force_cgb")]
         force_dmg: bool,
@@ -181,12 +187,35 @@ fn main() -> anyhow::Result<()> {
             out,
             frames,
             scale,
+            until_breakpoint,
             force_dmg,
             force_cgb,
         }) => {
             let mut machine = boot(&rom, force_dmg, force_cgb)?;
-            capture::capture_screenshot(&mut machine, std::path::Path::new(&out), frames, scale)?;
-            println!("wrote screenshot to {out} ({frames} frames, scale {scale})");
+            if until_breakpoint {
+                let hit = capture::capture_screenshot_at_breakpoint(
+                    &mut machine,
+                    std::path::Path::new(&out),
+                    scale,
+                    HEADLESS_MAX_INSTRUCTIONS,
+                )?;
+                println!(
+                    "wrote screenshot to {out} (until breakpoint{}, scale {scale})",
+                    if hit {
+                        ""
+                    } else {
+                        " -- NOT reached, captured last frame"
+                    }
+                );
+            } else {
+                capture::capture_screenshot(
+                    &mut machine,
+                    std::path::Path::new(&out),
+                    frames,
+                    scale,
+                )?;
+                println!("wrote screenshot to {out} ({frames} frames, scale {scale})");
+            }
             Ok(())
         }
         Some(Command::Gif {
@@ -456,6 +485,10 @@ struct RubcApp {
     logo_tex: Option<egui::TextureHandle>,
     error_msg: Option<String>,
     total_frames: u64,
+    /// Transient on-screen toast (e.g. "State saved") + when it was shown. The
+    /// toast fades out after TOAST_SECS; None when nothing is showing.
+    toast: Option<String>,
+    toast_shown: Instant,
 }
 
 impl RubcApp {
@@ -497,6 +530,8 @@ impl RubcApp {
             logo_tex: None,
             error_msg: None,
             total_frames: 0,
+            toast: None,
+            toast_shown: now,
         }
     }
 
@@ -674,12 +709,24 @@ impl RubcApp {
         self.next_deadline = self.last_frame + self.fps_target;
     }
 
+    fn flash_toast(&mut self, msg: &str) {
+        self.toast = Some(msg.to_string());
+        self.toast_shown = Instant::now();
+    }
+
     fn save_state_to_disk(&mut self) {
-        let (Some(machine), Some(path)) = (&self.machine, &self.state_path) else {
+        let result = match (&self.machine, &self.state_path) {
+            (Some(machine), Some(path)) => Some((persist_state(machine, path), path.clone())),
+            _ => None,
+        };
+        let Some((result, path)) = result else {
             return;
         };
-        match persist_state(machine, path) {
-            Ok(len) => log::info!("saved state {path:?} ({len} bytes)"),
+        match result {
+            Ok(len) => {
+                log::info!("saved state {path:?} ({len} bytes)");
+                self.flash_toast("State saved");
+            }
             Err(e) => {
                 let msg = format!("Failed to save state {path:?}: {e}");
                 log::warn!("{msg}");
@@ -692,15 +739,17 @@ impl RubcApp {
         let Some(path) = self.state_path.clone() else {
             return;
         };
-        let Some(machine) = &mut self.machine else {
-            return;
+        let result = match &mut self.machine {
+            Some(machine) => load_state(machine, &path),
+            None => return,
         };
-        match load_state(machine, &path) {
+        match result {
             Ok(len) => {
-                if let Some(audio) = &self.audio {
+                if let (Some(machine), Some(audio)) = (&mut self.machine, &self.audio) {
                     machine.bus.apu.set_sample_rate(audio.sample_rate());
                 }
                 log::info!("loaded state {path:?} ({len} bytes)");
+                self.flash_toast("State loaded");
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -916,6 +965,44 @@ impl eframe::App for RubcApp {
         }
         if clear_error {
             self.error_msg = None;
+        }
+        // Transient toast ("State saved" / "State loaded"): a pill at top-center
+        // that fades out over TOAST_SECS, then clears. Painted over the game area.
+        if let Some(text) = self.toast.clone() {
+            let age = self.toast_shown.elapsed().as_secs_f32();
+            if age >= TOAST_SECS {
+                self.toast = None;
+            } else {
+                // Hold full opacity for the first 60%, then fade to 0.
+                let fade = ((TOAST_SECS - age) / (TOAST_SECS * 0.4)).clamp(0.0, 1.0);
+                let alpha = (fade * 255.0) as u8;
+                egui::Area::new(egui::Id::new("rubc-toast"))
+                    .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 28.0))
+                    .interactable(false)
+                    .show(ui.ctx(), |ui| {
+                        let bg = egui::Color32::from_rgba_unmultiplied(
+                            20,
+                            22,
+                            28,
+                            alpha.saturating_sub(20),
+                        );
+                        egui::Frame::NONE
+                            .fill(bg)
+                            .corner_radius(8.0)
+                            .inner_margin(egui::Margin::symmetric(14, 8))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(text)
+                                        .color(egui::Color32::from_rgba_unmultiplied(
+                                            235, 235, 240, alpha,
+                                        ))
+                                        .size(15.0),
+                                );
+                            });
+                    });
+                // Keep animating the fade even with no input.
+                ui.ctx().request_repaint();
+            }
         }
         // The game screen: the framebuffer texture, aspect-preserved, centered
         // on a black field, NEAREST-filtered (no blur).

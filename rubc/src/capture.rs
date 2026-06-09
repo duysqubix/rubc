@@ -131,6 +131,27 @@ pub fn capture_screenshot(
     Ok(())
 }
 
+/// Run until the ROM hits its `LD B,B` (`0x40`) completion breakpoint -- the
+/// signal mooneye/acid test ROMs use to mark "image is final" -- then capture.
+/// Acid tests (esp. cgb-acid-hell, which mutates LCDC every scanline) only
+/// present their finished face at this breakpoint, never at a fixed frame count.
+/// Falls back to capturing whatever is on screen if `max_instructions` elapses
+/// without a breakpoint.
+pub fn capture_screenshot_at_breakpoint(
+    machine: &mut Machine,
+    out: &Path,
+    scale: u32,
+    max_instructions: u64,
+) -> anyhow::Result<bool> {
+    let stop = machine.run_mooneye(max_instructions);
+    let hit = matches!(stop, rubc_core::machine::RunStop::MooneyeBreakpoint);
+    let rgba = framebuffer_rgba(machine);
+    let k = scale.max(1) as usize;
+    let scaled = scale_rgba(&rgba, W, H, k);
+    write_png(out, &scaled, (W * k) as u32, (H * k) as u32)?;
+    Ok(hit)
+}
+
 /// A 256-colour (max) global palette plus the bit-shift used to quantize colours
 /// into it. `shift == 0` means the palette is exact (the image had <=256 distinct
 /// colours); a larger shift drops low bits per channel until the distinct count

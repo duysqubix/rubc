@@ -342,9 +342,12 @@ gallery:
     "$bin" screenshot assets/crystal.gbc --out docs/media/crystal-title.png \
         --frames 3400 --scale 3 --force-cgb
     echo "== gallery: acid2 PPU conformance stills =="
-    "$bin" screenshot "$acid2/dmg-acid2.gb"  --out docs/media/tests/dmg-acid2.png     --frames 120 --scale 3 --force-dmg
-    "$bin" screenshot "$acid2/cgb-acid2.gbc" --out docs/media/tests/cgb-acid2.png     --frames 120 --scale 3 --force-cgb
-    "$bin" screenshot assets/cgb-acid-hell.gbc --out docs/media/tests/cgb-acid-hell.png --frames 200 --scale 3 --force-cgb
+    # --until-breakpoint: acid/mooneye ROMs only present their final image at the
+    # LD B,B completion breakpoint, not at a fixed frame count (esp. cgb-acid-hell,
+    # which mutates LCDC every scanline and never settles on a frame counter).
+    "$bin" screenshot "$acid2/dmg-acid2.gb"  --out docs/media/tests/dmg-acid2.png     --until-breakpoint --scale 3 --force-dmg
+    "$bin" screenshot "$acid2/cgb-acid2.gbc" --out docs/media/tests/cgb-acid2.png     --until-breakpoint --scale 3 --force-cgb
+    "$bin" screenshot assets/cgb-acid-hell.gbc --out docs/media/tests/cgb-acid-hell.png --until-breakpoint --scale 3 --force-cgb
     echo "== gallery: blargg test-ROM PASS screens =="
     "$bin" screenshot "$blargg/cpu_instrs/cpu_instrs.gb"   --out docs/media/tests/cpu_instrs.png   --frames 4000 --scale 3 --force-dmg
     "$bin" screenshot "$blargg/instr_timing/instr_timing.gb" --out docs/media/tests/instr_timing.png --frames 400  --scale 3 --force-dmg
