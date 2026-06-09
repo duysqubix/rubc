@@ -4,6 +4,7 @@
 //! instructions advance one phase per call; zero-cycle internal transitions
 //! (e.g. boundary -> fetch) loop until exactly one bus operation happens.
 
+use crate::bus::scheduler::CpuAccessPlan;
 use crate::bus::CpuBus;
 
 use super::regs::Regs;
@@ -89,10 +90,29 @@ pub enum ActiveCpuCycle {
     },
 }
 
+impl ActiveCpuCycle {
+    /// The explicit sub-dot timing of this M-cycle (ADR 0001 stage 2). Derived
+    /// from the cycle kind + address so it reproduces today's `write_drive_ticks`
+    /// / read-at-end-of-M placement exactly -- behavior-preserving.
+    fn access_plan<B: CpuBus>(&self, bus: &B) -> CpuAccessPlan {
+        match *self {
+            ActiveCpuCycle::Write { addr, .. } => CpuAccessPlan::write(bus.write_drive_ticks(addr)),
+            ActiveCpuCycle::Fetch { .. }
+            | ActiveCpuCycle::Read { .. }
+            | ActiveCpuCycle::OamBugReadIncDec { .. } => CpuAccessPlan::read_like(),
+            ActiveCpuCycle::Idle { .. } | ActiveCpuCycle::OamBugIdu { .. } => CpuAccessPlan::idle(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ActiveCpuCycleState {
     cycle: ActiveCpuCycle,
     elapsed_t: u8,
+    /// The access plan (ADR 0001 stage 2), computed once at T0 after
+    /// `begin_cpu_cycle`. `None` until the first tick of this M-cycle.
+    #[serde(default)]
+    plan: Option<CpuAccessPlan>,
 }
 
 struct PerTOpcodeBus<'a, B> {
@@ -248,6 +268,7 @@ impl Cpu {
         self.active_cycle = Some(ActiveCpuCycleState {
             cycle,
             elapsed_t: 0,
+            plan: None,
         });
     }
 
@@ -258,18 +279,31 @@ impl Cpu {
 
         if state.elapsed_t == 0 {
             bus.begin_cpu_cycle();
+            // ADR 0001 stage 2: snapshot the explicit access plan AFTER the
+            // OAM-DMA beat in begin_cpu_cycle, so the T0 (BGP) write still lands
+            // in the same order as before.
+            let plan = state.cycle.access_plan(bus);
+            state.plan = Some(plan);
             if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
-                if bus.write_drive_ticks(addr) == 0 {
+                if plan.write_visible_at == Some(0) {
                     bus.write_latched(addr, value);
                 }
             }
         }
 
+        let plan = state
+            .plan
+            .expect("CPU access plan must be set at T0 before any tick");
+
         bus.tick_cpu_t();
         state.elapsed_t += 1;
 
+        // A write commits after the Nth tick, at subphase offset N*4. This is the
+        // same placement as the old `write_drive_ticks(addr) == elapsed_t` check,
+        // now expressed through the plan.
         if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
-            if bus.write_drive_ticks(addr) == state.elapsed_t {
+            let now = state.elapsed_t * crate::bus::scheduler::SUBPHASES_PER_T_U8;
+            if plan.write_visible_at == Some(now) {
                 bus.write_latched(addr, value);
             }
         }

@@ -1225,6 +1225,49 @@ mod tests {
     }
 
     #[test]
+    fn cpu_access_plan_matches_production_write_drive_ticks() {
+        // ADR 0001 stage 2: the explicit CpuAccessPlan must encode today's
+        // implicit write_drive_ticks timing EXACTLY for every address.
+        use crate::bus::scheduler::{CpuAccessPlan, SUBPHASES_PER_T_U8};
+        let bus = Bus::new();
+        for addr in 0u16..=u16::MAX {
+            let drive_ticks = CpuBus::write_drive_ticks(&bus, addr);
+            let plan = CpuAccessPlan::write(drive_ticks);
+            assert_eq!(
+                plan.write_visible_at,
+                Some(drive_ticks * SUBPHASES_PER_T_U8),
+                "addr ${addr:04X}: plan write offset must encode write_drive_ticks"
+            );
+            assert_eq!(
+                plan.write_visible_at.unwrap() / SUBPHASES_PER_T_U8,
+                drive_ticks,
+                "addr ${addr:04X}: plan offset must round-trip to the production T"
+            );
+        }
+        // Spot-check the canonical classes.
+        assert_eq!(
+            CpuAccessPlan::write(CpuBus::write_drive_ticks(&bus, 0xFF47)).write_visible_at,
+            Some(0),
+            "BGP commits at T0"
+        );
+        assert_eq!(
+            CpuAccessPlan::write(CpuBus::write_drive_ticks(&bus, 0xFF42)).write_visible_at,
+            Some(8),
+            "SCY commits at T2"
+        );
+        assert_eq!(
+            CpuAccessPlan::write(CpuBus::write_drive_ticks(&bus, 0xFF40)).write_visible_at,
+            Some(12),
+            "LCDC commits at T3"
+        );
+        assert_eq!(
+            CpuAccessPlan::write(CpuBus::write_drive_ticks(&bus, 0xC000)).write_visible_at,
+            Some(16),
+            "WRAM write commits at end-of-M"
+        );
+    }
+
+    #[test]
     fn ppu_visible_io_write_commits_at_t3() {
         let mut bus = Bus::new();
         let before = bus.total_ticks();

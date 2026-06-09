@@ -99,6 +99,73 @@ impl Time {
     }
 }
 
+/// `SUBPHASES_PER_T` as a `u8`, for the small relative offsets a single
+/// M-cycle access plan deals in (0..=16).
+pub const SUBPHASES_PER_T_U8: u8 = SUBPHASES_PER_T as u8;
+
+/// T-cycles in one CPU M-cycle.
+pub const CPU_M_CYCLE_TICKS: u8 = 4;
+
+/// The end-of-M-cycle offset, in subphases (4 T * 4 subphases).
+pub const CPU_ACCESS_END_OFFSET: u8 = SUBPHASES_PER_T_U8 * CPU_M_CYCLE_TICKS;
+
+/// The explicit sub-dot timing of one CPU bus M-cycle (ADR 0001 stage 2).
+///
+/// Offsets are **relative to the start of the M-cycle**, in CPU-T subphases
+/// (`0..=CPU_ACCESS_END_OFFSET`). This makes the timing that was previously
+/// implicit in `write_drive_ticks` / `step_t` into inspectable data, so stage 5
+/// can shift a phase by editing a plan rather than scattered tick counting.
+///
+/// Stage 2 is behavior-preserving: the offsets encode exactly today's timing
+/// (writes commit after the Nth `tick_cpu_t`; reads sample at end-of-M).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CpuAccessPlan {
+    /// When the access begins (always 0 today: the M-cycle start).
+    pub start: u8,
+    /// Subphase at which a write commits, or `None` for non-writes.
+    pub write_visible_at: Option<u8>,
+    /// Subphase at which a read samples its byte, or `None` for non-reads.
+    pub read_sample_at: Option<u8>,
+    /// When the access ends (end-of-M).
+    pub end: u8,
+}
+
+impl CpuAccessPlan {
+    /// An internal-work M-cycle: no memory access, just four ticks.
+    pub const fn idle() -> Self {
+        Self {
+            start: 0,
+            write_visible_at: None,
+            read_sample_at: None,
+            end: CPU_ACCESS_END_OFFSET,
+        }
+    }
+
+    /// A read/fetch M-cycle: the byte samples at end-of-M (after 4 ticks),
+    /// matching today's `read_latched` placement.
+    pub const fn read_like() -> Self {
+        Self {
+            start: 0,
+            write_visible_at: None,
+            read_sample_at: Some(CPU_ACCESS_END_OFFSET),
+            end: CPU_ACCESS_END_OFFSET,
+        }
+    }
+
+    /// A write M-cycle whose commit lands after `write_drive_ticks` ticks,
+    /// encoding today's `write_drive_ticks(addr)` exactly (T0 for BGP, T2 for
+    /// SCY/STAT/etc., T3 for other PPU-visible, T4/end for the rest).
+    pub const fn write(write_drive_ticks: u8) -> Self {
+        debug_assert!(write_drive_ticks <= CPU_M_CYCLE_TICKS);
+        Self {
+            start: 0,
+            write_visible_at: Some(write_drive_ticks * SUBPHASES_PER_T_U8),
+            read_sample_at: None,
+            end: CPU_ACCESS_END_OFFSET,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +202,38 @@ mod tests {
     fn m_cycle_is_sixteen_subphases() {
         assert_eq!(SUBPHASES_PER_M, 16);
         assert_eq!(Time::from_t(4).0, SUBPHASES_PER_M);
+    }
+
+    #[test]
+    fn access_plan_write_offsets_encode_drive_ticks() {
+        // The four canonical write-drive positions today: BGP at T0, the
+        // SCY/STAT class at T2, other PPU-visible at T3, the rest at end-of-M.
+        assert_eq!(CpuAccessPlan::write(0).write_visible_at, Some(0));
+        assert_eq!(CpuAccessPlan::write(2).write_visible_at, Some(8));
+        assert_eq!(CpuAccessPlan::write(3).write_visible_at, Some(12));
+        assert_eq!(
+            CpuAccessPlan::write(4).write_visible_at,
+            Some(CPU_ACCESS_END_OFFSET)
+        );
+    }
+
+    #[test]
+    fn access_plan_read_and_idle_shapes() {
+        let r = CpuAccessPlan::read_like();
+        assert_eq!(r.read_sample_at, Some(CPU_ACCESS_END_OFFSET));
+        assert_eq!(r.write_visible_at, None);
+
+        let i = CpuAccessPlan::idle();
+        assert_eq!(i.read_sample_at, None);
+        assert_eq!(i.write_visible_at, None);
+        assert_eq!(i.end, CPU_ACCESS_END_OFFSET);
+    }
+
+    #[test]
+    fn access_plan_offsets_round_trip_to_t() {
+        for drive in 0..=CPU_M_CYCLE_TICKS {
+            let off = CpuAccessPlan::write(drive).write_visible_at.unwrap();
+            assert_eq!(off / SUBPHASES_PER_T_U8, drive);
+        }
     }
 }
