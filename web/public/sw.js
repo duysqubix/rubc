@@ -12,16 +12,17 @@ self.addEventListener('install', () => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     (async () => {
+      // Clear caches + unregister SILENTLY. Do NOT call client.navigate(): in an
+      // installed standalone PWA (no address bar) a forced reload here wedges the
+      // app mid-teardown and leaves every button dead. The next normal navigation
+      // loads cleanly with no SW.
       const keys = await caches.keys();
       await Promise.all(keys.map((k) => caches.delete(k)));
       await self.registration.unregister();
-      const clients = await self.clients.matchAll({ type: 'window' });
-      clients.forEach((c) => c.navigate(c.url));
     })()
   );
 });
 
-// Pass everything straight through to the network — never serve from cache.
-self.addEventListener('fetch', (e) => {
-  e.respondWith(fetch(e.request));
-});
+// No fetch handler at all -> the browser goes straight to the network. (A
+// passthrough fetch handler still routes every request through the SW, which is
+// pointless overhead and risk; omitting it lets the SW truly get out of the way.)

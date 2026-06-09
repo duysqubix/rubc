@@ -210,7 +210,7 @@ export function App() {
   return (
     <div style={{
       position: "absolute", inset: 0, display: "flex", flexDirection: "column",
-      paddingTop: 50, // clear the status bar / dynamic island
+      paddingTop: "max(12px, env(safe-area-inset-top))", // clear the status bar / dynamic island (standalone-safe)
       background: "var(--bg)", color: "var(--text)", overflow: "hidden",
     }}>
       <TopBar emu={emu} />
