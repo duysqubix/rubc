@@ -16,7 +16,7 @@ use eframe::egui;
 use rubc_core::bus::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
 use rubc_core::logger;
 use rubc_core::machine::{Machine, RunStop};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -219,7 +219,7 @@ fn main() -> anyhow::Result<()> {
         }
         None => match cli.rom {
             Some(rom) => run(&rom, &cli.run_opts), // bare-ROM shorthand
-            None => run_windowed(None, None, &cli.run_opts),
+            None => run_windowed(None, None, None, &cli.run_opts),
         },
     }
 }
@@ -258,7 +258,8 @@ fn run(rom_path: &str, opts: &RunOpts) -> anyhow::Result<()> {
     if machine.has_battery() {
         load_save(&mut machine, &save_path);
     }
-    run_windowed(Some(machine), Some(save_path), opts)
+    let state_path = state_path(rom_path);
+    run_windowed(Some(machine), Some(save_path), Some(state_path), opts)
 }
 
 /// The save-file path for a ROM: the ROM path with its extension replaced by
@@ -267,6 +268,12 @@ fn run(rom_path: &str, opts: &RunOpts) -> anyhow::Result<()> {
 fn sav_path(rom_path: &str) -> std::path::PathBuf {
     let mut p = std::path::PathBuf::from(rom_path);
     p.set_extension("sav");
+    p
+}
+
+fn state_path(rom_path: &str) -> PathBuf {
+    let mut p = PathBuf::from(rom_path);
+    p.set_extension("state");
     p
 }
 
@@ -297,6 +304,22 @@ fn persist_save(machine: &Machine, save_path: &std::path::Path) {
     if let Err(e) = std::fs::write(save_path, machine.save_ram()) {
         log::warn!("failed to write battery save {save_path:?}: {e}");
     }
+}
+
+fn persist_state(machine: &Machine, state_path: &Path) -> Result<usize, std::io::Error> {
+    let bytes = machine.save_state();
+    std::fs::write(state_path, &bytes)?;
+    Ok(bytes.len())
+}
+
+fn load_state(machine: &mut Machine, state_path: &Path) -> anyhow::Result<usize> {
+    let bytes = std::fs::read(state_path)
+        .map_err(|e| anyhow::anyhow!("failed to read save state {state_path:?}: {e}"))?;
+    let len = bytes.len();
+    machine
+        .load_state(&bytes)
+        .map_err(|e| anyhow::anyhow!("failed to load save state {state_path:?}: {e}"))?;
+    Ok(len)
 }
 
 /// Headless: run a test ROM to its terminal condition and report pass/fail.
@@ -340,6 +363,7 @@ fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
 fn run_windowed(
     machine: Option<Machine>,
     save_path: Option<PathBuf>,
+    state_path: Option<PathBuf>,
     opts: &RunOpts,
 ) -> anyhow::Result<()> {
     // Audio: open the default output device and tell the APU to produce samples
@@ -379,7 +403,7 @@ fn run_windowed(
         options,
         Box::new(move |_cc| {
             Ok(Box::new(RubcApp::new(
-                machine, save_path, audio, force_dmg, force_cgb,
+                machine, save_path, state_path, audio, force_dmg, force_cgb,
             )))
         }),
     )
@@ -392,6 +416,7 @@ fn run_windowed(
 struct RubcApp {
     machine: Option<Machine>,
     save_path: Option<PathBuf>,
+    state_path: Option<PathBuf>,
     audio: Option<audio::AudioOutput>,
     /// Scratch buffer reused each frame to drain APU samples without realloc.
     audio_scratch: Vec<f32>,
@@ -437,6 +462,7 @@ impl RubcApp {
     fn new(
         mut machine: Option<Machine>,
         save_path: Option<PathBuf>,
+        state_path: Option<PathBuf>,
         audio: Option<audio::AudioOutput>,
         force_dmg: bool,
         force_cgb: bool,
@@ -450,6 +476,7 @@ impl RubcApp {
         Self {
             machine,
             save_path,
+            state_path,
             audio,
             audio_scratch: Vec::new(),
             audio_frames_pushed: 0,
@@ -642,8 +669,45 @@ impl RubcApp {
         }
         self.machine = Some(machine);
         self.save_path = Some(save_path);
+        self.state_path = Some(state_path(path.to_str().unwrap_or("")));
         self.last_frame = Instant::now();
         self.next_deadline = self.last_frame + self.fps_target;
+    }
+
+    fn save_state_to_disk(&mut self) {
+        let (Some(machine), Some(path)) = (&self.machine, &self.state_path) else {
+            return;
+        };
+        match persist_state(machine, path) {
+            Ok(len) => log::info!("saved state {path:?} ({len} bytes)"),
+            Err(e) => {
+                let msg = format!("Failed to save state {path:?}: {e}");
+                log::warn!("{msg}");
+                self.error_msg = Some(msg);
+            }
+        }
+    }
+
+    fn load_state_from_disk(&mut self) {
+        let Some(path) = self.state_path.clone() else {
+            return;
+        };
+        let Some(machine) = &mut self.machine else {
+            return;
+        };
+        match load_state(machine, &path) {
+            Ok(len) => {
+                if let Some(audio) = &self.audio {
+                    machine.bus.apu.set_sample_rate(audio.sample_rate());
+                }
+                log::info!("loaded state {path:?} ({len} bytes)");
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                log::warn!("{msg}");
+                self.error_msg = Some(msg);
+            }
+        }
     }
 }
 
@@ -662,7 +726,7 @@ impl eframe::App for RubcApp {
         // RShift branch was in any case overwritten by the Backspace branch, so
         // Backspace was already the effective Select key).
         use rubc_core::bus::Button;
-        let esc = ctx.input(|i| {
+        let (esc, save_state_pressed, load_state_pressed) = ctx.input(|i| {
             if let Some(m) = &mut self.machine {
                 m.set_button(Button::Up, i.key_down(egui::Key::ArrowUp));
                 m.set_button(Button::Down, i.key_down(egui::Key::ArrowDown));
@@ -676,8 +740,18 @@ impl eframe::App for RubcApp {
                     i.key_down(egui::Key::Backspace) || i.modifiers.shift,
                 );
             }
-            i.key_pressed(egui::Key::Escape)
+            (
+                i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::F5),
+                i.key_pressed(egui::Key::F8),
+            )
         });
+        if save_state_pressed {
+            self.save_state_to_disk();
+        }
+        if load_state_pressed {
+            self.load_state_from_disk();
+        }
         if esc {
             // Clean exit (Esc): flush the save, then ask eframe to close. The
             // window-close button is covered by `on_exit`.
@@ -808,6 +882,8 @@ impl eframe::App for RubcApp {
         let action = self.gui.ui(ui, self.machine.is_some());
         match action {
             crate::gui::GuiAction::LoadRom => self.load_rom_dialog(),
+            crate::gui::GuiAction::SaveState => self.save_state_to_disk(),
+            crate::gui::GuiAction::LoadState => self.load_state_from_disk(),
             crate::gui::GuiAction::CartInfo => {
                 if let Some(machine) = &self.machine {
                     // Read the header straight from the live cartridge (bank 0,
@@ -1031,5 +1107,42 @@ mod tests {
     #[test]
     fn sav_path_appends_when_no_extension() {
         assert_eq!(sav_path("dir/sub/rom"), PathBuf::from("dir/sub/rom.sav"));
+    }
+
+    #[test]
+    fn state_path_uses_state_extension() {
+        assert_eq!(state_path("foo/bar.gbc"), PathBuf::from("foo/bar.state"));
+        assert_eq!(
+            state_path("dir/sub/rom"),
+            PathBuf::from("dir/sub/rom.state")
+        );
+    }
+
+    #[test]
+    fn state_file_roundtrip_restores_machine() {
+        let mut rom = vec![0; 0x8000];
+        rom[0x0100] = 0x00;
+
+        let mut machine = Machine::boot_dmg(&rom);
+        machine.cpu.r.a = 0x42;
+        machine.bus.poke(0xC123, 0xA5);
+
+        let path = std::env::temp_dir().join(format!(
+            "rubc-test-{}-{}.state",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock after epoch")
+                .as_nanos()
+        ));
+        persist_state(&machine, &path).expect("write state");
+
+        machine.cpu.r.a = 0x00;
+        machine.bus.poke(0xC123, 0x00);
+        load_state(&mut machine, &path).expect("load state");
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(machine.cpu.r.a, 0x42);
+        assert_eq!(machine.bus.peek(0xC123), 0xA5);
     }
 }

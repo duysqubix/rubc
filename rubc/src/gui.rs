@@ -14,6 +14,8 @@ use std::sync::Arc;
 pub(crate) enum GuiAction {
     None,
     LoadRom,
+    SaveState,
+    LoadState,
     CartInfo,
 }
 
@@ -60,6 +62,20 @@ impl Gui {
                 ui.menu_button("File", |ui| {
                     if ui.button("Load ROM...").clicked() {
                         action = GuiAction::LoadRom;
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(rom_loaded, egui::Button::new("Save State    F5"))
+                        .clicked()
+                    {
+                        action = GuiAction::SaveState;
+                        ui.close();
+                    }
+                    if ui
+                        .add_enabled(rom_loaded, egui::Button::new("Load State    F8"))
+                        .clicked()
+                    {
+                        action = GuiAction::LoadState;
                         ui.close();
                     }
                     if ui
