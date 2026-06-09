@@ -1,8 +1,10 @@
 {
+  "id": "/?source=pwa",
   "name": "rubc Emulator",
   "short_name": "rubc",
   "description": "GameBoy DMG/CGB Emulator",
-  "start_url": "/",
+  "start_url": "/play/mobile?source=pwa",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#09090b",
   "theme_color": "#09090b",
