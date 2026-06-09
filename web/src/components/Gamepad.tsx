@@ -1,98 +1,164 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import { emulator, BTN } from "@/lib/emulator";
 import { useEmulator } from "@/lib/store";
 
-export function usePress(
-  onDown?: () => void,
-  onUp?: () => void
-) {
+export function usePress(onDown?: () => void, onUp?: () => void) {
+  // Visual press state only. The AUTHORITATIVE held-state lives in refs so it
+  // survives re-renders/remounts -- the on-screen pad sits inside components that
+  // subscribe to the store, which re-renders ~1x/sec (the elapsed-time tick) and
+  // on every buzz()/state change while a game runs. If a button unmounts mid-press
+  // the release path must still run, or the wasm button stays HELD (stuck input).
   const [down, setDown] = useState(false);
+  const pressedRef = useRef(false);
+  const activePointers = useRef<Set<number>>(new Set());
+  const onDownRef = useRef(onDown);
+  const onUpRef = useRef(onUp);
+  useEffect(() => {
+    onDownRef.current = onDown;
+    onUpRef.current = onUp;
+  }, [onDown, onUp]);
 
-  const start = useCallback((e: React.PointerEvent<HTMLElement>) => {
-    e.preventDefault();
-    if (down) return;
+  const press = useCallback(() => {
+    if (pressedRef.current) return;
+    pressedRef.current = true;
     setDown(true);
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    onDown?.();
-  }, [down, onDown]);
+    onDownRef.current?.();
+  }, []);
 
-  const end = useCallback((e: React.PointerEvent<HTMLElement>) => {
-    if (!down) return;
-    setDown(false);
-    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    onUp?.();
-  }, [down, onUp]);
+  const release = useCallback((el: HTMLElement, pointerId: number) => {
+    activePointers.current.delete(pointerId);
+    try {
+      if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId);
+    } catch {
+      // capture may already be gone (element unmounting / pointer lost)
+    }
+    // Release only once the LAST pointer on this button lifts (multi-touch safe).
+    if (activePointers.current.size === 0 && pressedRef.current) {
+      pressedRef.current = false;
+      setDown(false);
+      onUpRef.current?.();
+    }
+  }, []);
+
+  const isInside = (el: HTMLElement, e: React.PointerEvent<HTMLElement>) => {
+    const r = el.getBoundingClientRect();
+    return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+  };
+
+  // Safety net: if this button unmounts while still held (e.g. a store-driven
+  // re-render swaps the subtree mid-press), force the release so nothing sticks.
+  useEffect(() => {
+    return () => {
+      activePointers.current.clear();
+      if (pressedRef.current) {
+        pressedRef.current = false;
+        onUpRef.current?.();
+      }
+    };
+  }, []);
 
   return {
     down,
     handlers: {
-      onPointerDown: start,
-      onPointerUp: end,
-      onPointerLeave: end,
-      onPointerCancel: end,
+      onPointerDown: (e: React.PointerEvent<HTMLElement>) => {
+        e.preventDefault();
+        const el = e.currentTarget;
+        activePointers.current.add(e.pointerId);
+        try {
+          el.setPointerCapture(e.pointerId);
+        } catch {
+          // capture is best-effort; release paths don't depend on it
+        }
+        press();
+      },
+      // Capture keeps events flowing even off-element, so pointerleave is
+      // unreliable for drag-off; bounds-check pointermove instead.
+      onPointerMove: (e: React.PointerEvent<HTMLElement>) => {
+        if (!activePointers.current.has(e.pointerId)) return;
+        if (!isInside(e.currentTarget, e)) release(e.currentTarget, e.pointerId);
+      },
+      onPointerUp: (e: React.PointerEvent<HTMLElement>) => release(e.currentTarget, e.pointerId),
+      onPointerCancel: (e: React.PointerEvent<HTMLElement>) => release(e.currentTarget, e.pointerId),
+      onLostPointerCapture: (e: React.PointerEvent<HTMLElement>) => release(e.currentTarget, e.pointerId),
     },
   };
 }
 
-export function DPad({ size = 150, dim = false }: { size?: number; dim?: boolean }) {
+// Hoisted to module scope so its component identity is STABLE across DPad
+// re-renders. When this lived inline inside DPad, every store-driven re-render
+// (the ~1s elapsed tick, buzz(), any state change) gave it a fresh identity and
+// React unmounted+remounted it -- dropping the pointer-release of a held button
+// and leaving the input stuck/rapid-firing.
+function DPadCell({
+  dir,
+  area,
+  arm,
+  chev,
+}: {
+  dir: "up" | "down" | "left" | "right";
+  area: string;
+  arm: number;
+  chev?: boolean;
+}) {
   const { buzz } = useEmulator();
+  const btnMap = { up: BTN.UP, down: BTN.DOWN, left: BTN.LEFT, right: BTN.RIGHT };
+  const btn = btnMap[dir];
+
+  const { down, handlers } = usePress(
+    () => {
+      emulator.setButton(btn, true);
+      buzz(10);
+    },
+    () => {
+      emulator.setButton(btn, false);
+    }
+  );
+
+  const rot = { up: 0, right: 90, down: 180, left: 270 }[dir];
+
+  return (
+    <button
+      aria-label={dir}
+      data-down={down}
+      style={{
+        gridArea: area,
+        background: down ? "var(--bg-deep)" : "var(--ink-800)",
+        boxShadow: down
+          ? "inset 0 2px 4px rgba(0,0,0,0.7)"
+          : "inset 0 1px 0 rgba(255,255,255,0.05)",
+        transform: down ? "scale(0.97)" : "none",
+        borderRadius:
+          area === "u" ? "7px 7px 0 0" :
+          area === "d" ? "0 0 7px 7px" :
+          area === "l" ? "7px 0 0 7px" :
+          area === "r" ? "0 7px 7px 0" : "0",
+        touchAction: "none",
+        border: "none",
+        outline: "none",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+      }}
+      {...handlers}
+    >
+      {chev && (
+        <span style={{
+          display: "block", width: 0, height: 0,
+          borderLeft: `${arm * 0.16}px solid transparent`,
+          borderRight: `${arm * 0.16}px solid transparent`,
+          borderBottom: `${arm * 0.2}px solid ${down ? "var(--ink-400)" : "var(--slate-300)"}`,
+          transform: `rotate(${rot}deg)`,
+        }} />
+      )}
+    </button>
+  );
+}
+
+export function DPad({ size = 150, dim = false }: { size?: number; dim?: boolean }) {
   const arm = size / 3;
-
-  const Cell = ({ dir, area, chev }: { dir: "up" | "down" | "left" | "right"; area: string; chev?: boolean }) => {
-    const btnMap = { up: BTN.UP, down: BTN.DOWN, left: BTN.LEFT, right: BTN.RIGHT };
-    const btn = btnMap[dir];
-    
-    const { down, handlers } = usePress(
-      () => {
-        emulator.setButton(btn, true);
-        buzz(10);
-      },
-      () => {
-        emulator.setButton(btn, false);
-      }
-    );
-
-    const rot = { up: 0, right: 90, down: 180, left: 270 }[dir];
-
-    return (
-      <button
-        aria-label={dir}
-        style={{
-          gridArea: area,
-          background: down ? "var(--bg-deep)" : "var(--ink-800)",
-          boxShadow: down
-            ? "inset 0 2px 4px rgba(0,0,0,0.7)"
-            : "inset 0 1px 0 rgba(255,255,255,0.05)",
-          transform: down ? "scale(0.97)" : "none",
-          borderRadius:
-            area === "u" ? "7px 7px 0 0" :
-            area === "d" ? "0 0 7px 7px" :
-            area === "l" ? "7px 0 0 7px" :
-            area === "r" ? "0 7px 7px 0" : "0",
-          touchAction: "none",
-          border: "none",
-          outline: "none",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          cursor: "pointer",
-        }}
-        {...handlers}
-      >
-        {chev && (
-          <span style={{
-            display: "block", width: 0, height: 0,
-            borderLeft: `${arm * 0.16}px solid transparent`,
-            borderRight: `${arm * 0.16}px solid transparent`,
-            borderBottom: `${arm * 0.2}px solid ${down ? "var(--ink-400)" : "var(--slate-300)"}`,
-            transform: `rotate(${rot}deg)`,
-          }} />
-        )}
-      </button>
-    );
-  };
 
   return (
     <div
@@ -107,8 +173,8 @@ export function DPad({ size = 150, dim = false }: { size?: number; dim?: boolean
         touchAction: "none",
       }}
     >
-      <Cell dir="up" area="u" chev />
-      <Cell dir="left" area="l" chev />
+      <DPadCell dir="up" area="u" arm={arm} chev />
+      <DPadCell dir="left" area="l" arm={arm} chev />
       <div style={{
         gridArea: "c", background: "var(--ink-800)",
         display: "flex", alignItems: "center", justifyContent: "center",
@@ -119,8 +185,8 @@ export function DPad({ size = 150, dim = false }: { size?: number; dim?: boolean
           boxShadow: "inset 0 1px 1px rgba(0,0,0,0.8)",
         }} />
       </div>
-      <Cell dir="right" area="r" chev />
-      <Cell dir="down" area="d" chev />
+      <DPadCell dir="right" area="r" arm={arm} chev />
+      <DPadCell dir="down" area="d" arm={arm} chev />
     </div>
   );
 }
