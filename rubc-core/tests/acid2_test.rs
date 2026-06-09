@@ -612,6 +612,38 @@ fn diff_distribution(name: &str, frame: &[u8]) {
     }
 }
 
+/// ADR 0001 stage 6: per-pixel dump of m3_window_timing's worst lines, to see if
+/// the diff is a clean horizontal shift (window-trigger-dot bug, fixable) or
+/// scattered (cross-actor race ceiling).
+#[cfg(feature = "trace")]
+#[test]
+fn m3_window_timing_row_dump() {
+    let Some(frame) = render_dmg_with_bootrom("mealybug/m3_window_timing.gb") else {
+        eprintln!("m3_window_timing: no breakpoint -- skipping");
+        return;
+    };
+    let Ok(reference) =
+        std::fs::read(suites_dir().join("mealybug/expected/DMG-raw/m3_window_timing.bin"))
+    else {
+        eprintln!("m3_window_timing: reference absent -- skipping");
+        return;
+    };
+    for y in [0usize, 4, 7, 8] {
+        let got: Vec<u8> = (0..160).map(|x| frame[y * 160 + x] & 3).collect();
+        let want: Vec<u8> = (0..160).map(|x| reference[y * 160 + x] & 3).collect();
+        let first_diff = (0..160).find(|&x| got[x] != want[x]);
+        println!("LY{y} first_diff_x={first_diff:?}");
+        // Print the 24px window around the first diff.
+        if let Some(fx) = first_diff {
+            let lo = fx.saturating_sub(4);
+            let g: Vec<u8> = got[lo..(lo + 24).min(160)].to_vec();
+            let w: Vec<u8> = want[lo..(lo + 24).min(160)].to_vec();
+            println!("  got @{lo}: {g:?}");
+            println!("  want@{lo}: {w:?}");
+        }
+    }
+}
+
 /// ADR 0001 stage 6: localise the near-zero DMG facets (independent of the
 /// m3_scy_change SCY-race ceiling). Prints each facet's diff distribution.
 #[cfg(feature = "trace")]
