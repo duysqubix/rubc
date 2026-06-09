@@ -107,17 +107,17 @@ function PlayScreen({ emu, pressedDir }: { emu: ReturnType<typeof useEmulator>, 
   const glow = phase === "running";
 
   return (
-    <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+    <div className="rubc-mplay">
       {/* docked: screen on top, gamepad below (the only control mode) */}
       <>
-          <div style={{ padding: "16px 16px 0" }}>
+          <div className="rubc-mplay-screen">
             <Viewport phase={phase} rom={rom} filter={emu.filter}
               scaling={s.scaling} smoothing={s.smoothing} showFps={s.showFps} turbo={s.turbo}
               pressedDir={pressedDir} glow={glow} />
           </div>
 
           {/* status + quick chips */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: phase === "empty" ? "center" : "space-between", padding: "12px 16px 8px", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: phase === "empty" ? "center" : "space-between", padding: "8px 16px", gap: 8 }}>
             {phase === "empty" ? (
               <Button variant="primary" onClick={() => emu.setView("library")}>Load ROM (.gb / .gbc)</Button>
             ) : (
@@ -129,7 +129,7 @@ function PlayScreen({ emu, pressedDir }: { emu: ReturnType<typeof useEmulator>, 
           </div>
 
           {/* gamepad fills the rest, anchored low */}
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "flex-end", padding: "0 14px 18px", minHeight: 0 }}>
+          <div className="rubc-mplay-pad">
             <div style={{ opacity: phase === "empty" ? 0.4 : 1, pointerEvents: phase === "empty" ? "none" : "auto", transition: "opacity 160ms" }}>
               <Gamepad />
             </div>

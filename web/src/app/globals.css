@@ -279,3 +279,47 @@ body {
     scroll-behavior: auto !important;
   }
 }
+
+/* ---- Mobile player: fit screen + chips + gamepad on ALL device heights ---- */
+.rubc-mplay {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* Screen wrapper: a flexible band whose height is capped so the gamepad always
+   has room. The Viewport keeps its 160:144 ratio and is centred + width-capped
+   to whatever height this band allows, so it shrinks on short phones and grows
+   on tall ones. */
+.rubc-mplay-screen {
+  flex: 0 1 auto;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 12px 16px 0;
+  min-height: 0;
+  /* cap the screen to ~44% of the viewport so controls fit on short devices */
+  max-height: 46dvh;
+}
+.rubc-mplay-screen > * {
+  /* Viewport sizes to the band height; width follows the 160:144 ratio. */
+  height: 100%;
+  max-width: 100%;
+  width: auto;
+  aspect-ratio: 160 / 144;
+}
+.rubc-mplay-pad {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 0 14px max(14px, env(safe-area-inset-bottom));
+  min-height: 0;
+}
+/* On tall screens the screen can be a bit larger; on very short ones, smaller. */
+@media (min-height: 780px) {
+  .rubc-mplay-screen { max-height: 52dvh; }
+}
+@media (max-height: 640px) {
+  .rubc-mplay-screen { max-height: 40dvh; padding-top: 8px; }
+}
