@@ -323,3 +323,16 @@ body {
 @media (max-height: 640px) {
   .rubc-mplay-screen { max-height: 40dvh; padding-top: 8px; }
 }
+
+/* Press state for the mobile top-bar icon buttons + quick chips. Done in CSS
+   (not JS pointer handlers) because onPointerDown/Up/Leave on a button can
+   suppress the synthetic click on iOS WebKit -- which made these buttons dead
+   on real iPhones. */
+.rubc-iconbtn:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 0 var(--bg-deep) !important;
+}
+.rubc-chip:active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 0 var(--bg-deep) !important;
+}

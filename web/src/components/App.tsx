@@ -13,14 +13,12 @@ import { emulator, BTN } from "@/lib/emulator";
 
 // small square icon button used in chrome
 function IconBtn({ children, onClick, active, disabled, label }: { children: React.ReactNode, onClick?: () => void, active?: boolean, disabled?: boolean, label: string }) {
-  const [p, setP] = useState(false);
   return (
     <button
       aria-label={label}
+      className="rubc-iconbtn"
       onClick={disabled ? undefined : onClick}
-      onPointerDown={() => !disabled && setP(true)}
-      onPointerUp={() => setP(false)}
-      onPointerLeave={() => setP(false)}
+      disabled={disabled}
       style={{
         width: 44, height: 44, borderRadius: "var(--radius)", flexShrink: 0,
         display: "flex", alignItems: "center", justifyContent: "center",
@@ -29,8 +27,7 @@ function IconBtn({ children, onClick, active, disabled, label }: { children: Rea
         color: active ? "var(--accent)" : "var(--text)",
         fontFamily: "var(--font-mono)", fontSize: 17, cursor: disabled ? "not-allowed" : "pointer",
         opacity: disabled ? 0.4 : 1,
-        boxShadow: p ? "0 0 0 0 var(--bg-deep)" : "0 2px 0 0 var(--bg-deep)",
-        transform: p ? "translateY(2px)" : "none",
+        boxShadow: "0 2px 0 0 var(--bg-deep)",
         transition: "transform 90ms cubic-bezier(0.2,0,0.1,1), box-shadow 90ms cubic-bezier(0.2,0,0.1,1)",
       }}
     >{children}</button>
@@ -88,16 +85,15 @@ const barStyle: React.CSSProperties = {
 
 // quick toggle chip row under the screen (docked mode)
 function QuickChip({ on, onClick, children }: { on: boolean, onClick: () => void, children: React.ReactNode }) {
-  const [p, setP] = useState(false);
   return (
-    <button onClick={onClick} onPointerDown={() => setP(true)} onPointerUp={() => setP(false)} onPointerLeave={() => setP(false)} style={{
+    <button onClick={onClick} className="rubc-chip" style={{
       display: "inline-flex", alignItems: "center", gap: 6, padding: "10px 14px",
       borderRadius: "var(--radius)", cursor: "pointer",
       fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 600,
       background: on ? "var(--accent-soft)" : "var(--surface-raised)",
       border: `1px solid ${on ? "var(--accent)" : "var(--border-strong)"}`,
       color: on ? "var(--rust-300)" : "var(--text-muted)",
-      boxShadow: p ? "0 0 0 0 var(--bg-deep)" : "0 2px 0 0 var(--bg-deep)", transform: p ? "translateY(2px)" : "none", transition: "transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease)",
+      boxShadow: "0 2px 0 0 var(--bg-deep)", transition: "transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease)",
     }}>{children}</button>
   );
 }
