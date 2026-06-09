@@ -197,14 +197,22 @@ body {
 }
 
 /* iOS standalone PWA hardening:
-   - touch-action: manipulation defeats the WebKit double-tap/zoom tap-delay +
-     gesture-swallowing that can make taps dead in a Home Screen web app
+- touch-action: manipulation defeats the WebKit double-tap/zoom tap-delay +
+gesture-swallowing that can make taps dead in a Home Screen web app
      (more reliable than the user-scalable=no meta tag in standalone).
-   - nextjs-portal pointer-events:none ensures a dev error overlay (if any) can't
-     act as an invisible event-absorbing pane over the UI. Harmless in the static
-     export (no portal exists there). */
+   - user-select/touch-callout/tap-highlight: holding a control button must NOT
+     start text/element selection, pop the iOS callout menu, or flash the grey
+     tap highlight. Without these, long-pressing the d-pad/A/B/Start drags a
+     selection across the on-screen controls.
+- nextjs-portal pointer-events:none ensures a dev error overlay (if any) can't
+act as an invisible event-absorbing pane over the UI. Harmless in the static
+export (no portal exists there). */
 button, a, [role="button"], input, label, summary {
   touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 nextjs-portal {
   pointer-events: none !important;
