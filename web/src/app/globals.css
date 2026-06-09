@@ -326,8 +326,8 @@ nextjs-portal {
   flex: 1 1 auto;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
-  padding: 0 14px max(14px, env(safe-area-inset-bottom));
+  justify-content: flex-start;
+  padding: 8px 14px max(14px, env(safe-area-inset-bottom));
   min-height: 0;
 }
 /* On tall screens the screen can be a bit larger; on very short ones, smaller. */
