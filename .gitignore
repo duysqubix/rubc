@@ -46,3 +46,8 @@ assets/*.gbc
 
 # Generated wasm-bindgen output for the rubc-wasm web demo.
 rubc-wasm/web/pkg/
+
+# Production TLS material (Cloudflare Origin cert + key). NEVER commit these.
+deploy/certs/*.pem
+deploy/certs/*.key
+deploy/certs/*.crt

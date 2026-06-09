@@ -1,0 +1,44 @@
+# Production deployment for rubc.app (behind Cloudflare, Full (strict) SSL).
+#
+# Topology:
+#   browser ──TLS──> Cloudflare edge ──TLS (Origin cert)──> this VM nginx :443
+#
+# Cloudflare terminates public TLS; this origin serves HTTPS to Cloudflare using
+# a Cloudflare ORIGIN certificate. HTTPS is REQUIRED (an iOS Home Screen PWA will
+# not install/run over plain HTTP).
+#
+# ── One-time setup on the VM ────────────────────────────────────────────────
+# 1. Cloudflare dashboard: SSL/TLS -> Origin Server -> Create Certificate
+#    (default RSA, hostnames: rubc.app, *.rubc.app). Save the two PEM blocks to:
+#      ./deploy/certs/rubc.app.pem   (the certificate)
+#      ./deploy/certs/rubc.app.key   (the private key)
+#      chmod 600 deploy/certs/rubc.app.key
+# 2. Cloudflare SSL/TLS mode: Full (strict). "Always Use HTTPS": On.
+# 3. DNS (see below): A rubc.app -> <VM public IP>, Proxied (orange cloud);
+#    CNAME www -> rubc.app, Proxied.
+# 4. Open the VM firewall for ports 80 + 443.
+#
+# Deploy (from repo root on the VM):
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Update after pulling new code:
+#   git pull && docker compose -f docker-compose.prod.yml up -d --build
+
+services:
+  # Static app server (3-stage prod image: rust->wasm, next build, nginx) serving
+  # HTTPS directly with the Cloudflare Origin cert.
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: rubc-wasm:latest
+    container_name: rubc-web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Production TLS nginx config (overrides the image's default HTTP-only one).
+      - ./deploy/nginx.prod.conf:/etc/nginx/conf.d/default.conf:ro
+      # Cloudflare Origin certificate + key (you create these — see notes above).
+      - ./deploy/certs:/etc/nginx/certs:ro
+    restart: unless-stopped
