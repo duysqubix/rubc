@@ -54,18 +54,6 @@ function Hero() {
           alt="rubc"
           style={{ height: 120, width: "auto", imageRendering: "pixelated", marginBottom: 28 }}
         />
-        <div
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 13,
-            color: "var(--accent)",
-            letterSpacing: "0.14em",
-            textTransform: "uppercase",
-            marginBottom: 20,
-          }}
-        >
-          // cycle-accurate · verified on real silicon
-        </div>
         <h1
           style={{
             fontFamily: "var(--font-pixel)",
