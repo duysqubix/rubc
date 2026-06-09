@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #
+# (CD self-test: this line was deployed automatically by the watchdog.)
 # autodeploy.sh — poll origin/master and redeploy rubc.app on a new commit.
 #
 # Vercel-style continuous deployment for the rubc.app VM. Run periodically by
