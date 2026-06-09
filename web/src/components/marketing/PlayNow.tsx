@@ -23,7 +23,21 @@ function isMobile(): boolean {
   }
 }
 
-
+// iOS has NO programmatic install API on ANY browser (Safari, Chrome, Vivaldi,
+// Firefox on iOS are all WebKit and use the same Share -> Add to Home Screen
+// flow). So we detect iOS broadly, not Safari-only.
+function isIos(): boolean {
+  try {
+    const ua = navigator.userAgent || "";
+    return (
+      /iPad|iPhone|iPod/.test(ua) ||
+      // iPadOS 13+ reports as Mac; disambiguate via touch points.
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)
+    );
+  } catch {
+    return false;
+  }
+}
 function isStandalone(): boolean {
   try {
     return (
@@ -88,10 +102,13 @@ export function PlayNow({
       return;
     }
 
-    // Any other mobile (iOS Safari has no install API; some browsers never fire
-    // beforeinstallprompt) -> show the Add-to-Home-Screen instruction sheet.
-    // The sheet has a 'play in browser instead' escape, so a tap always does
-    // something visible.
+    // iOS (any browser) has no install API -> show the Add-to-Home-Screen modal.
+    if (isIos()) {
+      setIosSheet(true);
+      return;
+    }
+
+    // Other mobile with no install prompt available -> just open the player.
     setIosSheet(true);
   };
 
@@ -108,15 +125,19 @@ export function PlayNow({
 function IosInstallSheet({ onClose }: { onClose: () => void }) {
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Add rubc to your Home Screen"
       onClick={onClose}
       style={{
         position: "fixed",
         inset: 0,
         zIndex: 200,
         display: "flex",
-        alignItems: "flex-end",
+        alignItems: "center",
         justifyContent: "center",
-        background: "color-mix(in srgb, var(--bg-deep) 70%, transparent)",
+        padding: 20,
+        background: "color-mix(in srgb, var(--bg-deep) 78%, transparent)",
         cursor: "pointer",
       }}
     >
@@ -124,50 +145,52 @@ function IosInstallSheet({ onClose }: { onClose: () => void }) {
         onClick={(e) => e.stopPropagation()}
         style={{
           width: "100%",
-          maxWidth: 480,
+          maxWidth: 360,
           background: "var(--surface-raised)",
-          borderTop: "2px solid var(--accent)",
-          borderTopLeftRadius: "var(--radius-lg)",
-          borderTopRightRadius: "var(--radius-lg)",
-          padding: "20px 20px max(20px, env(safe-area-inset-bottom))",
+          border: "2px solid var(--accent)",
+          borderRadius: "var(--radius-lg)",
+          padding: "24px 22px",
           display: "flex",
           flexDirection: "column",
-          gap: 14,
+          alignItems: "center",
+          gap: 16,
+          textAlign: "center",
+          cursor: "auto",
         }}
       >
         <div
+          aria-hidden
           style={{
-            fontFamily: "var(--font-pixel)",
-            fontSize: 22,
-            color: "var(--text-strong)",
+            fontSize: 44,
+            lineHeight: 1,
+            color: "var(--accent)",
           }}
         >
-          install rubc
+          ↑
         </div>
-        <ol
+        <div
           style={{
-            margin: 0,
-            paddingLeft: 18,
+            fontFamily: "var(--font-pixel)",
+            fontSize: 20,
+            color: "var(--text-strong)",
+            lineHeight: 1.3,
+          }}
+        >
+          Add to Home Screen to install as PWA
+        </div>
+        <div
+          style={{
             fontFamily: "var(--font-sans)",
-            fontSize: 15,
-            lineHeight: 1.7,
+            fontSize: 14,
+            lineHeight: 1.6,
             color: "var(--text-muted)",
           }}
         >
-          <li>
-            Tap the <strong>Share</strong> button{" "}
-            <span aria-hidden style={{ color: "var(--accent)" }}>
-              ⬆
-            </span>{" "}
-            in Safari&apos;s toolbar.
-          </li>
-          <li>
-            Choose <strong>Add to Home Screen</strong>.
-          </li>
-          <li>Open rubc from your home screen to play full-screen.</li>
-        </ol>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Button variant="ghost" size="md" onClick={onClose}>
+          Tap the <strong>Share</strong> button in Safari, then choose{" "}
+          <strong>Add to Home Screen</strong>.
+        </div>
+        <div style={{ display: "flex", gap: 10, width: "100%" }}>
+          <Button variant="ghost" size="md" block onClick={onClose}>
             Close
           </Button>
           <Button
@@ -176,7 +199,7 @@ function IosInstallSheet({ onClose }: { onClose: () => void }) {
             block
             onClick={() => window.location.assign("/play/mobile")}
           >
-            Play in browser instead
+            Play in browser
           </Button>
         </div>
       </div>
