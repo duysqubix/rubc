@@ -56,21 +56,27 @@ function Hero() {
           }}
         >
           rubc is a cycle-accurate Game Boy &amp; Game Boy Color emulator written
-          in 100% safe Rust. Pixel-exact rendering, real sound, battery saves —
-          cross-checked dot-for-dot against the hardware test ROMs.
+          in 100% safe Rust, designed as a 100% offline PWA. Pixel-exact rendering,
+          real sound, and battery saves — cross-checked dot-for-dot against the
+          hardware test ROMs. Try it today.
         </p>
-        <div className="rubc-hero-actions">
-          <a
-            href="https://github.com/duysqubix/rubc"
-            target="_blank"
-            rel="noreferrer"
-            style={{ textDecoration: "none" }}
-          >
-            <Button variant="ghost" size="lg">
-              ★ Star on GitHub
+<div className="rubc-hero-actions">
+          <a href="/play/mobile" style={{ textDecoration: "none" }}>
+            <Button variant="primary" size="lg">
+              ▶ Play now
             </Button>
           </a>
-        </div>
+          <a
+href="https://github.com/duysqubix/rubc"
+target="_blank"
+rel="noreferrer"
+style={{ textDecoration: "none" }}
+>
+<Button variant="ghost" size="lg">
+★ Star on GitHub
+</Button>
+</a>
+</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <Badge tone="dmg">DMG</Badge>
           <Badge tone="cgb">CGB</Badge>
