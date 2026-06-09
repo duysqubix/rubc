@@ -131,7 +131,7 @@ function CollapsedStrip({ side, label, onExpand }: { side: "left" | "right"; lab
       aria-label={`Expand ${label}`}
       title={`Show ${label}`}
       style={{
-        width: 30,
+        width: 44,
         flexShrink: 0,
         cursor: "pointer",
         background: "var(--surface-sunken)",
@@ -348,6 +348,7 @@ function AccuracyTab() {
 }
 
 function SavesTab({ emu }: { emu: EmulatorContextValue }) {
+  const [p, setP] = useState<number | null>(null);
   const [mode, setMode] = useState<"load" | "save">("load");
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -406,11 +407,7 @@ function SavesTab({ emu }: { emu: EmulatorContextValue }) {
           const filled = !!slot;
           const disabled = (mode === "load" && !filled) || (!emu.rom && mode === "save");
           return (
-            <button
-              key={i}
-              disabled={disabled}
-              onClick={() => (mode === "save" ? emu.saveTo(i) : filled && emu.loadFrom(i))}
-              style={{
+            <button key={i} disabled={disabled} onClick={() => (mode === "save" ? emu.saveTo(i) : filled && emu.loadFrom(i))} onPointerDown={() => !disabled && setP(i)} onPointerUp={() => setP(null)} onPointerLeave={() => setP(null)} style={{ transform: p === i ? "translateY(2px)" : "none", transition: "transform var(--dur-fast) var(--ease)",
                 padding: 0,
                 border: `1px solid ${
                   mode === "save" ? "var(--accent)" : filled ? "var(--border-strong)" : "var(--border)"
@@ -520,7 +517,7 @@ function RightPanel({ emu, onCollapse }: { emu: EmulatorContextValue; onCollapse
           aria-label="Collapse panel"
           title="Collapse"
           style={{
-            width: 30, flexShrink: 0, cursor: "pointer",
+            width: 44, flexShrink: 0, cursor: "pointer",
             background: "transparent", border: "none",
             borderRight: "1px solid var(--border)",
             color: "var(--text-muted)", fontFamily: "var(--font-mono)", fontSize: 14,

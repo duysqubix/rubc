@@ -22,7 +22,7 @@ function IconBtn({ children, onClick, active, disabled, label }: { children: Rea
       onPointerUp={() => setP(false)}
       onPointerLeave={() => setP(false)}
       style={{
-        width: 40, height: 40, borderRadius: "var(--radius)", flexShrink: 0,
+        width: 44, height: 44, borderRadius: "var(--radius)", flexShrink: 0,
         display: "flex", alignItems: "center", justifyContent: "center",
         background: active ? "var(--accent-soft)" : "var(--surface-raised)",
         border: `1px solid ${active ? "var(--accent)" : "var(--border-strong)"}`,
@@ -88,15 +88,16 @@ const barStyle: React.CSSProperties = {
 
 // quick toggle chip row under the screen (docked mode)
 function QuickChip({ on, onClick, children }: { on: boolean, onClick: () => void, children: React.ReactNode }) {
+  const [p, setP] = useState(false);
   return (
-    <button onClick={onClick} style={{
-      display: "inline-flex", alignItems: "center", gap: 6, padding: "7px 11px",
+    <button onClick={onClick} onPointerDown={() => setP(true)} onPointerUp={() => setP(false)} onPointerLeave={() => setP(false)} style={{
+      display: "inline-flex", alignItems: "center", gap: 6, padding: "10px 14px",
       borderRadius: "var(--radius)", cursor: "pointer",
       fontFamily: "var(--font-mono)", fontSize: 11.5, fontWeight: 600,
       background: on ? "var(--accent-soft)" : "var(--surface-raised)",
       border: `1px solid ${on ? "var(--accent)" : "var(--border-strong)"}`,
       color: on ? "var(--rust-300)" : "var(--text-muted)",
-      boxShadow: "0 2px 0 0 var(--bg-deep)",
+      boxShadow: p ? "0 0 0 0 var(--bg-deep)" : "0 2px 0 0 var(--bg-deep)", transform: p ? "translateY(2px)" : "none", transition: "transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease)",
     }}>{children}</button>
   );
 }
@@ -136,7 +137,7 @@ function PlayScreen({ emu, pressedDir }: { emu: ReturnType<typeof useEmulator>, 
           </div>
 
           {/* status + quick chips */}
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px 8px", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: phase === "empty" ? "center" : "space-between", padding: "12px 16px 8px", gap: 8 }}>
             {phase === "empty" ? (
               <Button variant="primary" onClick={() => emu.setView("library")}>Load ROM (.gb / .gbc)</Button>
             ) : (

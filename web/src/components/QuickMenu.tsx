@@ -84,6 +84,7 @@ interface SlotCardProps {
 }
 
 function SlotCard({ slot, index, mode, onSave, onLoad }: SlotCardProps) {
+  const [p, setP] = useState(false);
   const filled = !!slot;
   const tap = () => {
     if (mode === "save") onSave(index);
@@ -91,10 +92,7 @@ function SlotCard({ slot, index, mode, onSave, onLoad }: SlotCardProps) {
   };
   const disabled = mode === "load" && !filled;
   return (
-    <button
-      onClick={tap}
-      disabled={disabled}
-      style={{
+    <button onClick={tap} disabled={disabled} onPointerDown={() => !disabled && setP(true)} onPointerUp={() => setP(false)} onPointerLeave={() => setP(false)} style={{ transform: p ? "translateY(2px)" : "none", transition: "transform var(--dur-fast) var(--ease)",
         position: "relative",
         display: "flex",
         flexDirection: "column",
