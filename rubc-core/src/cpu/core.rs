@@ -4,7 +4,7 @@
 //! instructions advance one phase per call; zero-cycle internal transitions
 //! (e.g. boundary -> fetch) loop until exactly one bus operation happens.
 
-use crate::bus::scheduler::CpuAccessPlan;
+use crate::bus::scheduler::{CpuAccessPlan, Time};
 use crate::bus::CpuBus;
 
 use super::regs::Regs;
@@ -149,12 +149,16 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
         let drive_ticks = self.inner.write_drive_ticks(addr);
         for elapsed in 0..4 {
             if elapsed == drive_ticks {
-                self.inner.write_latched(addr, value);
+                let now = self.inner.now();
+                self.inner.schedule_cpu_write(now, addr, value);
+                self.inner.drain_cpu_writes_through(now);
             }
             self.inner.tick_cpu_t();
         }
         if drive_ticks == 4 {
-            self.inner.write_latched(addr, value);
+            let now = self.inner.now();
+            self.inner.schedule_cpu_write(now, addr, value);
+            self.inner.drain_cpu_writes_through(now);
         }
         self.inner.end_cpu_cycle();
     }
@@ -210,6 +214,18 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
 
     fn write_latched(&mut self, addr: u16, value: u8) {
         self.inner.write_latched(addr, value);
+    }
+
+    fn now(&self) -> Time {
+        self.inner.now()
+    }
+
+    fn schedule_cpu_write(&mut self, at: Time, addr: u16, value: u8) {
+        self.inner.schedule_cpu_write(at, addr, value);
+    }
+
+    fn drain_cpu_writes_through(&mut self, now: Time) {
+        self.inner.drain_cpu_writes_through(now);
     }
 
     fn end_cpu_cycle(&mut self) {
@@ -286,7 +302,9 @@ impl Cpu {
             state.plan = Some(plan);
             if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
                 if plan.write_visible_at == Some(0) {
-                    bus.write_latched(addr, value);
+                    let now = bus.now();
+                    bus.schedule_cpu_write(now, addr, value);
+                    bus.drain_cpu_writes_through(now);
                 }
             }
         }
@@ -304,7 +322,9 @@ impl Cpu {
         if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
             let now = state.elapsed_t * crate::bus::scheduler::SUBPHASES_PER_T_U8;
             if plan.write_visible_at == Some(now) {
-                bus.write_latched(addr, value);
+                let now = bus.now();
+                bus.schedule_cpu_write(now, addr, value);
+                bus.drain_cpu_writes_through(now);
             }
         }
 

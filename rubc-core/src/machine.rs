@@ -173,6 +173,7 @@ impl Machine {
     }
 
     pub fn save_state(&self) -> Vec<u8> {
+        self.bus.debug_assert_no_pending_cpu_writes();
         let payload = serde_json::to_vec(&(&self.cpu, &self.bus))
             .expect("serializing Machine save state should not fail");
         crate::savestate::encode_payload(&payload)

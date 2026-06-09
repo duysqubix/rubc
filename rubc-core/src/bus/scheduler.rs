@@ -69,6 +69,15 @@ pub const SUBPHASES_PER_M: u64 = SUBPHASES_PER_T * 4;
 )]
 pub struct Time(pub u64);
 
+/// CPU write scheduled to become bus-visible at `at`; `seq` breaks ties FIFO.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CpuWriteEvent {
+    pub at: Time,
+    pub seq: u64,
+    pub addr: u16,
+    pub value: u8,
+}
+
 impl Time {
     /// The power-on instant.
     pub const ZERO: Time = Time(0);

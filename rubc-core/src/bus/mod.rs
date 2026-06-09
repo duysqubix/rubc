@@ -32,6 +32,7 @@ pub use ppu::{CgbRenderState, DmgPalettes, Ppu};
 
 use apu::Apu;
 use serial::Serial;
+use std::collections::VecDeque;
 pub use stubs::Button;
 use stubs::{CgbState, Interrupts, Joypad};
 use timer::Timer;
@@ -93,6 +94,16 @@ pub trait CpuBus {
     fn read_latched(&mut self, addr: u16) -> u8;
     /// Commit a CPU write at the current latched bus time.
     fn write_latched(&mut self, addr: u16, value: u8);
+    /// Current CPU sub-dot timestamp. Test buses that do not model time use zero.
+    fn now(&self) -> scheduler::Time {
+        scheduler::Time::ZERO
+    }
+    /// Schedule a CPU write for later visibility. Default buses commit directly.
+    fn schedule_cpu_write(&mut self, _at: scheduler::Time, addr: u16, value: u8) {
+        self.write_latched(addr, value);
+    }
+    /// Drain scheduled CPU writes through `now`. Default buses have no queue.
+    fn drain_cpu_writes_through(&mut self, _now: scheduler::Time) {}
     fn write_drive_ticks(&self, _addr: u16) -> u8 {
         2
     }
@@ -261,6 +272,11 @@ pub struct Bus {
     /// later stages may let CPU and PPU timelines diverge.
     #[serde(default)]
     ppu_time: scheduler::Time,
+    /// Transient timestamped CPU-write queue; empty at save-state boundaries.
+    #[serde(skip, default)]
+    pending_cpu_writes: VecDeque<scheduler::CpuWriteEvent>,
+    #[serde(default)]
+    next_write_seq: u64,
     /// Test/diagnostic hook: total `tick_cpu_t` calls so far this run.
     t_tick_count: u64,
     /// Snapshot of `t_tick_count` taken at the last latched access (for tests
@@ -302,6 +318,8 @@ impl Default for Bus {
             t_tick_count: 0,
             cpu_time: scheduler::Time::ZERO,
             ppu_time: scheduler::Time::ZERO,
+            pending_cpu_writes: VecDeque::new(),
+            next_write_seq: 0,
             ticks_at_last_sample: 0,
             serial_out: Vec::new(),
         }
@@ -380,6 +398,41 @@ impl Bus {
     /// [`Self::cpu_time`] exactly; later scheduler stages may diverge it.
     pub fn ppu_time(&self) -> scheduler::Time {
         self.ppu_time
+    }
+
+    fn schedule_cpu_write(&mut self, at: scheduler::Time, addr: u16, value: u8) {
+        if let Some(back) = self.pending_cpu_writes.back() {
+            debug_assert!(
+                at >= back.at,
+                "CPU write queue must stay time-ordered: new {at:?} after back {:?}",
+                back.at
+            );
+        }
+        let seq = self.next_write_seq;
+        self.next_write_seq += 1;
+        self.pending_cpu_writes.push_back(scheduler::CpuWriteEvent {
+            at,
+            seq,
+            addr,
+            value,
+        });
+    }
+
+    fn drain_cpu_writes_through(&mut self, now: scheduler::Time) {
+        while matches!(self.pending_cpu_writes.front(), Some(event) if event.at <= now) {
+            let event = self
+                .pending_cpu_writes
+                .pop_front()
+                .expect("front event exists");
+            self.cpu_write_latched(event.addr, event.value);
+        }
+    }
+
+    pub(crate) fn debug_assert_no_pending_cpu_writes(&self) {
+        debug_assert!(
+            self.pending_cpu_writes.is_empty(),
+            "save state must not capture transient pending CPU writes"
+        );
     }
 
     /// Build a flight record from the current (post-M-cycle) bus state. The CPU
@@ -1197,6 +1250,18 @@ impl CpuBus for Bus {
         self.cpu_write_latched(addr, value);
     }
 
+    fn now(&self) -> scheduler::Time {
+        self.cpu_time
+    }
+
+    fn schedule_cpu_write(&mut self, at: scheduler::Time, addr: u16, value: u8) {
+        Bus::schedule_cpu_write(self, at, addr, value);
+    }
+
+    fn drain_cpu_writes_through(&mut self, now: scheduler::Time) {
+        Bus::drain_cpu_writes_through(self, now);
+    }
+
     fn write_drive_ticks(&self, addr: u16) -> u8 {
         if addr == 0xFF47 {
             0
@@ -1313,6 +1378,43 @@ mod tests {
         assert_eq!(bus.peek(0xFF07) & 0x07, 0x05);
         assert_eq!(bus.ticks_at_last_sample(), before + 2);
         assert_eq!(bus.total_ticks(), before + 4);
+    }
+
+    #[test]
+    fn scheduled_cpu_write_drains_to_wram() {
+        let mut bus = Bus::new();
+        let now = scheduler::Time::from_t(2);
+
+        bus.schedule_cpu_write(now, 0xC123, 0xA5);
+        bus.drain_cpu_writes_through(now);
+
+        assert_eq!(bus.peek(0xC123), 0xA5);
+    }
+
+    #[test]
+    fn cpu_write_drain_only_applies_due_events() {
+        let mut bus = Bus::new();
+        let visible_at = scheduler::Time::from_t(3);
+
+        bus.schedule_cpu_write(visible_at, 0xC124, 0x5A);
+
+        assert_eq!(bus.peek(0xC124), 0x00);
+        bus.drain_cpu_writes_through(scheduler::Time::from_t(2));
+        assert_eq!(bus.peek(0xC124), 0x00);
+        bus.drain_cpu_writes_through(visible_at);
+        assert_eq!(bus.peek(0xC124), 0x5A);
+    }
+
+    #[test]
+    fn cpu_write_drain_preserves_fifo_order_for_same_time() {
+        let mut bus = Bus::new();
+        let now = scheduler::Time::from_t(4);
+
+        bus.schedule_cpu_write(now, 0xC125, 0x11);
+        bus.schedule_cpu_write(now, 0xC125, 0x22);
+        bus.drain_cpu_writes_through(now);
+
+        assert_eq!(bus.peek(0xC125), 0x22);
     }
 
     #[test]
