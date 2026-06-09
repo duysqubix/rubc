@@ -456,6 +456,12 @@ pub struct Ppu {
     window_glitch_x: Option<usize>,
     window_disable_pending: bool,
     drawing_dots: u32,
+    /// PPU phase sample trace (ADR 0001 stage 3). Diagnostic-only, transient
+    /// (never serialized), compiled in only under the `trace` feature. The PPU
+    /// only appends to it -- it never reads it back, so it cannot perturb timing.
+    #[cfg(feature = "trace")]
+    #[serde(skip)]
+    phase_trace: crate::diag::ppu_trace::PpuPhaseTrace,
 }
 
 impl Default for Ppu {
@@ -510,6 +516,8 @@ impl Default for Ppu {
             window_glitch_x: None,
             window_disable_pending: false,
             drawing_dots: 0,
+            #[cfg(feature = "trace")]
+            phase_trace: crate::diag::ppu_trace::PpuPhaseTrace::new(),
         }
     }
 }
@@ -517,6 +525,43 @@ impl Default for Ppu {
 impl Ppu {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Record one PPU phase sample (ADR 0001 stage 3). No-op when the `trace`
+    /// feature is off. Append-only -- never read back during emulation.
+    #[cfg(feature = "trace")]
+    #[inline]
+    fn trace_sample(&mut self, phase: crate::diag::ppu_trace::PpuPhase, x: u8, tile: u8) {
+        let s = crate::diag::ppu_trace::PpuSample {
+            line_dot: self.line_dot,
+            drawing_dots: self.drawing_dots,
+            ly: self.ly,
+            phase,
+            x,
+            tile,
+            scy: self.scy,
+            scx: self.scx,
+            lcdc: self.lcdc,
+        };
+        self.phase_trace.push(s);
+    }
+
+    /// The PPU phase trace (ADR 0001 stage 3). Tests/diagnostics only.
+    #[cfg(feature = "trace")]
+    pub fn phase_trace(&self) -> &crate::diag::ppu_trace::PpuPhaseTrace {
+        &self.phase_trace
+    }
+
+    /// Restrict the phase trace to one scanline (or `None` for all).
+    #[cfg(feature = "trace")]
+    pub fn set_phase_trace_line(&mut self, ly: Option<u8>) {
+        self.phase_trace.set_line_filter(ly);
+    }
+
+    /// Clear the phase trace.
+    #[cfg(feature = "trace")]
+    pub fn clear_phase_trace(&mut self) {
+        self.phase_trace.clear();
     }
 
     pub fn oam_bug_scan_row(&self) -> Option<usize> {
@@ -843,6 +888,12 @@ impl Ppu {
                 self.bg_fifo
                     .push_bg_pixels(colors, cgb_palette, bg_priority);
                 self.bg_fetcher.fetcher_x = self.bg_fetcher.fetcher_x.wrapping_add(1);
+                #[cfg(feature = "trace")]
+                self.trace_sample(
+                    crate::diag::ppu_trace::PpuPhase::Push,
+                    self.bg_fetcher.fetcher_x,
+                    self.bg_fetcher.tile,
+                );
                 self.bg_fetcher.step = FetchStep::TileNo;
                 self.bg_fetcher.step_ticks = 0;
             }
@@ -869,6 +920,12 @@ impl Ppu {
                 let (tile, attr) = self.fetch_bg_tile_no(vram);
                 self.bg_fetcher.tile = tile;
                 self.bg_fetcher.attr = attr;
+                #[cfg(feature = "trace")]
+                self.trace_sample(
+                    crate::diag::ppu_trace::PpuPhase::TileNo,
+                    self.bg_fetcher.fetcher_x,
+                    tile,
+                );
                 self.bg_fetcher.step = FetchStep::TileDataLow;
             }
             FetchStep::TileDataLow => {
@@ -883,11 +940,23 @@ impl Ppu {
                 }
                 let addr = self.fetch_bg_tile_data_addr();
                 self.bg_fetcher.low = self.fetch_bg_tile_data_byte(vram, addr);
+                #[cfg(feature = "trace")]
+                self.trace_sample(
+                    crate::diag::ppu_trace::PpuPhase::TileDataLow,
+                    self.bg_fetcher.fetcher_x,
+                    self.bg_fetcher.tile,
+                );
                 self.bg_fetcher.step = FetchStep::TileDataHigh;
             }
             FetchStep::TileDataHigh => {
                 let addr = self.fetch_bg_tile_data_addr() + 1;
                 self.bg_fetcher.high = self.fetch_bg_tile_data_byte(vram, addr);
+                #[cfg(feature = "trace")]
+                self.trace_sample(
+                    crate::diag::ppu_trace::PpuPhase::TileDataHigh,
+                    self.bg_fetcher.fetcher_x,
+                    self.bg_fetcher.tile,
+                );
                 if self.bg_fetcher.dummy_fetch_done {
                     self.bg_fetcher.step = FetchStep::Push;
                 } else {

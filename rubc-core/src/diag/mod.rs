@@ -21,6 +21,9 @@ pub mod flight;
 #[cfg(feature = "trace")]
 pub mod trace;
 
+#[cfg(feature = "trace")]
+pub mod ppu_trace;
+
 #[cfg(feature = "hash")]
 pub mod hash;
 
@@ -38,6 +41,9 @@ pub use flight::{BusKind, ExecTag, FlightRecord, FlightRecorder};
 
 #[cfg(feature = "trace")]
 pub use trace::{format_bgb_line, BgbRegs};
+
+#[cfg(feature = "trace")]
+pub use ppu_trace::{PpuPhase, PpuPhaseTrace, PpuSample};
 
 #[cfg(feature = "hash")]
 pub use hash::{fnv1a64, HashCsv, StateHasher};

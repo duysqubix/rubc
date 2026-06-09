@@ -432,3 +432,54 @@ fn cgb_acid_hell_report() {
         "cgb-acid-hell must remain pixel-exact ({diff} RGB555 pixels differ)"
     );
 }
+
+/// ADR 0001 stage 3: prove the PPU phase trace actually captures per-fetch-step
+/// register samples on a mid-mode-3 ROM. This is the instrument the stage-5
+/// calibration is judged by: "at tile 0x42 on LY 0, the LOW-byte fetch sampled
+/// SCY=X while the HIGH-byte fetch sampled SCY=Y". Stage 3 only asserts the
+/// trace RECORDS those samples in phase order; stage 5 will assert the values.
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_phase_trace_captures_scy_change_fetch_steps() {
+    use rubc_core::diag::ppu_trace::PpuPhase;
+    let path = suites_dir().join("mealybug/m3_scy_change.gb");
+    let Ok(rom) = std::fs::read(&path) else {
+        eprintln!("m3_scy_change: ROM absent -- skipping");
+        return;
+    };
+    let mut m = Machine::boot_dmg_with_bootrom(&rom);
+    // Focus the trace on LY 0 so it stays tiny and targets the decisive line.
+    m.bus.ppu.set_phase_trace_line(Some(0));
+    if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+        eprintln!("m3_scy_change: no breakpoint -- skipping");
+        return;
+    }
+    let trace = m.bus.ppu.phase_trace();
+    let samples = trace.samples();
+    assert!(
+        !samples.is_empty(),
+        "phase trace must record BG-fetch samples during mode 3 on LY 0"
+    );
+    // Every recorded sample is on the filtered line.
+    assert!(samples.iter().all(|s| s.ly == 0), "line filter must hold");
+    // The fetch sub-steps must appear in the canonical order at least once:
+    // TileNo -> TileDataLow -> TileDataHigh. Find a tile whose fetch shows all 3.
+    let has_full_fetch = samples.windows(3).any(|w| {
+        w[0].phase == PpuPhase::TileNo
+            && w[1].phase == PpuPhase::TileDataLow
+            && w[2].phase == PpuPhase::TileDataHigh
+    });
+    assert!(
+        has_full_fetch,
+        "trace must capture a TileNo->Low->High fetch sequence on LY 0"
+    );
+    // Report the LOW vs HIGH SCY samples for the first few tiles -- the data
+    // stage 5 calibrates. (Reporting only; stage 5 asserts the 2-vs-3 split.)
+    println!("---- m3_scy_change LY0 fetch-step SCY samples ----");
+    for s in samples.iter().take(24) {
+        println!(
+            "line_dot={:>3} draw={:>3} x={:>2} tile={:#04x} phase={:?} scy={}",
+            s.line_dot, s.drawing_dots, s.x, s.tile, s.phase, s.scy
+        );
+    }
+}

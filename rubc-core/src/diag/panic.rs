@@ -126,7 +126,10 @@ pub fn publish_records(
     }
 }
 
-#[cfg(test)]
+// All tests here exercise the panic dumper, which only exists under
+// `flight-recorder`; gate the whole module so a `trace`-only build doesn't flag
+// the helpers/imports as dead code.
+#[cfg(all(test, feature = "flight-recorder"))]
 mod tests {
     use super::*;
     use crate::diag::compiled_features;
