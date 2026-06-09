@@ -84,21 +84,9 @@ export function Button({
         ...v,
         ...style,
       }}
-      onMouseDown={(e) => {
-        if (disabled) return;
-        e.currentTarget.style.transform = "translateY(var(--press-offset))";
-        e.currentTarget.style.boxShadow = "0 0 0 0 var(--bg-deep)";
-      }}
-      onMouseUp={(e) => {
-        if (disabled) return;
-        e.currentTarget.style.transform = "translateY(0)";
-        e.currentTarget.style.boxShadow = "0 var(--press-offset) 0 0 var(--bg-deep)";
-      }}
-      onMouseLeave={(e) => {
-        if (disabled) return;
-        e.currentTarget.style.transform = "translateY(0)";
-        e.currentTarget.style.boxShadow = "0 var(--press-offset) 0 0 var(--bg-deep)";
-      }}
+      
+      
+      
       {...rest}
     >
       {children}
