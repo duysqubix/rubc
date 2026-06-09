@@ -104,6 +104,7 @@ pub trait CpuBus {
     }
     /// Drain scheduled CPU writes through `now`. Default buses have no queue.
     fn drain_cpu_writes_through(&mut self, _now: scheduler::Time) {}
+    fn advance_to(&mut self, target: scheduler::Time);
     fn write_drive_ticks(&self, _addr: u16) -> u8 {
         2
     }
@@ -532,6 +533,47 @@ impl Bus {
     }
 
     fn tick_cpu_t(&mut self) {
+        let target = scheduler::Time(self.cpu_time.0 + scheduler::SUBPHASES_PER_T);
+        self.advance_to(target);
+    }
+
+    fn advance_to(&mut self, target: scheduler::Time) {
+        debug_assert!(
+            target >= self.cpu_time,
+            "cannot advance backwards from {:?} to {target:?}",
+            self.cpu_time
+        );
+        debug_assert_eq!(
+            target.subphase_in_t(),
+            0,
+            "ADR 0001 stage 3 only advances to T boundaries"
+        );
+        while self.cpu_time < target {
+            self.drain_cpu_writes_through(self.cpu_time);
+            self.tick_one_t();
+        }
+        let before_target_drain = self.cpu_time;
+        self.drain_cpu_writes_through(target);
+        debug_assert_eq!(
+            before_target_drain, target,
+            "CPU sub-dot clock must reach advance_to target before target-boundary drain"
+        );
+        debug_assert!(
+            self.cpu_time >= target,
+            "CPU sub-dot clock must not move backwards during target-boundary drain"
+        );
+        debug_assert_eq!(
+            self.ppu_time, self.cpu_time,
+            "PPU sub-dot clock must stay locked to CPU clock after advance_to"
+        );
+        debug_assert_eq!(
+            self.cpu_time.t(),
+            self.t_tick_count,
+            "CPU sub-dot clock must track t_tick_count after advance_to"
+        );
+    }
+
+    fn tick_one_t(&mut self) {
         self.t_tick_count += 1;
         // Stage 1 (ADR 0001): advance both sub-dot clocks one whole T in
         // lockstep with t_tick_count. Behavior-preserving: both clocks stay
@@ -1262,6 +1304,10 @@ impl CpuBus for Bus {
         Bus::drain_cpu_writes_through(self, now);
     }
 
+    fn advance_to(&mut self, target: scheduler::Time) {
+        Bus::advance_to(self, target);
+    }
+
     fn write_drive_ticks(&self, addr: u16) -> u8 {
         if addr == 0xFF47 {
             0
@@ -1415,6 +1461,29 @@ mod tests {
         bus.drain_cpu_writes_through(now);
 
         assert_eq!(bus.peek(0xC125), 0x22);
+    }
+
+    #[test]
+    fn advance_to_drives_one_m_cycle_and_drains_due_wram_write() {
+        let mut bus = Bus::new();
+        let start = bus.cpu_time();
+        let target = scheduler::Time(start.0 + u64::from(scheduler::CPU_ACCESS_END_OFFSET));
+        let before_ticks = bus.total_ticks();
+
+        bus.begin_cpu_cycle();
+        bus.schedule_cpu_write(target, 0xC126, 0xA5);
+        bus.advance_to(target);
+        bus.end_cpu_cycle();
+
+        assert_eq!(bus.peek(0xC126), 0xA5, "WRAM write landed");
+        assert_eq!(
+            bus.total_ticks(),
+            before_ticks + 4,
+            "one M-cycle = 4 T ticks"
+        );
+        assert_eq!(bus.cpu_time(), target);
+        assert_eq!(bus.ppu_time(), target);
+        assert_eq!(bus.cpu_time().t(), bus.total_ticks());
     }
 
     #[test]

@@ -632,6 +632,8 @@ mod tests {
 
         fn tick_cpu_t(&mut self) {}
 
+        fn advance_to(&mut self, _target: crate::bus::scheduler::Time) {}
+
         fn read_latched(&mut self, addr: u16) -> u8 {
             self.mem[usize::from(addr)]
         }

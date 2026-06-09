@@ -4,10 +4,14 @@
 //! instructions advance one phase per call; zero-cycle internal transitions
 //! (e.g. boundary -> fetch) loop until exactly one bus operation happens.
 
-use crate::bus::scheduler::{CpuAccessPlan, Time};
+use crate::bus::scheduler::{CpuAccessPlan, Time, CPU_ACCESS_END_OFFSET, SUBPHASES_PER_T_U8};
 use crate::bus::CpuBus;
 
 use super::regs::Regs;
+
+fn time_after(start: Time, offset: u8) -> Time {
+    Time(start.0 + u64::from(offset))
+}
 
 /// High-level CPU mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -126,9 +130,9 @@ impl<'a, B: CpuBus> PerTOpcodeBus<'a, B> {
 
     fn run_cycle(&mut self) {
         self.inner.begin_cpu_cycle();
-        for _ in 0..4 {
-            self.inner.tick_cpu_t();
-        }
+        let start = self.inner.now();
+        self.inner
+            .advance_to(time_after(start, CPU_ACCESS_END_OFFSET));
     }
 }
 
@@ -146,20 +150,13 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
 
     fn write_m(&mut self, addr: u16, value: u8) {
         self.inner.begin_cpu_cycle();
-        let drive_ticks = self.inner.write_drive_ticks(addr);
-        for elapsed in 0..4 {
-            if elapsed == drive_ticks {
-                let now = self.inner.now();
-                self.inner.schedule_cpu_write(now, addr, value);
-                self.inner.drain_cpu_writes_through(now);
-            }
-            self.inner.tick_cpu_t();
+        let start = self.inner.now();
+        let plan = CpuAccessPlan::write(self.inner.write_drive_ticks(addr));
+        if let Some(offset) = plan.write_visible_at {
+            self.inner
+                .schedule_cpu_write(time_after(start, offset), addr, value);
         }
-        if drive_ticks == 4 {
-            let now = self.inner.now();
-            self.inner.schedule_cpu_write(now, addr, value);
-            self.inner.drain_cpu_writes_through(now);
-        }
+        self.inner.advance_to(time_after(start, plan.end));
         self.inner.end_cpu_cycle();
     }
 
@@ -226,6 +223,10 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
 
     fn drain_cpu_writes_through(&mut self, now: Time) {
         self.inner.drain_cpu_writes_through(now);
+    }
+
+    fn advance_to(&mut self, target: Time) {
+        self.inner.advance_to(target);
     }
 
     fn end_cpu_cycle(&mut self) {
@@ -295,38 +296,27 @@ impl Cpu {
 
         if state.elapsed_t == 0 {
             bus.begin_cpu_cycle();
+            let start = bus.now();
             // ADR 0001 stage 2: snapshot the explicit access plan AFTER the
             // OAM-DMA beat in begin_cpu_cycle, so the T0 (BGP) write still lands
             // in the same order as before.
             let plan = state.cycle.access_plan(bus);
             state.plan = Some(plan);
             if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
-                if plan.write_visible_at == Some(0) {
-                    let now = bus.now();
-                    bus.schedule_cpu_write(now, addr, value);
-                    bus.drain_cpu_writes_through(now);
+                if let Some(offset) = plan.write_visible_at {
+                    bus.schedule_cpu_write(time_after(start, offset), addr, value);
                 }
             }
         }
 
-        let plan = state
-            .plan
-            .expect("CPU access plan must be set at T0 before any tick");
+        debug_assert!(
+            state.plan.is_some(),
+            "CPU access plan must be set at T0 before any tick"
+        );
 
-        bus.tick_cpu_t();
+        let target = time_after(bus.now(), SUBPHASES_PER_T_U8);
+        bus.advance_to(target);
         state.elapsed_t += 1;
-
-        // A write commits after the Nth tick, at subphase offset N*4. This is the
-        // same placement as the old `write_drive_ticks(addr) == elapsed_t` check,
-        // now expressed through the plan.
-        if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
-            let now = state.elapsed_t * crate::bus::scheduler::SUBPHASES_PER_T_U8;
-            if plan.write_visible_at == Some(now) {
-                let now = bus.now();
-                bus.schedule_cpu_write(now, addr, value);
-                bus.drain_cpu_writes_through(now);
-            }
-        }
 
         if state.elapsed_t < 4 {
             self.active_cycle = Some(state);
