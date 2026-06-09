@@ -592,8 +592,18 @@ export function DesktopApp() {
   const dirT = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { phase, rom, settings: s } = emu;
   const [dragging, setDragging] = useState(false);
+  // Panels start open (matches SSR markup); a mount effect collapses them on a
+  // narrow viewport (e.g. the desktop URI opened on a phone) where they'd
+  // otherwise overflow and hide the screen.
   const [leftOpen, setLeftOpen] = useState(true);
   const [rightOpen, setRightOpen] = useState(true);
+
+  useEffect(() => {
+    if (window.innerWidth <= 820) {
+      setLeftOpen(false);
+      setRightOpen(false);
+    }
+  }, []);
 
   const onDir = (d: string) => {
     if (phase !== "running") return;
