@@ -94,7 +94,6 @@ function Hero() {
           cross-checked dot-for-dot against the hardware test ROMs.
         </p>
         <div className="rubc-hero-actions">
-          <PlayNow size="lg" />
           <a
             href="https://github.com/duysqubix/rubc"
             target="_blank"
@@ -202,7 +201,7 @@ function Footer() {
             color: "var(--text-faint)",
           }}
         >
-          MIT licensed · built with safe Rust 🦀
+          MIT licensed
         </span>
         <span
           style={{
@@ -211,7 +210,7 @@ function Footer() {
             color: "var(--text-faint)",
           }}
         >
-          #![forbid(unsafe_code)]
+          built with ♥ and Rust 🦀
         </span>
       </div>
     </footer>
