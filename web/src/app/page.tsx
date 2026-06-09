@@ -1,6 +1,5 @@
 import React from "react";
 import { Button, Badge } from "@/components/ui";
-import { HeroPlayer } from "@/components/marketing/HeroPlayer";
 import { PlayNow } from "@/components/marketing/PlayNow";
 
 function Nav() {
@@ -124,7 +123,6 @@ function Hero() {
           <Badge tone="pass">0 unsafe</Badge>
         </div>
       </div>
-      <HeroPlayer />
     </section>
   );
 }
