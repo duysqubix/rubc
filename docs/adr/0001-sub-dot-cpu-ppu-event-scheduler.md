@@ -103,3 +103,33 @@ tests fragile — they pass). **Do not** retune `write_drive_ticks`.
 - If the calibration stages cannot close the gap without regressing the crown
   jewels, the ceiling documented in `docs/ACCURACY.md` stands and the scheduler
   skeleton (stages 1–4) is still a net architectural improvement.
+
+## Stage 5 outcome (2026-06-09): `m3_scy_change` is a lockstep ceiling
+
+Stages 1–4 landed behavior-preserving (sub-dot clock, CpuAccessPlan, the
+`PpuPhaseTrace` instrument, the named `MODE3_FETCH_START_DELAY_DOTS` lever). The
+instrument then **disproved** that stage 5 is reachable by write-commit timing:
+
+- The BG `TileNo` Y-latch for the first wrong tile and the colliding mid-mode-3
+  `SCY` write share the **same `dot_ticks`** (the same `ppu.tick_dot()` call),
+  but the write commits *after* the fetch within that dot.
+- Four commit-timing levers were falsified, each reverted clean with the crown
+  jewels intact: DMG LOW/HIGH read split (8819→9503 + `tile_sel` regressed),
+  commit-before-`tick_cpu_t` in `step_t` (no-op), threading the write into
+  `tick_cpu_t` before `ppu.tick_dot` (no-op), and `write_drive_ticks(SCY)=1`
+  (8819→9069 — reproducing a previously-documented dead end).
+
+Root cause: a CPU-instruction-vs-PPU-dot **phase offset**. The `step_m →
+step_m_via_t → step_t → write_m` engine places the `m3_scy_change` write burst
+about one dot/instruction late relative to the fetch that should see it. No
+commit-T within the writing instruction's own M-cycle moves the value across the
+fetch dot. The honest fix is a true timestamped event scheduler that orders
+write-commit vs PPU-tick at sub-dot granularity *decoupled from instruction
+M-cycle boundaries* — materially larger than stages 1–5 and deferred.
+
+**Decision:** `m3_scy_change` (and its same-mechanism siblings) stay gated at
+baseline (no regression), documented as the architecture ceiling. The stage 1–3
+scaffolding + the trace instrument are kept as a net improvement and the tool
+that proved this. Remaining mealybug facets that do *not* write `SCY` mid-mode-3
+(palette/window/obj/tile classes) and `oam_bug` subtest 7 may have independent,
+fixable mechanisms and are assessed separately.
