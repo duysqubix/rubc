@@ -29,6 +29,14 @@ const DOTS_PER_LINE: u32 = 456;
 const MODE2_DOTS: u32 = 80;
 /// Baseline mode 3 length: 12-dot fetch startup + 160 visible pixels.
 const BASE_MODE3_DOTS: u32 = 172;
+/// Dots between mode-3 entry (end of OAM scan) and the first BG fetch sample
+/// taking effect on screen (ADR 0001 stage 4). Today this is folded into the
+/// public mode-3 length as a literal `+ 3`; naming it makes it the explicit lever
+/// stage 5 calibrates. The decisive `m3_scy_change` finding is that hardware's
+/// HIGH-byte fetch sees a SCY written ~3 dots before rubc's fetch samples it, so
+/// this fetch-start phase (not the CPU write timing) is what stage 5 shifts.
+/// Stage 4 is behavior-preserving: the value is unchanged.
+const MODE3_FETCH_START_DELAY_DOTS: u32 = 3;
 const LCD_ON_FIRST_LINE_DOTS: u32 = DOTS_PER_LINE - 4;
 const LCD_ON_FIRST_MODE3_START: u32 = MODE2_DOTS;
 const LCD_ON_FIRST_MODE3_PUBLIC_START: u32 = LCD_ON_FIRST_MODE3_START;
@@ -734,7 +742,7 @@ impl Ppu {
             }
         }
         len += sprite_penalty / 4 * 4;
-        MODE2_DOTS + 3 + len
+        MODE2_DOTS + MODE3_FETCH_START_DELAY_DOTS + len
     }
 
     fn set_mode(&mut self, new_mode: u8, irq: &mut Interrupts) {
@@ -1908,6 +1916,20 @@ mod tests {
         p.write_scx(3);
         let len = mode3_len(&mut p, &zero_vram(), &zero_oam());
         assert_eq!(len, BASE_MODE3_DOTS + 3);
+    }
+
+    #[test]
+    fn mode3_fetch_start_phase_is_three_dots() {
+        // ADR 0001 stage 4: the named fetch-start phase lever. Stage 4 is
+        // behavior-preserving so this value is still 3; stage 5 calibration may
+        // change it (and this test will be the deliberate, visible record).
+        // With SCX=0 and no sprites, mode 3 is exactly the base length, which
+        // embeds MODE2_DOTS + MODE3_FETCH_START_DELAY_DOTS as its public start.
+        assert_eq!(MODE3_FETCH_START_DELAY_DOTS, 3);
+        let mut p = ppu_at_line_start();
+        p.write_scx(0);
+        let len = mode3_len(&mut p, &zero_vram(), &zero_oam());
+        assert_eq!(len, BASE_MODE3_DOTS, "SCX=0 mode-3 length is the base");
     }
 
     #[test]
