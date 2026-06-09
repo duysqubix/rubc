@@ -22,17 +22,33 @@ export function PlayNow({
   size?: "sm" | "md" | "lg";
   children?: React.ReactNode;
 }) {
-  // Navigate purely via JS at tap time. We deliberately do NOT render a real
-  // <a href>: on a static export the href is prerendered to one fixed route, and
-  // on iOS Safari that anchor navigation can win over an onClick redirect -- which
-  // sent real iPhones to the desktop player. Resolving the device on tap fixes it.
-  const go = () => {
-    window.location.assign(playHref());
+  // A real <a> is the most reliable navigation primitive on iOS Safari (a JS-only
+  // window.location call inside onClick can get dropped). The static export
+  // prerenders one fixed href, so we correct it on mount to the device route, and
+  // also re-resolve at click time as a belt-and-suspenders safety net.
+  const [href, setHref] = useState("/play/mobile");
+
+  useEffect(() => {
+    setHref(playHref());
+  }, []);
+
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    const target = playHref();
+    if (target !== href) {
+      e.preventDefault();
+      window.location.assign(target);
+    }
   };
 
   return (
-    <Button variant="primary" size={size} onClick={go}>
-      {children || "Play Now ▸"}
-    </Button>
+    <a
+      href={href}
+      onClick={onClick}
+      style={{ textDecoration: "none", display: "inline-flex" }}
+    >
+      <Button variant="primary" size={size}>
+        {children || "Play Now ▸"}
+      </Button>
+    </a>
   );
 }
