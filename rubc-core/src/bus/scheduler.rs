@@ -17,7 +17,7 @@
 //!   1 T-cycle            = SUBPHASES_PER_T (4) subphases
 //!   1 M-cycle            = 4 T-cycles      = 16 subphases
 //!   1 PPU dot (normal)   = 1 T-cycle       = 4 subphases
-//!   1 PPU dot (2x speed) = 1/2 T-cycle     = 2 subphases
+//!   1 PPU dot (2x speed) = 2 T-cycles      = 8 subphases
 //! ```
 //!
 //! Measuring in T-subphases (not dots) is what keeps CGB double-speed parity:
@@ -35,6 +35,17 @@
 /// write-drive positions the current model already uses (T0/T1/T2/T3) without
 /// fractional arithmetic.
 pub const SUBPHASES_PER_T: u64 = 4;
+
+/// Subphase period of one PPU dot at normal CPU speed: one dot per CPU T-cycle.
+///
+/// Stage 1 names this period only; `tick_cpu_t` still uses today's behavior.
+pub const PPU_DOT_SUBPHASES_NORMAL: u64 = SUBPHASES_PER_T;
+
+/// Subphase period of one PPU dot at CGB double-speed: one dot every second CPU
+/// T-cycle, so a dot spans two T-cycles.
+///
+/// Stage 1 names this period only; `tick_cpu_t` still uses today's behavior.
+pub const PPU_DOT_SUBPHASES_DOUBLE: u64 = SUBPHASES_PER_T * 2;
 
 /// Subphases per M-cycle (4 T-cycles).
 pub const SUBPHASES_PER_M: u64 = SUBPHASES_PER_T * 4;
@@ -202,6 +213,12 @@ mod tests {
     fn m_cycle_is_sixteen_subphases() {
         assert_eq!(SUBPHASES_PER_M, 16);
         assert_eq!(Time::from_t(4).0, SUBPHASES_PER_M);
+    }
+
+    #[test]
+    fn ppu_dot_periods_match_cpu_speed_modes() {
+        assert_eq!(PPU_DOT_SUBPHASES_NORMAL, 4);
+        assert_eq!(PPU_DOT_SUBPHASES_DOUBLE, 8);
     }
 
     #[test]

@@ -252,11 +252,15 @@ pub struct Bus {
     dma: OamDma,
     hdma: Hdma,
 
-    /// Sub-dot timing clock (ADR 0001). Stage 1: advances in lockstep with
-    /// `t_tick_count` and changes no behavior; later stages give CPU writes and
-    /// PPU fetch samples explicit sub-dot ordering relative to this clock.
+    /// CPU sub-dot timing clock (ADR 0001). Stage 1: advances in lockstep with
+    /// `t_tick_count` and changes no behavior; later stages give CPU writes
+    /// explicit sub-dot ordering relative to the PPU clock.
     #[serde(default)]
-    clock: scheduler::Time,
+    cpu_time: scheduler::Time,
+    /// PPU sub-dot timing clock (ADR 0001). Stage 1: identical to `cpu_time`;
+    /// later stages may let CPU and PPU timelines diverge.
+    #[serde(default)]
+    ppu_time: scheduler::Time,
     /// Test/diagnostic hook: total `tick_cpu_t` calls so far this run.
     t_tick_count: u64,
     /// Snapshot of `t_tick_count` taken at the last latched access (for tests
@@ -296,7 +300,8 @@ impl Default for Bus {
             dma: OamDma::default(),
             hdma: Hdma::default(),
             t_tick_count: 0,
-            clock: scheduler::Time::ZERO,
+            cpu_time: scheduler::Time::ZERO,
+            ppu_time: scheduler::Time::ZERO,
             ticks_at_last_sample: 0,
             serial_out: Vec::new(),
         }
@@ -364,11 +369,17 @@ impl Bus {
         self.t_tick_count
     }
 
-    /// The sub-dot timing clock (ADR 0001). Stage 1 invariant: its whole-T count
-    /// equals `total_ticks()`; later stages may add intra-T sub-phase ordering
-    /// but the whole-T count must always track the T-cycle count.
-    pub fn clock(&self) -> scheduler::Time {
-        self.clock
+    /// The CPU sub-dot timing clock (ADR 0001). Stage 1 invariant: its whole-T
+    /// count equals `total_ticks()`; later stages may add intra-T sub-phase
+    /// ordering but the whole-T count must always track the T-cycle count.
+    pub fn cpu_time(&self) -> scheduler::Time {
+        self.cpu_time
+    }
+
+    /// The PPU sub-dot timing clock (ADR 0001). Stage 1 invariant: this matches
+    /// [`Self::cpu_time`] exactly; later scheduler stages may diverge it.
+    pub fn ppu_time(&self) -> scheduler::Time {
+        self.ppu_time
     }
 
     /// Build a flight record from the current (post-M-cycle) bus state. The CPU
@@ -469,13 +480,19 @@ impl Bus {
 
     fn tick_cpu_t(&mut self) {
         self.t_tick_count += 1;
-        // Stage 1 (ADR 0001): advance the sub-dot clock one whole T in lockstep
-        // with t_tick_count. Behavior-preserving -- nothing reads `clock` yet.
-        self.clock.advance_t();
+        // Stage 1 (ADR 0001): advance both sub-dot clocks one whole T in
+        // lockstep with t_tick_count. Behavior-preserving: both clocks stay
+        // identical until later scheduler stages intentionally diverge them.
+        self.cpu_time.advance_t();
+        self.ppu_time.advance_t();
         debug_assert_eq!(
-            self.clock.t(),
+            self.cpu_time.t(),
             self.t_tick_count,
-            "sub-dot clock must track t_tick_count in lockstep (ADR 0001 stage 1)"
+            "CPU sub-dot clock must track t_tick_count in lockstep (ADR 0001 stage 1)"
+        );
+        debug_assert_eq!(
+            self.ppu_time, self.cpu_time,
+            "PPU sub-dot clock must match CPU clock in ADR 0001 stage 1"
         );
 
         let div_apu_before = self.div_apu_bit_high();
