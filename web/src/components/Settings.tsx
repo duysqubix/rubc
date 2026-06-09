@@ -3,7 +3,7 @@
 import React from "react";
 import { useEmulator } from "../lib/store";
 import { Switch, Badge, StatusPill, Card, Kbd } from "./ui";
-import type { Scaling, ControlsLayout } from "../lib/store";
+import type { Scaling } from "../lib/store";
 
 interface SegmentedOption<T extends string> {
   value: T;
@@ -227,19 +227,6 @@ export function Settings() {
       </Group>
 
       <Group title="Controls">
-        <Field
-          label="On-screen layout"
-          hint={s.controls === "overlay" ? "// buttons over a max screen" : "// gamepad below screen"}
-        >
-          <Segmented<ControlsLayout>
-            value={s.controls}
-            onChange={(v) => set({ controls: v })}
-            options={[
-              { value: "docked", label: "Docked" },
-              { value: "overlay", label: "Overlay" },
-            ]}
-          />
-        </Field>
         <Field label="Haptics">
           <Switch checked={s.haptics} onChange={(v) => set({ haptics: v })} />
         </Field>

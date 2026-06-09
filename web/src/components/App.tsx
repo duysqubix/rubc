@@ -5,7 +5,7 @@ import { useEmulator } from "@/lib/store";
 import { Button } from "./ui/Button";
 
 import { Viewport } from "./Viewport";
-import { Gamepad, OverlayControls } from "./Gamepad";
+import { Gamepad } from "./Gamepad";
 import { Settings } from "./Settings";
 import { Library } from "./Library";
 import { QuickMenu } from "./QuickMenu";
@@ -104,32 +104,12 @@ function QuickChip({ on, onClick, children }: { on: boolean, onClick: () => void
 
 function PlayScreen({ emu, pressedDir }: { emu: ReturnType<typeof useEmulator>, pressedDir: string | null }) {
   const { rom, phase, settings: s } = emu;
-  const overlay = s.controls === "overlay" && phase !== "empty";
   const glow = phase === "running";
 
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-      {overlay ? (
-        // ── OVERLAY: maximized full-bleed screen, translucent controls over it ──
-        <div style={{ flex: 1, position: "relative", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "#000", minHeight: 0 }}>
-          <div style={{ width: "100%", maxHeight: "100%", aspectRatio: "160 / 144", position: "relative" }}>
-            <Viewport phase={phase} rom={rom} filter={emu.filter}
-              scaling={s.scaling} smoothing={s.smoothing} showFps={s.showFps} turbo={s.turbo}
-              pressedDir={pressedDir} glow={glow} fullBleed />
-          </div>
-          {/* dock toggle chip, top-right over the black */}
-          <button onClick={() => emu.set({ controls: "docked" })} style={{
-            position: "absolute", top: 26, right: 14, zIndex: 5,
-            display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px",
-            borderRadius: "var(--radius)", cursor: "pointer", fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600,
-            background: "rgba(42,47,58,0.7)", border: "1px solid var(--border-strong)", color: "var(--text-muted)",
-            backdropFilter: "blur(4px)",
-          }}>▤ Dock</button>
-          <OverlayControls />
-        </div>
-      ) : (
-        // ── DOCKED: screen on top, gamepad below ──
-        <>
+      {/* docked: screen on top, gamepad below (the only control mode) */}
+      <>
           <div style={{ padding: "16px 16px 0" }}>
             <Viewport phase={phase} rom={rom} filter={emu.filter}
               scaling={s.scaling} smoothing={s.smoothing} showFps={s.showFps} turbo={s.turbo}
@@ -142,7 +122,6 @@ function PlayScreen({ emu, pressedDir }: { emu: ReturnType<typeof useEmulator>, 
               <Button variant="primary" onClick={() => emu.setView("library")}>Load ROM (.gb / .gbc)</Button>
             ) : (
               <div style={{ display: "flex", gap: 7 }}>
-                <QuickChip on={s.controls === "overlay"} onClick={() => emu.set({ controls: s.controls === "overlay" ? "docked" : "overlay" })}>⤢ Overlay</QuickChip>
                 <QuickChip on={s.turbo} onClick={() => emu.set({ turbo: !s.turbo })}>» Turbo</QuickChip>
                 <QuickChip on={s.sound} onClick={() => emu.set({ sound: !s.sound })}>{s.sound ? "♪ Sound" : "✕ Muted"}</QuickChip>
               </div>
@@ -155,8 +134,7 @@ function PlayScreen({ emu, pressedDir }: { emu: ReturnType<typeof useEmulator>, 
               <Gamepad />
             </div>
           </div>
-        </>
-      )}
+      </>
     </div>
   );
 }
