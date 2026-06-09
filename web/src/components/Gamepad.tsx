@@ -86,7 +86,7 @@ export function DPad({ size = 150, dim = false }: { size?: number; dim?: boolean
             display: "block", width: 0, height: 0,
             borderLeft: `${arm * 0.16}px solid transparent`,
             borderRight: `${arm * 0.16}px solid transparent`,
-            borderBottom: `${arm * 0.2}px solid ${down ? "var(--ink-500)" : "var(--ink-400)"}`,
+            borderBottom: `${arm * 0.2}px solid ${down ? "var(--ink-400)" : "var(--slate-300)"}`,
             transform: `rotate(${rot}deg)`,
           }} />
         )}
