@@ -542,6 +542,7 @@ impl Ppu {
     fn trace_sample(&mut self, phase: crate::diag::ppu_trace::PpuPhase, x: u8, tile: u8) {
         let s = crate::diag::ppu_trace::PpuSample {
             line_dot: self.line_dot,
+            dot_ticks: self.dot_ticks,
             drawing_dots: self.drawing_dots,
             ly: self.ly,
             phase,
@@ -667,6 +668,14 @@ impl Ppu {
         let was_lcd_on_first_line = self.first_line_after_lcd_on && self.ly == 0;
         self.line_dot = 0;
         self.ly = if self.ly >= LAST_LINE { 0 } else { self.ly + 1 };
+        // ADR 0001 stage 5 diagnostics: keep only the CURRENT frame's phase
+        // samples, so a trace inspected at the breakpoint reflects the exact
+        // frame that gets pixel-diffed (the trace would otherwise accumulate
+        // every frame and mix settled frames with the active burst frame).
+        #[cfg(feature = "trace")]
+        if self.ly == 0 {
+            self.phase_trace.clear();
+        }
         self.first_line_after_lcd_on = false;
         self.lcd_on_line1_delayed_mode2 = false;
         self.stat_mode0_level = false;
@@ -1496,6 +1505,17 @@ impl Ppu {
     }
 
     pub fn write_scy(&mut self, value: u8) {
+        #[cfg(feature = "trace")]
+        self.phase_trace
+            .push_write(crate::diag::ppu_trace::PpuWrite {
+                line_dot: self.line_dot,
+                dot_ticks: self.dot_ticks,
+                drawing_dots: self.drawing_dots,
+                ly: self.ly,
+                mode: self.mode,
+                addr: 0xFF42,
+                value,
+            });
         self.scy = value;
     }
 

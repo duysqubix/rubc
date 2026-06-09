@@ -473,13 +473,125 @@ fn ppu_phase_trace_captures_scy_change_fetch_steps() {
         has_full_fetch,
         "trace must capture a TileNo->Low->High fetch sequence on LY 0"
     );
-    // Report the LOW vs HIGH SCY samples for the first few tiles -- the data
-    // stage 5 calibrates. (Reporting only; stage 5 asserts the 2-vs-3 split.)
-    println!("---- m3_scy_change LY0 fetch-step SCY samples ----");
-    for s in samples.iter().take(24) {
+    // The fetch steps appear in canonical order; the trace is the instrument that
+    // proved m3_scy_change is a CPU-instruction-vs-PPU-dot phase ceiling (the BG
+    // TileNo fetch and the colliding SCY write share a dot_ticks but the write
+    // commits after the fetch within that dot -- see docs/adr/0001).
+    let tileno_samples = samples
+        .iter()
+        .filter(|s| s.phase == rubc_core::diag::ppu_trace::PpuPhase::TileNo)
+        .count();
+    assert!(
+        tileno_samples > 0,
+        "trace must record TileNo Y-latch samples"
+    );
+}
+
+/// ADR 0001 stage 5 OBSERVATION: scan the accumulated LY0 trace for fetches
+/// where the LOW and HIGH bitplane sampled DIFFERENT SCY values -- the exact
+/// mid-mode-3 race m3_scy_change exercises. Prints them so the calibration has
+/// ground-truth data. (Diagnostic; not a gate -- always passes.)
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_scy_change_low_high_mismatch_observation() {
+    use rubc_core::diag::ppu_trace::PpuPhase;
+    let path = suites_dir().join("mealybug/m3_scy_change.gb");
+    let Ok(rom) = std::fs::read(&path) else {
+        eprintln!("m3_scy_change: ROM absent -- skipping");
+        return;
+    };
+    let mut m = Machine::boot_dmg_with_bootrom(&rom);
+    m.bus.ppu.set_phase_trace_line(Some(0));
+    if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+        eprintln!("m3_scy_change: no breakpoint -- skipping");
+        return;
+    }
+    let samples: Vec<_> = m.bus.ppu.phase_trace().samples().to_vec();
+    println!("---- LY0 fetches with LOW!=HIGH SCY (the race) ----");
+    let mut mismatches = 0usize;
+    for w in samples.windows(2) {
+        if w[0].phase == PpuPhase::TileDataLow
+            && w[1].phase == PpuPhase::TileDataHigh
+            && w[0].scy != w[1].scy
+        {
+            mismatches += 1;
+            println!(
+                "x={:>2} tile={:#04x} LOW scy={} (dot {}) | HIGH scy={} (dot {})",
+                w[0].x, w[0].tile, w[0].scy, w[0].line_dot, w[1].scy, w[1].line_dot
+            );
+        }
+    }
+    println!("total LOW!=HIGH SCY fetches on LY0: {mismatches}");
+    // Also dump the unique SCY values seen across the whole LY0 trace + the
+    // distinct (x, low_scy, high_scy) tuples, to characterise the burst.
+    let scys: std::collections::BTreeSet<u8> = samples.iter().map(|s| s.scy).collect();
+    println!("distinct SCY values sampled on LY0: {scys:?}");
+    println!("total LY0 samples: {}", samples.len());
+    // The CPU SCY-write timeline on LY0: where (dot, mode) each write landed.
+    // Mode 3 = DRAWING; a write during drawing is the mid-mode-3 race.
+    let writes: Vec<_> = m.bus.ppu.phase_trace().writes().to_vec();
+    println!("---- LY0 CPU SCY writes (mode 3 = mid-mode-3 race) ----");
+    println!("total LY0 SCY writes: {}", writes.len());
+    let in_mode3 = writes.iter().filter(|w| w.mode == 3).count();
+    println!("  of which during DRAWING (mode 3): {in_mode3}");
+    for w in writes.iter().filter(|w| w.mode == 3).take(30) {
         println!(
-            "line_dot={:>3} draw={:>3} x={:>2} tile={:#04x} phase={:?} scy={}",
-            s.line_dot, s.drawing_dots, s.x, s.tile, s.phase, s.scy
+            "  WRITE scy={} at line_dot={} draw={} mode={}",
+            w.value, w.line_dot, w.drawing_dots, w.mode
         );
+    }
+}
+
+/// ADR 0001 stage 5 DIAGNOSE: where are the m3_scy_change wrong pixels? Render
+/// rubc vs the DMG-raw reference and print the per-scanline diff count + the
+/// first wrong (x,y) and its got/want color. Localises the error before any fix.
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_scy_change_per_line_diff_distribution() {
+    let Some(frame) = render_dmg_with_bootrom("mealybug/m3_scy_change.gb") else {
+        eprintln!("m3_scy_change: no breakpoint -- skipping");
+        return;
+    };
+    let Ok(reference) =
+        std::fs::read(suites_dir().join("mealybug/expected/DMG-raw/m3_scy_change.bin"))
+    else {
+        eprintln!("m3_scy_change: reference absent -- skipping");
+        return;
+    };
+    if reference.len() != FRAMEBUFFER_PIXELS {
+        eprintln!("m3_scy_change: reference wrong size -- skipping");
+        return;
+    }
+    let mut per_line = [0u32; 144];
+    let mut first_wrong: Option<(usize, usize, u8, u8)> = None;
+    for (y, line_count) in per_line.iter_mut().enumerate() {
+        for x in 0..160 {
+            let i = y * 160 + x;
+            let got = frame[i] & 3;
+            let want = reference[i] & 3;
+            if got != want {
+                *line_count += 1;
+                if first_wrong.is_none() {
+                    first_wrong = Some((x, y, got, want));
+                }
+            }
+        }
+    }
+    let total: u32 = per_line.iter().sum();
+    println!("---- m3_scy_change per-line diff (total {total}) ----");
+    if let Some((x, y, got, want)) = first_wrong {
+        println!("first wrong pixel: x={x} y={y} got={got} want={want}");
+    }
+    // Lines with the most diffs, to see if it's localised or spread.
+    let mut lines: Vec<(usize, u32)> = per_line
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|(_, c)| *c > 0)
+        .collect();
+    lines.sort_by_key(|(_, c)| std::cmp::Reverse(*c));
+    println!("lines with diffs: {} of 144", lines.len());
+    for (y, c) in lines.iter().take(20) {
+        println!("  LY{y}: {c} wrong");
     }
 }

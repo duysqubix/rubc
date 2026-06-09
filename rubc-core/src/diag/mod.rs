@@ -43,7 +43,7 @@ pub use flight::{BusKind, ExecTag, FlightRecord, FlightRecorder};
 pub use trace::{format_bgb_line, BgbRegs};
 
 #[cfg(feature = "trace")]
-pub use ppu_trace::{PpuPhase, PpuPhaseTrace, PpuSample};
+pub use ppu_trace::{PpuPhase, PpuPhaseTrace, PpuSample, PpuWrite};
 
 #[cfg(feature = "hash")]
 pub use hash::{fnv1a64, HashCsv, StateHasher};

@@ -31,6 +31,9 @@ pub enum PpuPhase {
 pub struct PpuSample {
     /// Dot within the scanline (0..456) when the sample was taken.
     pub line_dot: u32,
+    /// Total PPU dots since power-on -- a monotonic clock for absolute ordering
+    /// of this sample vs CPU writes (ADR 0001 stage 5 ordering proof).
+    pub dot_ticks: u64,
     /// Dots since mode-3 entry.
     pub drawing_dots: u32,
     /// Current scanline.
@@ -51,9 +54,27 @@ pub struct PpuSample {
 
 /// A growable log of [`PpuSample`]s for the current run. Cleared per frame by the
 /// caller when it wants a single-frame window; otherwise it accumulates.
+/// A CPU register write observed at a PPU dot (ADR 0001 stage 5 observation):
+/// the dot/line the write landed on, and the new value -- so the calibration can
+/// see where a mid-mode-3 SCY/LCDC write falls relative to the fetch steps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PpuWrite {
+    pub line_dot: u32,
+    /// Total PPU dots since power-on at the moment of the write (monotonic clock
+    /// for absolute ordering vs PPU samples).
+    pub dot_ticks: u64,
+    pub drawing_dots: u32,
+    pub ly: u8,
+    pub mode: u8,
+    /// IO register address (e.g. 0xFF42 for SCY).
+    pub addr: u16,
+    pub value: u8,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PpuPhaseTrace {
     samples: Vec<PpuSample>,
+    writes: Vec<PpuWrite>,
     /// When `Some(ly)`, only samples on that scanline are recorded — keeps the
     /// trace tiny when chasing a specific line (e.g. LY 0 for m3_scy_change).
     filter_ly: Option<u8>,
@@ -82,6 +103,22 @@ impl PpuPhaseTrace {
     /// Drop all recorded samples.
     pub fn clear(&mut self) {
         self.samples.clear();
+        self.writes.clear();
+    }
+
+    /// Record one CPU register write, honoring the line filter.
+    pub fn push_write(&mut self, w: PpuWrite) {
+        if let Some(ly) = self.filter_ly {
+            if w.ly != ly {
+                return;
+            }
+        }
+        self.writes.push(w);
+    }
+
+    /// All recorded CPU writes in order.
+    pub fn writes(&self) -> &[PpuWrite] {
+        &self.writes
     }
 
     /// All recorded samples in order.
@@ -107,6 +144,7 @@ mod tests {
     fn sample(ly: u8, phase: PpuPhase, tile: u8, scy: u8) -> PpuSample {
         PpuSample {
             line_dot: 0,
+            dot_ticks: 0,
             drawing_dots: 0,
             ly,
             phase,
