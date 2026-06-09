@@ -1,0 +1,14 @@
+[Unit]
+Description=rubc.app auto-deploy (poll origin/master, rebuild + restart on new commit)
+Documentation=https://github.com/duysqubix/rubc
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# Repo location on the VM. Override via systemd drop-in if it ever moves.
+Environment=RUBC_REPO_DIR=/root/rubc
+ExecStart=/root/rubc/deploy/autodeploy.sh
+# A redeploy involves a full image rebuild; give it room without hanging forever.
+TimeoutStartSec=1800

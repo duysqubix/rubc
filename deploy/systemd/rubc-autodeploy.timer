@@ -1,0 +1,15 @@
+[Unit]
+Description=Poll origin/master for rubc.app and auto-deploy new commits
+Documentation=https://github.com/duysqubix/rubc
+
+[Timer]
+# First run shortly after boot, then poll every 2 minutes. Adjust to taste;
+# every commit-to-live latency is at most one interval plus the build time.
+OnBootSec=2min
+OnUnitActiveSec=2min
+# If the machine was off when a poll was due, run once on the next boot.
+Persistent=true
+Unit=rubc-autodeploy.service
+
+[Install]
+WantedBy=timers.target

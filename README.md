@@ -156,6 +156,11 @@ and the first ROM inside is loaded.
 
 ## Play in your browser
 
+### ▶ [**rubc.app**](https://rubc.app) — play it now, no install required
+
+Live at **[rubc.app](https://rubc.app)**. Open it on your phone and *Add to Home Screen*
+to install the PWA — offline-capable, with on-screen touch controls and gamepad support.
+
 The whole core compiles to WebAssembly and runs entirely client-side — your ROM never
 leaves your machine. There's a mobile-first PWA front-end (installable, offline-capable,
 with touch controls and Gamepad support).
