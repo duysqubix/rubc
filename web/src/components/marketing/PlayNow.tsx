@@ -23,13 +23,6 @@ function isMobile(): boolean {
   }
 }
 
-function isIos(): boolean {
-  try {
-    return /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
-  } catch {
-    return false;
-  }
-}
 
 function isStandalone(): boolean {
   try {
@@ -83,23 +76,23 @@ export function PlayNow({
 
     // Android / Chrome: fire the native install prompt if we captured it.
     if (installEvent.current) {
-      await installEvent.current.prompt();
-      const choice = await installEvent.current.userChoice;
-      installEvent.current = null;
-      // Whether they install or dismiss, let them play either way.
-      if (choice.outcome === "accepted") return;
+      try {
+        await installEvent.current.prompt();
+        const choice = await installEvent.current.userChoice;
+        installEvent.current = null;
+        if (choice.outcome === "accepted") return;
+      } catch {
+        // fall through to the instruction sheet / player
+      }
       window.location.assign("/play/mobile");
       return;
     }
 
-    // iOS Safari has no install API -> show Add-to-Home-Screen instructions.
-    if (isIos()) {
-      setIosSheet(true);
-      return;
-    }
-
-    // Fallback (mobile, no install support detected): open the player.
-    window.location.assign("/play/mobile");
+    // Any other mobile (iOS Safari has no install API; some browsers never fire
+    // beforeinstallprompt) -> show the Add-to-Home-Screen instruction sheet.
+    // The sheet has a 'play in browser instead' escape, so a tap always does
+    // something visible.
+    setIosSheet(true);
   };
 
   return (
