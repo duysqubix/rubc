@@ -93,14 +93,7 @@ function Hero() {
           in 100% safe Rust. Pixel-exact rendering, real sound, battery saves —
           cross-checked dot-for-dot against the hardware test ROMs.
         </p>
-        <div
-          style={{
-            display: "flex",
-            gap: 14,
-            alignItems: "center",
-            marginBottom: 28,
-          }}
-        >
+        <div className="rubc-hero-actions">
           <PlayNow size="lg" />
           <a
             href="https://github.com/duysqubix/rubc"
@@ -168,7 +161,7 @@ function Footer() {
         background: "var(--surface-sunken)",
       }}
     >
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 40 }}>
+      <div className="rubc-footer-top">
         <div style={{ maxWidth: 300 }}>
           <img
             src="/logo.png"
@@ -201,16 +194,7 @@ function Footer() {
           ])}
         </div>
       </div>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginTop: 36,
-          paddingTop: 20,
-          borderTop: "1px solid var(--border)",
-        }}
-      >
+      <div className="rubc-footer-bottom">
         <span
           style={{
             fontFamily: "var(--font-mono)",
