@@ -830,6 +830,9 @@ impl Bus {
                 self.wram[bank][off]
             }
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
+            0xFEA0..=0xFEFF if self.cgb.cgb_mode => 0xFF,
+            0xFEA0..=0xFEFF if self.ppu.oam_read_blocked() => 0xFF,
+            0xFEA0..=0xFEFF => 0x00,
             0xFF01 => self.serial.read_sb(),
             0xFF02 => self.serial.read_sc(self.cgb.cgb_mode),
             0xFF04..=0xFF07 => self.timer.read(addr),
@@ -891,7 +894,6 @@ impl Bus {
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
             0xFFFF => self.interrupts.ie,
             0xA000..=0xBFFF => self.cart.read_ram(addr),
-            _ => 0xFF, // unmapped
         }
     }
 
@@ -1356,6 +1358,18 @@ mod tests {
         bus.write_m(0xFEA0, 0x12);
 
         assert_eq!(oam_row_words(&bus, 1), [0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD]);
+    }
+
+    #[test]
+    fn dmg_prohibited_oam_area_reads_zero_when_accessible_and_ff_when_blocked() {
+        let mut bus = Bus::new();
+
+        bus.ppu.write_lcdc(0x00, &mut bus.interrupts);
+        assert_eq!(bus.read_m(0xFEA0), 0x00);
+
+        bus.ppu.write_lcdc(0x80, &mut bus.interrupts);
+        bus.ppu.mode = ppu::mode::OAM_SCAN;
+        assert_eq!(bus.read_m(0xFEA0), 0xFF);
     }
 
     #[test]
