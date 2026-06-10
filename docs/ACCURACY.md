@@ -69,7 +69,7 @@ rubc's own rendered output running each suite to completion:
 > pixel-exact acid2 results.
 ## Mooneye acceptance (`mooneye-test-suite`)
 
-**93 / 115** overall, targeting **DMG revisions A/B/C** and **Game Boy Color**.
+**94 / 115** overall, targeting **DMG revisions A/B/C** and **Game Boy Color**.
 
 | Category | Result |
 |----------|--------|
@@ -84,7 +84,7 @@ rubc's own rendered output running each suite to completion:
 | `emulator-only/mbc2` | ✅ 7/7 |
 | `emulator-only/mbc5` | ✅ 8/8 |
 
-### About the 22 remaining mooneye tests
+### About the 21 remaining mooneye tests
 
 The remaining failures are **not** accuracy bugs for the hardware rubc targets;
 they fall into three groups:

@@ -45,40 +45,64 @@ const MAX_MEALYBUG_M3_LCDC_TILE_SEL_WIN_CHANGE_DIFF: usize = 2755;
 const MAX_MEALYBUG_M3_LCDC_WIN_MAP_CHANGE_DIFF: usize = 1925;
 const MAX_MEALYBUG_M3_LCDC_BG_MAP_CHANGE_DIFF: usize = 845;
 const MAX_CGB_ACID_HELL_DIFF: usize = 0;
+const MIN_MEALYBUG_CGBC_EXACT: usize = 2;
+const MEALYBUG_CGBC_PLACEHOLDER_FNV1A64: u64 = 0x9ac7_cebb_9006_6345;
 
 const MEALYBUG_CGBC_BASELINES: &[(&str, usize)] = &[
-    ("m2_win_en_toggle", 9030),
-    ("m3_bgp_change", 15936),
-    ("m3_bgp_change_sprites", 20340),
-    ("m3_lcdc_bg_en_change", 15894),
-    ("m3_lcdc_bg_en_change2", 8096),
-    ("m3_lcdc_bg_map_change", 1362),
-    ("m3_lcdc_bg_map_change2", 7931),
+    ("m2_win_en_toggle", 0),
+    ("m3_bgp_change", 1028),
+    ("m3_bgp_change_sprites", 2736),
+    ("m3_lcdc_bg_en_change", 2548),
+    ("m3_lcdc_bg_en_change2", 666),
+    ("m3_lcdc_bg_map_change", 714),
+    ("m3_lcdc_bg_map_change2", 545),
     ("m3_lcdc_obj_en_change", 206),
-    ("m3_lcdc_obj_en_change_variant", 1346),
-    ("m3_lcdc_obj_size_change", 1860),
-    ("m3_lcdc_obj_size_change_scx", 1650),
-    ("m3_lcdc_tile_sel_change", 1358),
-    ("m3_lcdc_tile_sel_change2", 3167),
-    ("m3_lcdc_tile_sel_win_change", 1204),
-    ("m3_lcdc_tile_sel_win_change2", 3624),
-    ("m3_lcdc_win_en_change_multiple", 18990),
-    ("m3_lcdc_win_en_change_multiple_wx", 1173),
-    ("m3_lcdc_win_map_change", 1102),
-    ("m3_lcdc_win_map_change2", 4064),
+    ("m3_lcdc_obj_en_change_variant", 626),
+    ("m3_lcdc_obj_size_change", 155),
+    ("m3_lcdc_obj_size_change_scx", 140),
+    // CGB-C re-baseline notes (2026-06-10): the old values for
+    // tile_sel_change (1358), tile_sel_win_change (1204), and win_map_change
+    // (1102) were measured under native-CGB boot, which is physically wrong for
+    // these DMG-flagged carts. Their real CGB-C captures are compat-mode frames,
+    // so the old diffs included palette noise and were not comparable. The pins
+    // below are the first honest compat measurements. The remaining gap is the
+    // LCDC write-conflict silicon split: SameBoy models DMG and CGB LCDC conflict
+    // maps separately (GB_CONFLICT_DMG_LCDC vs GB_CONFLICT_LCDC_CGB), while rubc
+    // still has one unified T3 write landing tuned to both DMG mealybug pins and
+    // native cgb-acid-hell 0px. This is a measurement-regime change, not gate
+    // weakening: 24 sibling CGB-C pins drop under the same compat regime.
+    ("m3_lcdc_tile_sel_change", 1840),
+    ("m3_lcdc_tile_sel_change2", 1391),
+    ("m3_lcdc_tile_sel_win_change", 2476),
+    ("m3_lcdc_tile_sel_win_change2", 2442),
+    ("m3_lcdc_win_en_change_multiple", 0),
+    ("m3_lcdc_win_map_change", 2126),
+    ("m3_lcdc_win_map_change2", 560),
     ("m3_obp0_change", 432),
-    ("m3_scx_high_5_bits", 17419),
-    ("m3_scx_high_5_bits_change2", 8061),
+    ("m3_scx_high_5_bits", 19),
+    ("m3_scx_high_5_bits_change2", 170),
     ("m3_scx_low_3_bits", 540),
-    ("m3_scy_change", 18188),
-    ("m3_scy_change2", 8172),
-    ("m3_window_timing", 21687),
-    ("m3_window_timing_wx_0", 21942),
-    ("m3_wx_4_change", 1173),
-    ("m3_wx_4_change_sprites", 650),
-    ("m3_wx_5_change", 1173),
-    ("m3_wx_6_change", 1173),
+    ("m3_scy_change", 8450),
+    ("m3_scy_change2", 356),
+    ("m3_window_timing", 225),
+    ("m3_window_timing_wx_0", 1202),
+    ("m3_wx_4_change_sprites", 111),
 ];
+
+fn fnv1a64(data: &[u8]) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in data {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn is_mealybug_cgbc_placeholder_reference(data: &[u8]) -> bool {
+    // The mealybug repository ships this repeated "Expected result not currently
+    // available" placeholder where no CGB-C hardware capture exists yet.
+    data.len() == FRAMEBUFFER_PIXELS * 2 && fnv1a64(data) == MEALYBUG_CGBC_PLACEHOLDER_FNV1A64
+}
 
 fn suites_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../reference/test-suites")
@@ -92,7 +116,7 @@ fn render(rom_rel: &str, cgb: bool) -> Option<Vec<u8>> {
     let path = suites_dir().join(rom_rel);
     let rom = std::fs::read(&path).ok()?;
     let mut m = if cgb {
-        Machine::boot_cgb_native(&rom)
+        Machine::boot_cgb(&rom)
     } else {
         Machine::boot_dmg(&rom)
     };
@@ -139,7 +163,7 @@ fn render_dmg_with_bootrom(rom_rel: &str) -> Option<Vec<u8>> {
 fn render_cgb(rom_rel: &str) -> Option<Vec<u16>> {
     let path = suites_dir().join(rom_rel);
     let rom = std::fs::read(&path).ok()?;
-    let mut m = Machine::boot_cgb_native(&rom);
+    let mut m = Machine::boot_cgb(&rom);
     match m.run_mooneye(MAX_INSTRUCTIONS) {
         RunStop::MooneyeBreakpoint => Some(
             m.bus
@@ -371,17 +395,22 @@ fn cgb_mealybug_report() {
     let mut exact = 0usize;
     for ref_path in &refs {
         let name = ref_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-        let Some(reference) = std::fs::read(ref_path)
+        let Some(reference_bytes) = std::fs::read(ref_path)
             .ok()
             .filter(|d| d.len() == FRAMEBUFFER_PIXELS * 2)
-            .map(|d| {
-                d.chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]) & 0x7FFF)
-                    .collect::<Vec<_>>()
-            })
         else {
             continue;
         };
+        if is_mealybug_cgbc_placeholder_reference(&reference_bytes) {
+            println!(
+                "mealybug CGB-C {name}: reference is the mealybug placeholder image -- skipped (no hardware capture)"
+            );
+            continue;
+        }
+        let reference = reference_bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]) & 0x7FFF)
+            .collect::<Vec<_>>();
         let Some(frame) = render_cgb(&format!("mealybug/{name}.gb")) else {
             println!("mealybug CGB-C {name}: no breakpoint");
             continue;
@@ -405,6 +434,44 @@ fn cgb_mealybug_report() {
     }
     println!("----");
     println!("mealybug CGB-C: {exact}/{total} pixel-exact");
+    assert!(
+        exact >= MIN_MEALYBUG_CGBC_EXACT,
+        "mealybug CGB-C must keep at least {MIN_MEALYBUG_CGBC_EXACT}/{total} measurable pixel-exact ROMs (got {exact})"
+    );
+}
+
+#[test]
+fn cgb_mealybug_placeholder_references_are_only_upstream_missing_captures() {
+    let raw_dir = suites_dir().join("mealybug/expected/CGB-C-rgb555");
+    let Ok(entries) = std::fs::read_dir(&raw_dir) else {
+        eprintln!("mealybug CGB-C: RGB555 refs absent -- skipping placeholder guard");
+        return;
+    };
+    let mut placeholders = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("bin"))
+        .filter_map(|path| {
+            let data = std::fs::read(&path).ok()?;
+            is_mealybug_cgbc_placeholder_reference(&data).then(|| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_owned()
+            })
+        })
+        .collect::<Vec<_>>();
+    placeholders.sort();
+    assert_eq!(
+        placeholders,
+        [
+            "m3_lcdc_win_en_change_multiple_wx",
+            "m3_wx_4_change",
+            "m3_wx_5_change",
+            "m3_wx_6_change"
+        ],
+        "CGB-C placeholder detection must re-enable automatically when upstream hardware captures replace the mealybug placeholder"
+    );
 }
 
 /// cgb-acid-hell is an extremely demanding CGB PPU test (mid-scanline

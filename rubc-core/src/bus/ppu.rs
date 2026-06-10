@@ -572,7 +572,10 @@ impl Ppu {
 
             self.update_visible_stat_read_mode();
 
-            if self.line_dot == DOTS_PER_LINE - 4 && self.ly == LAST_VISIBLE_LINE && self.cgb_mode {
+            if self.line_dot == DOTS_PER_LINE - 4
+                && self.ly == LAST_VISIBLE_LINE
+                && self.is_cgb_hw()
+            {
                 self.stat_mode2_pulse = true;
             }
 
@@ -614,6 +617,10 @@ impl Ppu {
         }
     }
 
+    fn is_cgb_hw(&self) -> bool {
+        self.cgb_mode || self.dmg_compat
+    }
+
     fn start_next_scanline(&mut self, irq: &mut Interrupts) {
         let was_lcd_on_first_line = self.first_line_after_lcd_on && self.ly == 0;
         self.line_dot = 0;
@@ -635,7 +642,7 @@ impl Ppu {
             }
             self.set_mode(mode::VBLANK, irq);
             self.stat_read_mode = mode::VBLANK;
-            if !self.cgb_mode && self.ly == LAST_VISIBLE_LINE + 1 {
+            if !self.is_cgb_hw() && self.ly == LAST_VISIBLE_LINE + 1 {
                 self.stat_mode2_pulse = true;
             }
         } else if was_lcd_on_first_line {
@@ -977,7 +984,12 @@ impl Ppu {
         // CGB-A/B/C TILE_SEL conflict: if LCDC.4 is reset on the same dot as a
         // BG bitplane fetch, unsigned tile IDs can appear on the data bus. This
         // is the remaining cgb-acid-hell center-pixel quirk; normal reads cover
-        // CGB-D+/DMG behavior and signed tile IDs.
+        // CGB-D+/DMG behavior and signed tile IDs. Gated on `cgb_mode` (not
+        // CGB hardware): SameBoy applies the conflict map by silicon
+        // (sm83_cpu.c cycle_write, GB_is_cgb), but our simplified glitch model
+        // is tuned to the native-mode references (cgb-acid-hell); applying it
+        // in DMG-compat measurably worsens the CGB-C mealybug diffs
+        // (m3_lcdc_tile_sel_change2 1391->1967), so compat keeps normal reads.
         let glitched = self.cgb_mode
             && self.tile_sel_glitch
             && self.bg_fetcher.step == FetchStep::TileDataHigh
@@ -1003,9 +1015,11 @@ impl Ppu {
         let window_x = self.wx.saturating_sub(7) as usize;
         // SameBoy's DMG FIFO path also triggers on WX == position+6 when WX was
         // stable, then applies the one-pixel horizontal desync observed on DMG.
-        // This is distinct from the normal WX == position+7 compare.
+        // This is distinct from the normal WX == position+7 compare. DMG-silicon
+        // only: SameBoy gates the +6 trigger on `!GB_is_cgb` (display.c), so CGB
+        // hardware in DMG-compat mode must NOT take this path.
         let dmg_early_window_x = self.wx.saturating_sub(6) as usize;
-        let dmg_early_window = !self.cgb_mode && self.lcd_x == dmg_early_window_x;
+        let dmg_early_window = !self.is_cgb_hw() && self.lcd_x == dmg_early_window_x;
         if self.lcd_x != window_x && !dmg_early_window {
             return;
         }

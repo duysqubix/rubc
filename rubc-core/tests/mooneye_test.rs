@@ -70,7 +70,7 @@ fn run_rom(path: &Path) -> std::io::Result<Outcome> {
     let name_cgb = name.contains("-cgb") || name.ends_with("-C") || name.ends_with("-A");
     let cgb = header_cgb || name_cgb;
     let mut m = if cgb {
-        Machine::boot_cgb_native(&rom)
+        Machine::boot_cgb(&rom)
     } else {
         Machine::boot_dmg(&rom)
     };
