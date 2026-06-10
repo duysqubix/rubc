@@ -162,6 +162,7 @@ pub struct DmgPalettes {
 #[derive(Clone, Copy)]
 pub struct CgbRenderState<'a> {
     pub enabled: bool,
+    pub dmg_compat: bool,
     pub bg_palette_ram: &'a [u8; 64],
     pub obj_palette_ram: &'a [u8; 64],
 }
@@ -401,6 +402,7 @@ pub struct Ppu {
     cgb_bg_palette_ram: [u8; 64],
     #[serde_as(as = "[_; 64]")]
     cgb_obj_palette_ram: [u8; 64],
+    dmg_compat: bool,
 
     /// LCD master enable (LCDC bit 7).
     enabled: bool,
@@ -471,6 +473,7 @@ impl Default for Ppu {
             cgb_mode: false,
             cgb_bg_palette_ram: [0xFF; 64],
             cgb_obj_palette_ram: [0xFF; 64],
+            dmg_compat: false,
             // LCD starts enabled with the post-boot LCDC ($91 = on, BG on, ...).
             enabled: true,
             first_line_after_lcd_on: false,
@@ -545,6 +548,7 @@ impl Ppu {
         self.obp0 = palettes.obp0;
         self.obp1 = palettes.obp1;
         self.cgb_mode = cgb.enabled;
+        self.dmg_compat = cgb.dmg_compat;
         self.cgb_bg_palette_ram = *cgb.bg_palette_ram;
         self.cgb_obj_palette_ram = *cgb.obj_palette_ram;
         self.dot_ticks += 1;
@@ -1228,7 +1232,16 @@ impl Ppu {
         };
         let shade = (palette >> ((pixel.color & 0x03) * 2)) & 0x03;
         let index = pixel.ly as usize * SCREEN_WIDTH + pixel.x;
-        self.framebuffer[index] = FramePixel::DmgShade(shade);
+        self.framebuffer[index] = if self.dmg_compat {
+            let (ram, palette) = match pixel.palette {
+                DmgPaletteSource::Bg => (&self.cgb_bg_palette_ram, 0),
+                DmgPaletteSource::Obp0 => (&self.cgb_obj_palette_ram, 0),
+                DmgPaletteSource::Obp1 => (&self.cgb_obj_palette_ram, 1),
+            };
+            FramePixel::CgbRgb555(self.cgb_color(ram, palette, shade))
+        } else {
+            FramePixel::DmgShade(shade)
+        };
     }
 
     /// CGB pixel resolution: the BG/OBJ priority table (Pan Docs), then a
@@ -1565,6 +1578,7 @@ mod tests {
         let zero = [0u8; 64];
         let cgb = CgbRenderState {
             enabled: false,
+            dmg_compat: false,
             bg_palette_ram: &zero,
             obj_palette_ram: &zero,
         };
@@ -1586,6 +1600,7 @@ mod tests {
         let zero = [0u8; 64];
         let cgb = CgbRenderState {
             enabled: true,
+            dmg_compat: false,
             bg_palette_ram: &zero,
             obj_palette_ram: &zero,
         };
@@ -1856,6 +1871,47 @@ mod tests {
             .map(|px| px.dmg_shade())
             .collect();
         assert_eq!(shades, vec![0, 1, 2, 3, 0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn dmg_compat_pixels_emit_cgb_palette_ram_after_bgp_translation() {
+        let mut p = ppu_at_line_start();
+        let mut vram = zero_vram();
+        let oam = zero_oam();
+        set_tile_row(&mut vram, 0, 0x55, 0x33);
+        vram[0x1800] = 0;
+
+        let mut banks = [[0u8; 0x2000]; 2];
+        banks[0] = vram;
+        let mut bg = [0xFF; 64];
+        for (i, color) in [0x001F_u16, 0x03E0, 0x7C00, 0x4210].into_iter().enumerate() {
+            let [lo, hi] = color.to_le_bytes();
+            bg[i * 2] = lo;
+            bg[i * 2 + 1] = hi;
+        }
+        let obj = [0xFF; 64];
+        let cgb = CgbRenderState {
+            enabled: false,
+            dmg_compat: true,
+            bg_palette_ram: &bg,
+            obj_palette_ram: &obj,
+        };
+        let mut irq = Interrupts::default();
+        for _ in 0..DOTS_PER_LINE {
+            p.tick_dot(&mut irq, &banks, &oam, IDENTITY_PALETTES, cgb);
+        }
+
+        let rgb: Vec<u16> = p.framebuffer[0..8]
+            .iter()
+            .map(|px| match px {
+                FramePixel::CgbRgb555(rgb) => *rgb,
+                FramePixel::DmgShade(_) => panic!("compat pixels must be RGB555"),
+            })
+            .collect();
+        assert_eq!(
+            rgb,
+            vec![0x001F, 0x03E0, 0x7C00, 0x4210, 0x001F, 0x03E0, 0x7C00, 0x4210]
+        );
     }
 
     #[test]

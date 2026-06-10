@@ -92,7 +92,7 @@ fn render(rom_rel: &str, cgb: bool) -> Option<Vec<u8>> {
     let path = suites_dir().join(rom_rel);
     let rom = std::fs::read(&path).ok()?;
     let mut m = if cgb {
-        Machine::boot_cgb(&rom)
+        Machine::boot_cgb_native(&rom)
     } else {
         Machine::boot_dmg(&rom)
     };
@@ -139,7 +139,7 @@ fn render_dmg_with_bootrom(rom_rel: &str) -> Option<Vec<u8>> {
 fn render_cgb(rom_rel: &str) -> Option<Vec<u16>> {
     let path = suites_dir().join(rom_rel);
     let rom = std::fs::read(&path).ok()?;
-    let mut m = Machine::boot_cgb(&rom);
+    let mut m = Machine::boot_cgb_native(&rom);
     match m.run_mooneye(MAX_INSTRUCTIONS) {
         RunStop::MooneyeBreakpoint => Some(
             m.bus

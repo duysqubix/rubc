@@ -18,6 +18,7 @@
 
 pub mod apu;
 pub mod cartridge;
+pub mod compat_palettes;
 pub mod flat;
 pub mod ppu;
 pub mod serial;
@@ -476,6 +477,7 @@ impl Bus {
                 };
                 let cgb = CgbRenderState {
                     enabled: self.cgb.cgb_mode,
+                    dmg_compat: self.cgb.is_cgb && !self.cgb.cgb_mode,
                     bg_palette_ram: &self.bg_palette_ram,
                     obj_palette_ram: &self.obj_palette_ram,
                 };
@@ -491,6 +493,7 @@ impl Bus {
             };
             let cgb = CgbRenderState {
                 enabled: self.cgb.cgb_mode,
+                dmg_compat: self.cgb.is_cgb && !self.cgb.cgb_mode,
                 bg_palette_ram: &self.bg_palette_ram,
                 obj_palette_ram: &self.obj_palette_ram,
             };
@@ -647,7 +650,7 @@ impl Bus {
             // bank. The running low bits advance per byte (unlike the start
             // address, whose low 4 bits were forced to 0 at register-write time).
             let off = (self.hdma.dest & 0x1FFF) as usize;
-            self.vram[self.vbk as usize][off] = byte;
+            self.vram[self.active_vbk()][off] = byte;
             self.hdma.source = self.hdma.source.wrapping_add(1);
             self.hdma.dest = self.hdma.dest.wrapping_add(1);
         }
@@ -680,13 +683,63 @@ impl Bus {
     /// DFFF (echo F000-FDFF) selects `svbk` (banks 1-7). DMG keeps svbk=1 so the
     /// low 8 KiB behave as a flat bank0+bank1 pair, exactly as before.
     #[inline]
+    fn active_vbk(&self) -> usize {
+        if self.cgb.cgb_mode {
+            self.vbk as usize
+        } else {
+            0
+        }
+    }
+
+    #[inline]
+    fn active_svbk(&self) -> usize {
+        if self.cgb.cgb_mode {
+            self.svbk as usize
+        } else {
+            1
+        }
+    }
+
+    #[inline]
+    fn cgb_palette_accessible(&self) -> bool {
+        self.cgb.cgb_mode || (self.cgb.is_cgb && self.boot_rom_mapped)
+    }
+
+    #[inline]
+    fn cgb_palette_data_blocked(&self) -> bool {
+        self.cgb.cgb_mode && self.ppu.cgb_palette_blocked()
+    }
+
+    #[inline]
+    fn opri_accessible(&self) -> bool {
+        self.cgb.cgb_mode
+            || (self.cgb.is_cgb && (self.boot_rom_mapped || self.io[0x4C] & 0x08 != 0))
+    }
+
+    fn write_key0(&mut self, value: u8) {
+        if !(self.cgb.is_cgb && self.boot_rom_mapped) {
+            return;
+        }
+        self.cgb.cgb_mode = (value & 0x0C) == 0;
+        self.io[0x4C] = value;
+        if !self.cgb.cgb_mode {
+            self.cgb.double_speed = false;
+            self.cgb.t_phase = false;
+            self.io[0x4D] = 0;
+            self.vbk = 0;
+            self.svbk = 1;
+            self.hdma = Hdma::default();
+        }
+    }
+
+    #[inline]
     fn wram_index(&self, addr: u16) -> (usize, usize) {
         // Fold the echo region (E000-FDFF) down onto C000-DDFF.
         let a = if addr >= 0xE000 { addr - 0x2000 } else { addr };
         if a < 0xD000 {
             (0, (a - 0xC000) as usize)
         } else {
-            (self.svbk as usize, (a - 0xD000) as usize)
+            (self.active_svbk(), (a - 0xD000) as usize)
         }
     }
 
@@ -824,7 +877,7 @@ impl Bus {
         }
         match addr {
             0x0000..=0x7FFF => self.cart.read(addr),
-            0x8000..=0x9FFF => self.vram[self.vbk as usize][(addr - 0x8000) as usize],
+            0x8000..=0x9FFF => self.vram[self.active_vbk()][(addr - 0x8000) as usize],
             0xC000..=0xFDFF => {
                 let (bank, off) = self.wram_index(addr);
                 self.wram[bank][off]
@@ -857,7 +910,7 @@ impl Bus {
             0xFF4F => 0xFF, // VBK in DMG mode: open-bus (no VRAM banking)
             0xFF70 if self.cgb.cgb_mode => self.svbk | 0xF8, // SVBK: 3 bits valid
             0xFF70 => 0xFF, // SVBK in DMG mode: open-bus (no WRAM banking)
-            0xFF6C if self.cgb.cgb_mode => (self.io[0x6C] & 0x01) | 0xFE, // OPRI bit0
+            0xFF6C if self.opri_accessible() => (self.io[0x6C] & 0x01) | 0xFE, // OPRI bit0
             0xFF6C => 0xFF, // OPRI in DMG mode: open-bus
             0xFF55 if self.cgb.cgb_mode => {
                 // HDMA5: bit 7 = 0 while an HBlank transfer is active, 1 when
@@ -872,18 +925,18 @@ impl Bus {
                 }
             }
             0xFF51..=0xFF55 => 0xFF, // HDMA in DMG mode / write-only HDMA1-4
-            0xFF68 if self.cgb.cgb_mode => self.bcps | 0x40, // BCPS: bit6 reads 1
-            0xFF6A if self.cgb.cgb_mode => self.ocps | 0x40, // OCPS: bit6 reads 1
-            0xFF69 if self.cgb.cgb_mode => {
+            0xFF68 if self.cgb_palette_accessible() => self.bcps | 0x40, // BCPS: bit6 reads 1
+            0xFF6A if self.cgb_palette_accessible() => self.ocps | 0x40, // OCPS: bit6 reads 1
+            0xFF69 if self.cgb_palette_accessible() => {
                 // BCPD: palette RAM is inaccessible during mode 3 (reads 0xFF).
-                if self.ppu.cgb_palette_blocked() {
+                if self.cgb_palette_data_blocked() {
                     0xFF
                 } else {
                     self.bg_palette_ram[(self.bcps & 0x3F) as usize]
                 }
             }
-            0xFF6B if self.cgb.cgb_mode => {
-                if self.ppu.cgb_palette_blocked() {
+            0xFF6B if self.cgb_palette_accessible() => {
+                if self.cgb_palette_data_blocked() {
                     0xFF
                 } else {
                     self.obj_palette_ram[(self.ocps & 0x3F) as usize]
@@ -948,7 +1001,7 @@ impl Bus {
     /// Side-effect-free write (no tick). Flat placeholder.
     pub fn poke(&mut self, addr: u16, value: u8) {
         match addr {
-            0x8000..=0x9FFF => self.vram[self.vbk as usize][(addr - 0x8000) as usize] = value,
+            0x8000..=0x9FFF => self.vram[self.active_vbk()][(addr - 0x8000) as usize] = value,
             0xC000..=0xFDFF => {
                 let (bank, off) = self.wram_index(addr);
                 self.wram[bank][off] = value;
@@ -988,6 +1041,7 @@ impl Bus {
                 }
                 self.io[0x50] = value;
             }
+            0xFF4C => self.write_key0(value),
             0xFF4F => {
                 // VBK (CGB only): bit 0 selects the active 8 KiB VRAM bank.
                 if self.cgb.cgb_mode {
@@ -1034,27 +1088,27 @@ impl Bus {
             }
             0xFF6C => {
                 // OPRI (CGB only): object priority mode flag (bit 0).
-                if self.cgb.cgb_mode {
+                if self.opri_accessible() {
                     self.io[0x6C] = value & 0x01;
                 }
             }
             0xFF68 => {
                 // BCPS (CGB only): bit 7 auto-increment, bits 5-0 = BG palette index.
-                if self.cgb.cgb_mode {
+                if self.cgb_palette_accessible() {
                     self.bcps = value & 0xBF;
                 }
             }
             0xFF6A => {
                 // OCPS (CGB only): bit 7 auto-increment, bits 5-0 = OBJ palette index.
-                if self.cgb.cgb_mode {
+                if self.cgb_palette_accessible() {
                     self.ocps = value & 0xBF;
                 }
             }
             0xFF69 => {
                 // BCPD (CGB only): write BG palette RAM at BCPS index (blocked
                 // during mode 3), then auto-increment the index if BCPS bit 7 set.
-                if self.cgb.cgb_mode {
-                    if !self.ppu.cgb_palette_blocked() {
+                if self.cgb_palette_accessible() {
+                    if !self.cgb_palette_data_blocked() {
                         self.bg_palette_ram[(self.bcps & 0x3F) as usize] = value;
                     }
                     if self.bcps & 0x80 != 0 {
@@ -1063,8 +1117,8 @@ impl Bus {
                 }
             }
             0xFF6B => {
-                if self.cgb.cgb_mode {
-                    if !self.ppu.cgb_palette_blocked() {
+                if self.cgb_palette_accessible() {
+                    if !self.cgb_palette_data_blocked() {
                         self.obj_palette_ram[(self.ocps & 0x3F) as usize] = value;
                     }
                     if self.ocps & 0x80 != 0 {
@@ -1358,6 +1412,68 @@ mod tests {
         bus.write_m(0xFEA0, 0x12);
 
         assert_eq!(oam_row_words(&bus, 1), [0xAAAA, 0xBBBB, 0xCCCC, 0xDDDD]);
+    }
+
+    #[test]
+    fn key0_write_during_cgb_boot_window_selects_compat_and_native() {
+        let mut bus = Bus::new();
+        bus.cgb.is_cgb = true;
+        bus.cgb.cgb_mode = true;
+        bus.boot_rom_mapped = true;
+        bus.cgb.double_speed = true;
+        bus.cgb.t_phase = true;
+        bus.io[0x4D] = 1;
+        bus.vbk = 1;
+        bus.svbk = 7;
+        bus.hdma.remaining = 3;
+        bus.hdma.hblank_active = true;
+
+        bus.poke(0xFF4C, 0x04);
+        assert!(!bus.cgb.cgb_mode);
+        assert!(!bus.cgb.double_speed);
+        assert!(!bus.cgb.t_phase);
+        assert_eq!(bus.io[0x4D], 0);
+        assert_eq!(bus.vbk, 0);
+        assert_eq!(bus.svbk, 1);
+        assert_eq!(bus.hdma.remaining, 0);
+        assert_eq!(bus.peek(0xFF4C), 0xFF);
+
+        bus.poke(0xFF4C, 0x00);
+        assert!(bus.cgb.cgb_mode);
+        bus.poke(0xFF4C, 0x80);
+        assert!(bus.cgb.cgb_mode);
+
+        bus.boot_rom_mapped = false;
+        bus.poke(0xFF4C, 0x04);
+        assert!(bus.cgb.cgb_mode, "KEY0 ignored after boot ROM unmap");
+
+        let mut dmg = Bus::new();
+        dmg.boot_rom_mapped = true;
+        dmg.poke(0xFF4C, 0x00);
+        assert!(!dmg.cgb.cgb_mode);
+        assert_eq!(dmg.peek(0xFF4C), 0xFF);
+    }
+
+    #[test]
+    fn compat_mode_banks_are_forced_to_dmg_visible_banks() {
+        let mut bus = Bus::new();
+        bus.cgb.is_cgb = true;
+        bus.cgb.cgb_mode = false;
+        bus.vbk = 1;
+        bus.svbk = 7;
+        bus.vram[0][0] = 0x11;
+        bus.vram[1][0] = 0x22;
+        bus.wram[1][0] = 0x33;
+        bus.wram[7][0] = 0x44;
+
+        assert_eq!(bus.peek(0x8000), 0x11);
+        assert_eq!(bus.peek(0xD000), 0x33);
+        bus.poke(0x8000, 0x55);
+        bus.poke(0xD000, 0x66);
+        assert_eq!(bus.vram[0][0], 0x55);
+        assert_eq!(bus.vram[1][0], 0x22);
+        assert_eq!(bus.wram[1][0], 0x66);
+        assert_eq!(bus.wram[7][0], 0x44);
     }
 
     #[test]

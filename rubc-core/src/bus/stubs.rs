@@ -145,6 +145,10 @@ impl Joypad {
 /// CGB clock/speed state.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct CgbState {
+    /// True when the machine is CGB hardware, even if the boot ROM selected
+    /// DMG-compatibility behavior for a non-CGB cartridge.
+    #[serde(default)]
+    pub is_cgb: bool,
     /// True when running as a Game Boy Color. DMG has no speed switch, so KEY1
     /// writes are inert and STOP always halts. Set by `Machine::boot_cgb`.
     pub cgb_mode: bool,
