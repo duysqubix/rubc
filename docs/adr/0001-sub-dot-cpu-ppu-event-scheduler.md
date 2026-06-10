@@ -161,3 +161,52 @@ architecture. The honest, no-fake-passes outcome is to gate the class at
 baseline (exact diffs visible) and pursue the CPU/PPU co-scheduler (`rubc-t2qr`)
 as a deliberate, separately-reviewed future effort — not an autonomous rewrite
 that risks the shipped pixel-exact crown jewels.
+
+## Stage 5b outcome (2026-06-09): run-ahead co-scheduler + T1/T2 split locate the wall exactly
+
+After the stage-5 lockstep ceiling, the **CPU-run-ahead / PPU-lag** half of the
+co-scheduler was actually built (stages S1–S4 + the run-ahead crux): the CPU
+advances ahead positing timestamped PPU-visible writes into `pending_ppu_writes`;
+the PPU lags and drains them at their dots via `sync_ppu_to` / `drain_ppu_writes_through`.
+This is the decoupled-from-M-cycle scheduler stage 5 said was needed, and it
+shipped behavior-preserving:
+
+- **`m3_scy_change` 8819 → 3497** (60% better), zero regression, crown jewels 0/0,
+  full gate green — all on `rearch/sub-dot-scheduler`, master untouched.
+- The residual used a per-phase write-drain with a scalar `dots_after_start = 5`
+  (+20 subphases) future-drain — a band-aid, not the hardware model.
+
+The **principled T1/T2 BG-fetch split** (Oracle mechanism-E) was then implemented
+faithfully — split each data fetch into T1 (latch address from live SCY) + T2
+(read VRAM from latched address), matching SameBoy `display.c`
+`GET_TILE_DATA_LOWER/HIGH_T1/T2`, draining SCY at the exact T1 phase-time. It did
+**not** reach 0; it regressed (3497 → 9219) but **located the wall precisely**:
+
+- Wall trace, LY0 tile `0x42`: LOW samples `SCY=2` at dot 96, HIGH samples
+  `SCY=2` at dot 98, but the `SCY=3` write lands at **dot 103** — ~5 dots *after*
+  the HIGH fetch. SameBoy's HIGH sees `SCY=3`.
+- The write timestamp is `M_cycle_start + write_drive_ticks*4 subphases`; for SCY
+  that lands at dot 103, so the **writing M-cycle starts ~dot 101** while the
+  fetch that must see it ran at dot 98. Tuning the intra-M-cycle offset (V4 sweep
+  T0=9059/T1=8811/T2=9219/T3=10015) cannot cross dot 98.
+- The `+5` band-aid “worked” only by future-draining a not-yet-due write back onto
+  an earlier fetch (violating time); it is wrong for other fetch positions (hence
+  the 3497 residual, first-wrong pixel x=39).
+
+**Verdict (Oracle, HIGH confidence, binding):** verdict **B — current
+co-scheduler phase ceiling**, not hardware-impossible. The missing 5 dots are the
+**CPU instruction-stream phase relative to PPU fetch time**, and rubc has no local
+“CPU release into mode 3” lever (CPU execution is continuous, not released
+per-mode). The only lever that moves the write-burst 5 dots is global
+interrupt/HALT/STAT phase, which would regress the passing mooneye intr/STAT
+gates. `PPU_MIN_LAG_T` / `PPU_MAX_LOOKAHEAD_T` cannot fix it (the watermark
+changes when the PPU catches up, not the event timestamps). The DMG low-phase
+tile refetch is **load-bearing** (quarantining it regressed `m3_lcdc_tile_sel_change`
+1755→1790) and is kept.
+
+**Decision:** gate `m3_scy_change` at the improved baseline **3497** (the
+co-scheduler win is kept), documented as the current co-scheduler phase ceiling.
+Reaching 0 requires repositioning the whole CPU instruction stream relative to the
+PPU dot clock during mode 3 — a full co-scheduler rewrite (`rubc-t2qr`) that
+touches globally-validated STAT/interrupt timing, pursued separately, never as an
+autonomous change that risks the pixel-exact crown jewels.
