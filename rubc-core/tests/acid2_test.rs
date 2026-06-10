@@ -869,6 +869,107 @@ fn ppu_scy_change_ly0_fetch_sequence_matches_golden() {
     );
 }
 
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_bg_fetch_sidecar_predicts_scy_sameboy_geometry() {
+    use rubc_core::diag::ppu_trace::{BgFetchStage, PpuPhase};
+
+    let path = suites_dir().join("mealybug/m3_scy_change.gb");
+    let Ok(rom) = std::fs::read(&path) else {
+        eprintln!("m3_scy_change: ROM absent -- skipping");
+        return;
+    };
+    let mut m = Machine::boot_dmg_with_bootrom(&rom);
+    m.bus.ppu.set_phase_trace_line(Some(0));
+    if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+        eprintln!("m3_scy_change: no breakpoint -- skipping");
+        return;
+    }
+
+    let trace = m.bus.ppu.phase_trace();
+    let predictions = trace.bg_fetch_sidecar_events();
+    let high = predictions
+        .iter()
+        .find(|e| e.ly == 0 && e.x == 1 && e.tile == 0x42 && e.stage == BgFetchStage::DataHigh)
+        .expect("sidecar must predict LY0 tile 0x42 HIGH fetch");
+    assert_eq!(
+        high.actual_phase,
+        PpuPhase::TileDataHigh,
+        "sidecar HIGH event must be tied to the actual rubc HIGH sample for delta reporting"
+    );
+    assert_eq!(
+        high.predicted_t1_norm_dot, 22,
+        "SameBoy golden: decisive LY0 tile 0x42 HIGH_T1 samples at +22"
+    );
+    assert_eq!(
+        high.predicted_t1_norm_dot - high.actual_t1_norm_dot,
+        11,
+        "S3 input: rubc HIGH fetch is 11 dots tighter than SameBoy geometry"
+    );
+
+    let writes = trace.bg_fetch_sidecar_writes();
+    let scy_write = writes
+        .iter()
+        .find(|w| w.ly == 0 && w.addr == 0xFF42 && w.value == 3)
+        .expect("sidecar must predict the FF42<-3 collision write");
+    assert_eq!(
+        scy_write.predicted_write_start_norm_dot, 14,
+        "SameBoy golden: FF42<-3 write_m starts at +14"
+    );
+    assert_eq!(
+        scy_write.predicted_visible_norm_dot, 17,
+        "SameBoy model: FF42<-3 is internally visible at +17"
+    );
+    assert_eq!(
+        high.predicted_t1_norm_dot - scy_write.predicted_visible_norm_dot,
+        5,
+        "SameBoy makes SCY visible five dots before the decisive HIGH_T1 sample"
+    );
+}
+
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_bg_fetch_sidecar_predicts_lcdc_bg_map_sample_dots() {
+    use rubc_core::diag::ppu_trace::BgFetchStage;
+
+    fn run(name: &str, ly: u8) -> Option<Vec<rubc_core::diag::ppu_trace::BgFetchSidecarEvent>> {
+        let path = suites_dir().join(format!("mealybug/{name}.gb"));
+        let rom = std::fs::read(&path).ok()?;
+        let mut m = Machine::boot_dmg_with_bootrom(&rom);
+        m.bus.ppu.set_phase_trace_line(Some(ly));
+        if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+            return None;
+        }
+        Some(m.bus.ppu.phase_trace().bg_fetch_sidecar_events().to_vec())
+    }
+
+    let Some(ly0) = run("m3_lcdc_bg_map_change", 0) else {
+        eprintln!("m3_lcdc_bg_map_change: ROM absent or no breakpoint -- skipping");
+        return;
+    };
+    let x1 = ly0
+        .iter()
+        .find(|e| e.ly == 0 && e.x == 1 && e.stage == BgFetchStage::TileNo)
+        .expect("sidecar must predict LY0 x=1 map select");
+    assert_eq!(
+        x1.predicted_t1_norm_dot, 16,
+        "SameBoy golden m3_lcdc_bg_map_change LY0: x=1 map-select sample at +16"
+    );
+
+    let Some(ly72) = run("m3_lcdc_bg_map_change", 72) else {
+        eprintln!("m3_lcdc_bg_map_change: ROM absent or no breakpoint -- skipping");
+        return;
+    };
+    let x2 = ly72
+        .iter()
+        .find(|e| e.ly == 72 && e.x == 2 && e.stage == BgFetchStage::TileNo)
+        .expect("sidecar must predict LY72 x=2 map select");
+    assert_eq!(
+        x2.predicted_t1_norm_dot, 24,
+        "SameBoy golden m3_lcdc_bg_map_change LY72: x=2 map-select sample at +24"
+    );
+}
+
 /// ADR 0001 stage 5 OBSERVATION: scan the accumulated LY0 trace for fetches
 /// where the LOW and HIGH bitplane sampled DIFFERENT SCY values -- the exact
 /// mid-mode-3 race m3_scy_change exercises. Prints them so the calibration has

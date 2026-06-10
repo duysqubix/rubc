@@ -26,6 +26,51 @@ pub enum PpuPhase {
     Emit,
 }
 
+/// Hardware BG fetch stage predicted by the inert sidecar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BgFetchStage {
+    /// B: tile-number / BG-map fetch.
+    TileNo,
+    /// 0: low bitplane fetch.
+    DataLow,
+    /// 1: high bitplane fetch.
+    DataHigh,
+    /// s: push/sleep slot after bitplanes are fetched.
+    Sleep,
+}
+
+/// One sidecar prediction for a BG-fetch stage.
+///
+/// The sidecar is deliberately inert: it is derived from the append-only trace
+/// after the fact and is never read by the renderer. `actual_*` records rubc's
+/// current fetch geometry; `predicted_*` records SameBoy/hardware geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BgFetchSidecarEvent {
+    pub ly: u8,
+    pub x: u8,
+    pub tile: u8,
+    pub stage: BgFetchStage,
+    pub actual_phase: PpuPhase,
+    pub actual_t1_norm_dot: i32,
+    pub predicted_t1_norm_dot: i32,
+    pub predicted_t2_norm_dot: i32,
+    pub delta_dots: i32,
+    pub scy: u8,
+    pub scx: u8,
+    pub lcdc: u8,
+}
+
+/// One sidecar prediction for a CPU write that can affect BG fetching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BgFetchSidecarWrite {
+    pub ly: u8,
+    pub addr: u16,
+    pub value: u8,
+    pub actual_norm_dot: i32,
+    pub predicted_write_start_norm_dot: i32,
+    pub predicted_visible_norm_dot: i32,
+}
+
 /// One register-sample record taken during mode 3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PpuSample {
@@ -134,6 +179,110 @@ impl PpuPhaseTrace {
             .copied()
             .filter(|s| s.ly == ly && s.tile == tile)
             .collect()
+    }
+
+    /// Predict the hardware/SameBoy BG-fetch schedule for recorded scanlines.
+    ///
+    /// Normalisation uses rubc's first post-dummy TileNo sample as zero, matching
+    /// the Stage-B wall note (`rubc +11` vs `SameBoy +22` for the decisive SCY
+    /// HIGH_T1 sample). The constants are the measured Wall-1 geometry profile:
+    /// rubc samples TileNo 12 dots early, LOW 10 dots early, and HIGH 11 dots
+    /// early. This models where hardware would sample without moving any pixels.
+    pub fn bg_fetch_sidecar_events(&self) -> Vec<BgFetchSidecarEvent> {
+        let mut out = Vec::new();
+        for sample in &self.samples {
+            let Some(anchor_dot) = self.post_dummy_tile_no_anchor(sample.ly) else {
+                continue;
+            };
+            let actual = sample.line_dot as i32 - anchor_dot as i32;
+            let Some((stage, delta)) = self.bg_fetch_sidecar_stage_delta(sample, actual) else {
+                continue;
+            };
+            let predicted = actual + delta;
+            out.push(BgFetchSidecarEvent {
+                ly: sample.ly,
+                x: sample.x,
+                tile: sample.tile,
+                stage,
+                actual_phase: sample.phase,
+                actual_t1_norm_dot: actual,
+                predicted_t1_norm_dot: predicted,
+                predicted_t2_norm_dot: predicted + 1,
+                delta_dots: delta,
+                scy: sample.scy,
+                scx: sample.scx,
+                lcdc: sample.lcdc,
+            });
+        }
+        out
+    }
+
+    /// Predict SameBoy write timing for BG-fetch-visible writes.
+    ///
+    /// For the current Stage-2 contract this carries the SCY `ReadNew` geometry:
+    /// the observed rubc FF42<-3 write at actual +11 corresponds to SameBoy
+    /// `write_m` start +14 and internal visibility +17. Other writes are carried
+    /// through unchanged until a later stage consumes them.
+    pub fn bg_fetch_sidecar_writes(&self) -> Vec<BgFetchSidecarWrite> {
+        self.writes
+            .iter()
+            .filter_map(|w| Some((w, self.post_dummy_tile_no_anchor(w.ly)?)))
+            .map(|(w, anchor_dot)| {
+                let actual = w.line_dot as i32 - anchor_dot as i32;
+                let (start_delta, visible_delta) = if w.addr == 0xFF42 { (3, 6) } else { (0, 0) };
+                BgFetchSidecarWrite {
+                    ly: w.ly,
+                    addr: w.addr,
+                    value: w.value,
+                    actual_norm_dot: actual,
+                    predicted_write_start_norm_dot: actual + start_delta,
+                    predicted_visible_norm_dot: actual + visible_delta,
+                }
+            })
+            .collect()
+    }
+
+    fn post_dummy_tile_no_anchor(&self, ly: u8) -> Option<u32> {
+        self.samples
+            .iter()
+            .filter(|s| s.ly == ly && s.phase == PpuPhase::TileNo)
+            .nth(1)
+            .map(|s| s.line_dot)
+    }
+}
+
+impl PpuPhaseTrace {
+    fn bg_fetch_sidecar_stage_delta(
+        &self,
+        sample: &PpuSample,
+        actual_norm_dot: i32,
+    ) -> Option<(BgFetchStage, i32)> {
+        let line_has_scy_writes = self
+            .writes
+            .iter()
+            .any(|w| w.ly == sample.ly && w.addr == 0xFF42);
+        let line_has_lcdc_writes = self
+            .writes
+            .iter()
+            .any(|w| w.ly == sample.ly && w.addr == 0xFF40);
+        match sample.phase {
+            PpuPhase::TileNo => Some((
+                BgFetchStage::TileNo,
+                if line_has_lcdc_writes {
+                    3
+                } else if line_has_scy_writes {
+                    12
+                } else if actual_norm_dot > 16 {
+                    3
+                } else {
+                    9
+                },
+            )),
+            PpuPhase::TileDataLow => Some((BgFetchStage::DataLow, 10)),
+            PpuPhase::TileDataHigh => Some((BgFetchStage::DataHigh, 11)),
+            PpuPhase::Push => Some((BgFetchStage::Sleep, 11)),
+            PpuPhase::Emit => None,
+        }
     }
 }
 
