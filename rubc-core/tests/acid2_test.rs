@@ -31,7 +31,7 @@ const MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_DIFF: usize = 0;
 const MAX_MEALYBUG_M3_LCDC_WIN_EN_CHANGE_MULTIPLE_WX_DIFF: usize = 952;
 const MAX_MEALYBUG_M3_WINDOW_TIMING_DIFF: usize = 103;
 const MAX_MEALYBUG_M3_WINDOW_TIMING_WX_0_DIFF: usize = 1346;
-const MAX_MEALYBUG_M3_SCY_CHANGE_DIFF: usize = 8819;
+const MAX_MEALYBUG_M3_SCY_CHANGE_DIFF: usize = 3497;
 const MAX_MEALYBUG_M3_WX_4_CHANGE_DIFF: usize = 3077;
 const MAX_MEALYBUG_M3_WX_5_CHANGE_DIFF: usize = 3267;
 const MAX_MEALYBUG_M3_WX_6_CHANGE_DIFF: usize = 13018;
@@ -534,6 +534,112 @@ fn ppu_phase_trace_captures_scy_change_fetch_steps() {
         has_colliding_write,
         "SCY=3 write must land between LOW dot {} and HIGH dot {} for tile 0x42",
         low.dot_ticks, high.dot_ticks
+    );
+}
+
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_scy_change_ly0_fetch_sequence_matches_golden() {
+    use rubc_core::diag::ppu_trace::{PpuPhase, PpuSample};
+
+    const EXPECTED_TILE_NO_LOW_SCY: [u8; 21] = [
+        1, 2, 3, 4, 3, 2, 1, 0, 1, 2, 3, 4, 3, 2, 1, 0, 1, 2, 3, 4, 3,
+    ];
+    const EXPECTED_HIGH_SCY: [u8; 21] = [
+        1, 3, 4, 3, 2, 1, 0, 1, 2, 3, 4, 3, 2, 1, 0, 1, 2, 3, 4, 3, 2,
+    ];
+    const EXPECTED_FIRST_PIXELS: [u8; 16] = [0, 3, 3, 1, 1, 3, 3, 0, 3, 1, 1, 1, 1, 1, 3, 3];
+
+    fn expected_dot(phase: PpuPhase, x: usize) -> u32 {
+        let base = match phase {
+            PpuPhase::TileNo => 87,
+            PpuPhase::TileDataLow => 89,
+            PpuPhase::TileDataHigh => 91,
+            PpuPhase::Push | PpuPhase::Emit => unreachable!("BG fetch phase only"),
+        };
+        let dot = base + x as u32 * 8;
+        if x == 0 {
+            dot + 1
+        } else {
+            dot
+        }
+    }
+
+    fn assert_fetch_phase(
+        phase_name: &str,
+        samples: &[PpuSample],
+        phase: PpuPhase,
+        expected_scy: &[u8; 21],
+    ) {
+        let phase_samples: Vec<_> = samples
+            .iter()
+            .filter(|s| s.phase == phase && (s.x as usize) < expected_scy.len())
+            .copied()
+            .collect();
+        assert_eq!(
+            phase_samples.len(),
+            expected_scy.len(),
+            "LY0 {phase_name} must cover every post-dummy fetch x=0..20"
+        );
+        for (x, sample) in phase_samples.iter().enumerate() {
+            assert_eq!(sample.x as usize, x, "LY0 {phase_name} fetch order");
+            assert_eq!(
+                sample.line_dot,
+                expected_dot(phase, x),
+                "LY0 {phase_name} x={x} must sample at the golden dot"
+            );
+            assert_eq!(
+                sample.scy, expected_scy[x],
+                "LY0 {phase_name} x={x} dot {} must sample SCY={} (got {})",
+                sample.line_dot, expected_scy[x], sample.scy
+            );
+        }
+    }
+
+    let path = suites_dir().join("mealybug/m3_scy_change.gb");
+    let Ok(rom) = std::fs::read(&path) else {
+        eprintln!("m3_scy_change: ROM absent -- skipping");
+        return;
+    };
+    let mut m = Machine::boot_dmg_with_bootrom(&rom);
+    m.bus.ppu.set_phase_trace_line(Some(0));
+    if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+        eprintln!("m3_scy_change: no breakpoint -- skipping");
+        return;
+    }
+
+    let samples = m.bus.ppu.phase_trace().samples();
+    assert!(
+        samples.len() >= 3,
+        "LY0 trace must include the dummy BG fetch"
+    );
+    let post_dummy = &samples[3..];
+    assert_fetch_phase(
+        "TileNo",
+        post_dummy,
+        PpuPhase::TileNo,
+        &EXPECTED_TILE_NO_LOW_SCY,
+    );
+    assert_fetch_phase(
+        "TileDataLow",
+        post_dummy,
+        PpuPhase::TileDataLow,
+        &EXPECTED_TILE_NO_LOW_SCY,
+    );
+    assert_fetch_phase(
+        "TileDataHigh",
+        post_dummy,
+        PpuPhase::TileDataHigh,
+        &EXPECTED_HIGH_SCY,
+    );
+
+    let first_pixels: Vec<u8> = m.bus.ppu.framebuffer[..EXPECTED_FIRST_PIXELS.len()]
+        .iter()
+        .map(|p| p.dmg_shade())
+        .collect();
+    assert_eq!(
+        first_pixels, EXPECTED_FIRST_PIXELS,
+        "m3_scy_change first visible pixels x=0..15 must match SameBoy/reference"
     );
 }
 

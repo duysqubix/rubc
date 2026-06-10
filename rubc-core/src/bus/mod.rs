@@ -28,7 +28,7 @@ pub mod timer;
 
 pub use cartridge::Cartridge;
 pub use flat::FlatBus;
-pub use ppu::{CgbRenderState, DmgPalettes, Ppu};
+pub use ppu::{CgbRenderState, DmgPalettes, Ppu, PpuPhaseHooks, PpuRegisterPhase};
 
 use apu::Apu;
 use serial::Serial;
@@ -39,8 +39,6 @@ use timer::Timer;
 
 const PPU_MAX_LOOKAHEAD_T: u64 = 64;
 const PPU_MIN_LAG_T: u64 = 16;
-const DMG_SCY_RUNAHEAD_BORROW_SUBPHASES: u64 =
-    scheduler::CPU_ACCESS_END_OFFSET as u64 + scheduler::SUBPHASES_PER_T;
 
 fn default_next_ppu_dot_time() -> scheduler::Time {
     scheduler::Time(scheduler::PPU_DOT_SUBPHASES_NORMAL)
@@ -363,6 +361,123 @@ impl Default for Bus {
     }
 }
 
+struct PpuWriteDrain<'a> {
+    queue: &'a mut VecDeque<scheduler::CpuWriteEvent>,
+    dot_time: scheduler::Time,
+    dot_period: u64,
+    io: &'a mut [u8; 0x80],
+    cgb_mode: bool,
+    bcps: &'a mut u8,
+    ocps: &'a mut u8,
+    bg_palette_ram: &'a mut [u8; 64],
+    obj_palette_ram: &'a mut [u8; 64],
+}
+
+impl PpuWriteDrain<'_> {
+    fn drain(
+        &mut self,
+        through: scheduler::Time,
+        phase: PpuRegisterPhase,
+        ppu: &mut Ppu,
+        irq: &mut Interrupts,
+    ) {
+        let mut deferred = VecDeque::new();
+        while matches!(self.queue.front(), Some(event) if event.at <= through) {
+            let event = self.queue.pop_front().expect("front event exists");
+            if phase_accepts_ppu_write(phase, event.addr, self.cgb_mode) {
+                self.apply(event.addr, event.value, ppu, irq);
+            } else {
+                deferred.push_back(event);
+            }
+        }
+        while let Some(event) = deferred.pop_back() {
+            self.queue.push_front(event);
+        }
+    }
+
+    fn apply(&mut self, addr: u16, value: u8, ppu: &mut Ppu, irq: &mut Interrupts) {
+        match addr {
+            0xFF40 => ppu.write_lcdc(value, irq),
+            0xFF41 => ppu.write_stat(value, irq),
+            0xFF42 => ppu.write_scy(value),
+            0xFF43 => ppu.write_scx(value),
+            0xFF45 => ppu.write_lyc(value, irq),
+            0xFF47 => {
+                self.io[0x47] = value;
+                ppu.write_bgp(value);
+            }
+            0xFF48 => {
+                self.io[0x48] = value;
+                ppu.write_obp0(value);
+            }
+            0xFF49 => {
+                self.io[0x49] = value;
+                ppu.write_obp1(value);
+            }
+            0xFF4A => ppu.write_wy(value),
+            0xFF4B => ppu.write_wx(value),
+            0xFF68 if self.cgb_mode => *self.bcps = value & 0xBF,
+            0xFF6A if self.cgb_mode => *self.ocps = value & 0xBF,
+            0xFF69 if self.cgb_mode => {
+                let index = (*self.bcps & 0x3F) as usize;
+                if !ppu.cgb_palette_blocked() {
+                    self.bg_palette_ram[index] = value;
+                    ppu.write_cgb_bg_palette_byte(index, value);
+                }
+                if *self.bcps & 0x80 != 0 {
+                    *self.bcps = (*self.bcps & 0x80) | ((*self.bcps).wrapping_add(1) & 0x3F);
+                }
+            }
+            0xFF6B if self.cgb_mode => {
+                let index = (*self.ocps & 0x3F) as usize;
+                if !ppu.cgb_palette_blocked() {
+                    self.obj_palette_ram[index] = value;
+                    ppu.write_cgb_obj_palette_byte(index, value);
+                }
+                if *self.ocps & 0x80 != 0 {
+                    *self.ocps = (*self.ocps & 0x80) | ((*self.ocps).wrapping_add(1) & 0x3F);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl PpuPhaseHooks for PpuWriteDrain<'_> {
+    fn before_register_phase(
+        &mut self,
+        ppu: &mut Ppu,
+        irq: &mut Interrupts,
+        phase: PpuRegisterPhase,
+    ) {
+        let dots_after_start = match phase {
+            PpuRegisterPhase::BgTileNo
+            | PpuRegisterPhase::BgTileDataLow
+            | PpuRegisterPhase::BgTileDataHigh
+                if ppu.bg_fetcher_x() == 0 =>
+            {
+                0
+            }
+            PpuRegisterPhase::BgTileNo
+            | PpuRegisterPhase::BgTileDataLow
+            | PpuRegisterPhase::BgTileDataHigh => 5,
+            PpuRegisterPhase::PixelShiftOrEmit | PpuRegisterPhase::StatSettle => 0,
+        };
+        let through = scheduler::Time(self.dot_time.0 + self.dot_period * dots_after_start);
+        self.drain(through, phase, ppu, irq);
+    }
+}
+
+fn phase_accepts_ppu_write(phase: PpuRegisterPhase, addr: u16, cgb_mode: bool) -> bool {
+    match phase {
+        PpuRegisterPhase::BgTileNo
+        | PpuRegisterPhase::BgTileDataLow
+        | PpuRegisterPhase::BgTileDataHigh => !cgb_mode && addr == 0xFF42,
+        PpuRegisterPhase::PixelShiftOrEmit => matches!(addr, 0xFF47..=0xFF49 | 0xFF68..=0xFF6B),
+        PpuRegisterPhase::StatSettle => matches!(addr, 0xFF41 | 0xFF45),
+    }
+}
+
 impl Bus {
     pub fn new() -> Self {
         Self::default()
@@ -462,16 +577,6 @@ impl Bus {
     }
 
     fn schedule_cpu_write(&mut self, at: scheduler::Time, addr: u16, value: u8) {
-        let at = if addr == 0xFF42
-            && !self.cgb.cgb_mode
-            && self.cpu_time.0.saturating_sub(self.ppu_time.0)
-                >= scheduler::CPU_ACCESS_END_OFFSET as u64
-            && at.0 >= DMG_SCY_RUNAHEAD_BORROW_SUBPHASES
-        {
-            scheduler::Time(at.0 - DMG_SCY_RUNAHEAD_BORROW_SUBPHASES)
-        } else {
-            at
-        };
         let queue = if is_ppu_visible_write(addr) {
             &mut self.pending_ppu_writes
         } else {
@@ -730,13 +835,33 @@ impl Bus {
             obp0: self.io[0x48],
             obp1: self.io[0x49],
         };
+        let bg_palette_ram = self.bg_palette_ram;
+        let obj_palette_ram = self.obj_palette_ram;
         let cgb = CgbRenderState {
             enabled: self.cgb.cgb_mode,
-            bg_palette_ram: &self.bg_palette_ram,
-            obj_palette_ram: &self.obj_palette_ram,
+            bg_palette_ram: &bg_palette_ram,
+            obj_palette_ram: &obj_palette_ram,
         };
-        self.ppu
-            .tick_dot(&mut self.interrupts, &self.vram, &self.oam, palettes, cgb);
+        let dot_period = self.ppu_dot_period();
+        let mut hooks = PpuWriteDrain {
+            queue: &mut self.pending_ppu_writes,
+            dot_time: self.ppu_time,
+            dot_period,
+            io: &mut self.io,
+            cgb_mode: self.cgb.cgb_mode,
+            bcps: &mut self.bcps,
+            ocps: &mut self.ocps,
+            bg_palette_ram: &mut self.bg_palette_ram,
+            obj_palette_ram: &mut self.obj_palette_ram,
+        };
+        self.ppu.tick_dot_phased(
+            &mut self.interrupts,
+            &self.vram,
+            &self.oam,
+            palettes,
+            cgb,
+            &mut hooks,
+        );
     }
 
     fn div_apu_bit_high(&self) -> bool {

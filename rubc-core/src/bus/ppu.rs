@@ -174,6 +174,36 @@ pub struct CgbRenderState<'a> {
     pub obj_palette_ram: &'a [u8; 64],
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PpuRegisterPhase {
+    BgTileNo,
+    BgTileDataLow,
+    BgTileDataHigh,
+    PixelShiftOrEmit,
+    StatSettle,
+}
+
+pub trait PpuPhaseHooks {
+    fn before_register_phase(
+        &mut self,
+        ppu: &mut Ppu,
+        irq: &mut Interrupts,
+        phase: PpuRegisterPhase,
+    );
+}
+
+struct NoopPpuPhaseHooks;
+
+impl PpuPhaseHooks for NoopPpuPhaseHooks {
+    fn before_register_phase(
+        &mut self,
+        _ppu: &mut Ppu,
+        _irq: &mut Interrupts,
+        _phase: PpuRegisterPhase,
+    ) {
+    }
+}
+
 /// Per-sprite attributes passed to `overlay_sprite_pixels` (bundled to keep the
 /// argument count manageable).
 #[derive(Clone, Copy)]
@@ -595,6 +625,19 @@ impl Ppu {
         palettes: DmgPalettes,
         cgb: CgbRenderState,
     ) {
+        let mut hooks = NoopPpuPhaseHooks;
+        self.tick_dot_phased(irq, vram, oam, palettes, cgb, &mut hooks);
+    }
+
+    pub fn tick_dot_phased<H: PpuPhaseHooks>(
+        &mut self,
+        irq: &mut Interrupts,
+        vram: &[[u8; 0x2000]; 2],
+        oam: &[u8; 0xA0],
+        palettes: DmgPalettes,
+        cgb: CgbRenderState,
+        hooks: &mut H,
+    ) {
         if !self.phase_dot_start(palettes, cgb) {
             return;
         }
@@ -603,8 +646,9 @@ impl Ppu {
         }
         if self.ly <= LAST_VISIBLE_LINE {
             self.phase_mode_edge_visible_preamble();
-            self.phase_mode_body(vram, oam, irq);
+            self.phase_mode_body(vram, oam, irq, hooks);
         }
+        hooks.before_register_phase(self, irq, PpuRegisterPhase::StatSettle);
         self.phase_stat_settle(irq);
     }
 
@@ -653,13 +697,14 @@ impl Ppu {
         vram: &[[u8; 0x2000]; 2],
         oam: &[u8; 0xA0],
         irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
     ) {
         match self.mode {
             mode::OAM_SCAN => {
                 self.phase_oam_scan(oam);
                 self.phase_oam_to_drawing_edge(irq);
             }
-            mode::DRAWING => self.phase_drawing_dot(vram, irq),
+            mode::DRAWING => self.phase_drawing_dot(vram, irq, hooks),
             mode::HBLANK => self.phase_hblank_mode_edge(irq),
             _ => {}
         }
@@ -881,9 +926,14 @@ impl Ppu {
         self.set_mode(mode::DRAWING, irq);
     }
 
-    fn phase_drawing_dot(&mut self, vram: &[[u8; 0x2000]; 2], irq: &mut Interrupts) {
+    fn phase_drawing_dot(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) {
         self.phase_drawing_dot_start();
-        if self.phase_sprite_idle(vram) {
+        if self.phase_sprite_idle(vram, irq, hooks) {
             return;
         }
         if self.phase_pending_sprite_fetch(vram) {
@@ -896,7 +946,8 @@ impl Ppu {
             return;
         }
 
-        self.phase_bg_fetcher(vram);
+        self.phase_bg_fetcher(vram, irq, hooks);
+        hooks.before_register_phase(self, irq, PpuRegisterPhase::PixelShiftOrEmit);
         if self.phase_pixel_shift_or_emit(irq) {
             self.phase_window_compare_post_emit();
         }
@@ -906,9 +957,14 @@ impl Ppu {
         self.drawing_dots += 1;
     }
 
-    fn phase_sprite_idle(&mut self, vram: &[[u8; 0x2000]; 2]) -> bool {
+    fn phase_sprite_idle(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) -> bool {
         if self.sprite_idle_ticks > 0 {
-            self.clock_bg_fetcher(vram);
+            self.clock_bg_fetcher(vram, irq, hooks);
             self.sprite_idle_ticks -= 1;
             return true;
         }
@@ -942,8 +998,13 @@ impl Ppu {
         false
     }
 
-    fn phase_bg_fetcher(&mut self, vram: &[[u8; 0x2000]; 2]) {
-        self.clock_bg_fetcher(vram);
+    fn phase_bg_fetcher(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) {
+        self.clock_bg_fetcher(vram, irq, hooks);
     }
 
     fn phase_pixel_shift_or_emit(&mut self, irq: &mut Interrupts) -> bool {
@@ -967,7 +1028,12 @@ impl Ppu {
         self.set_mode(mode::HBLANK, irq);
     }
 
-    fn clock_bg_fetcher(&mut self, vram: &[[u8; 0x2000]; 2]) {
+    fn clock_bg_fetcher(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) {
         self.phase_bg_window_resume_gate();
         if self.phase_fifo_push() {
             return;
@@ -977,9 +1043,18 @@ impl Ppu {
         }
 
         match self.bg_fetcher.step {
-            FetchStep::TileNo => self.phase_bg_tile_no_sample(vram),
-            FetchStep::TileDataLow => self.phase_bg_low_sample(vram),
-            FetchStep::TileDataHigh => self.phase_bg_high_sample(vram),
+            FetchStep::TileNo => {
+                hooks.before_register_phase(self, irq, PpuRegisterPhase::BgTileNo);
+                self.phase_bg_tile_no_sample(vram);
+            }
+            FetchStep::TileDataLow => {
+                hooks.before_register_phase(self, irq, PpuRegisterPhase::BgTileDataLow);
+                self.phase_bg_low_sample(vram);
+            }
+            FetchStep::TileDataHigh => {
+                hooks.before_register_phase(self, irq, PpuRegisterPhase::BgTileDataHigh);
+                self.phase_bg_high_sample(vram);
+            }
             FetchStep::Push => unreachable!("push step handled before tick accounting"),
         }
     }
@@ -1651,6 +1726,30 @@ impl Ppu {
                 self.window_glitch_x = None;
             }
         }
+    }
+
+    pub fn write_bgp(&mut self, value: u8) {
+        self.bgp = value;
+    }
+
+    pub fn write_obp0(&mut self, value: u8) {
+        self.obp0 = value;
+    }
+
+    pub fn write_obp1(&mut self, value: u8) {
+        self.obp1 = value;
+    }
+
+    pub fn write_cgb_bg_palette_byte(&mut self, index: usize, value: u8) {
+        self.cgb_bg_palette_ram[index & 0x3F] = value;
+    }
+
+    pub fn write_cgb_obj_palette_byte(&mut self, index: usize, value: u8) {
+        self.cgb_obj_palette_ram[index & 0x3F] = value;
+    }
+
+    pub fn bg_fetcher_x(&self) -> u8 {
+        self.bg_fetcher.fetcher_x
     }
 
     // ---- VRAM / OAM access gating -------------------------------------------
