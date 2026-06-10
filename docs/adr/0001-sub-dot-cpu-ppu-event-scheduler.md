@@ -290,3 +290,57 @@ separately, never as an autonomous change that risks the pixel-exact crown
 jewels. The branch `rearch/sub-dot-scheduler` stays unmerged until that larger
 effort is undertaken; `master` remains shippable.
 
+
+## Track B outcome (2026-06-10): the kill stage confirms the walls are one wall, anchored to public STAT timing
+
+The "deeper rearchitecture" was attempted as a staged campaign with full
+instrumentation. Each stage was independently gated; crown jewels stayed
+0/0/0 throughout.
+
+- **S1 — golden traces.** SameBoy (instrumented `display.c`/`sm83_cpu.c`,
+  reproducible via `reference/goldens/instrumentation.patch`) captured
+  deterministic per-dot traces for five mealybug ROMs. The Wall-1 anchors
+  reproduce exactly (`FF42<-3` write +14, visible +17, HIGH_T1 +22, relative
+  to the first post-dummy TileNo).
+
+- **S2 — fetch sidecar (landed, inert).** A trace-only predictor of the
+  hardware fetch schedule, golden-asserted. The geometry gap is
+  **heterogeneous**: TileNo +12 (SCY-write lines) / +9 (early) / +3 (late),
+  DataLow +10, DataHigh +11, Sleep +11 dots — a constant shift is ruled out.
+  The `dots_after_start = 5` future-drain is thereby *explained*: it
+  compensates FF42 visibility against the +11-tight fetch.
+
+- **W2 — output sidecar (landed, inert).** Hardware samples BG and OBJ
+  palettes at the **same dot** (delta 0.0, proven non-vacuous on the LY58
+  golden). The earlier "BG-vs-OBJ phase" hypothesis is dead. The palette
+  defect is structural: rubc resolves priority/source before its output pipe
+  and samples palettes at emission, conflating pop cadence with the LCD
+  column latch.
+
+- **Stage 6 — palette latch (STOP).** Making per-pixel palette sampling
+  hardware-correct (sidecar-verified) moved **zero pixels**: rubc emits x0 at
+  line_dot 97 where hardware latches at 112. The +15 decomposes as the +11
+  fetch/sleep geometry delay plus the existing 4-dot output latency — the
+  output wall is *downstream of* the fetch wall. Delaying output alone
+  regressed `m3_bgp_change` 820→7928 and was reverted.
+
+- **S3 — the kill stage (KILLED, as scoped).** Decoupling the internal
+  fetch/finish timeline from the public mode-3 edges — the prerequisite for
+  moving the fetch +11 dots later inside an unchanged public window —
+  regressed mooneye ppu 13/13 → 9/13 (`hblank_ly_scx_timing-GS`,
+  `intr_2_0_timing`, `lcdon_timing-GS`, `lcdon_write_timing-GS`) on the first
+  honest step. rubc's globally-validated STAT/HBlank/interrupt signatures are
+  anchored to the *internal* last-pixel position (~dot 252), not to an
+  independent public schedule. Reverted; the LY58 latch-gap evidence test
+  (`ppu_dmg_lcd_palette_sidecar_locks_stage6_latch_gap_ly58`) pins the gap.
+
+**Terminal verdict.** The mid-mode-3 register-race class is blocked by a
+single coupling: internal fetch/output geometry and public STAT timing are
+one timeline in rubc. Repositioning the geometry to hardware truth requires
+re-deriving every STAT/interrupt signature from hardware at the new anchors —
+a timing-core rebuild, not a patch. All shortcut classes are now falsified
+with executable evidence (per-register write timing: conflict_map A–E;
+compat-scoped conflict landing: probe/jorc; output-side latching: Stage 6;
+public-edge decoupling: S3). The gates are pinned at honest baselines, the
+sidecars and goldens remain as regression armor, and `master` stays
+shippable at ~99.9% PPU accuracy with no known game affected.
