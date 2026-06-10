@@ -310,6 +310,9 @@ pub struct Bus {
     pending_ppu_writes: VecDeque<scheduler::CpuWriteEvent>,
     #[serde(default)]
     next_write_seq: u64,
+    #[cfg(feature = "trace")]
+    #[serde(skip, default)]
+    ppu_future_drained_writes: u64,
     /// Test/diagnostic hook: total `tick_cpu_t` calls so far this run.
     t_tick_count: u64,
     /// Snapshot of `t_tick_count` taken at the last latched access (for tests
@@ -355,6 +358,8 @@ impl Default for Bus {
             pending_cpu_writes: VecDeque::new(),
             pending_ppu_writes: VecDeque::new(),
             next_write_seq: 0,
+            #[cfg(feature = "trace")]
+            ppu_future_drained_writes: 0,
             ticks_at_last_sample: 0,
             serial_out: Vec::new(),
         }
@@ -371,6 +376,8 @@ struct PpuWriteDrain<'a> {
     ocps: &'a mut u8,
     bg_palette_ram: &'a mut [u8; 64],
     obj_palette_ram: &'a mut [u8; 64],
+    #[cfg(feature = "trace")]
+    future_drained_writes: &'a mut u64,
 }
 
 impl PpuWriteDrain<'_> {
@@ -385,6 +392,10 @@ impl PpuWriteDrain<'_> {
         while matches!(self.queue.front(), Some(event) if event.at <= through) {
             let event = self.queue.pop_front().expect("front event exists");
             if phase_accepts_ppu_write(phase, event.addr, self.cgb_mode) {
+                #[cfg(feature = "trace")]
+                if event.at > self.dot_time {
+                    *self.future_drained_writes += 1;
+                }
                 self.apply(event.addr, event.value, ppu, irq);
             } else {
                 deferred.push_back(event);
@@ -481,6 +492,11 @@ fn phase_accepts_ppu_write(phase: PpuRegisterPhase, addr: u16, cgb_mode: bool) -
 impl Bus {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn ppu_future_drained_write_count(&self) -> u64 {
+        self.ppu_future_drained_writes
     }
 
     fn boot_rom_byte(&self, addr: u16) -> Option<u8> {
@@ -853,6 +869,8 @@ impl Bus {
             ocps: &mut self.ocps,
             bg_palette_ram: &mut self.bg_palette_ram,
             obj_palette_ram: &mut self.obj_palette_ram,
+            #[cfg(feature = "trace")]
+            future_drained_writes: &mut self.ppu_future_drained_writes,
         };
         self.ppu.tick_dot_phased(
             &mut self.interrupts,

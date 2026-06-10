@@ -537,6 +537,109 @@ fn ppu_phase_trace_captures_scy_change_fetch_steps() {
     );
 }
 
+/// ADR 0001 Stage B WALL DOCUMENTATION (do not delete -- regression lock).
+///
+/// SameBoy ground-truth probe (2026-06-10) + Oracle ruling proved that the
+/// SCY `ConflictType::ReadNew` 1-T-early write shift is a FAKE under rubc's
+/// `schedule_cpu_write(start + offset)` model: it would require making the
+/// write visible *before its own M-cycle starts*. The residual is a
+/// fetch-phase geometry offset, NOT a per-register SCY write offset, so the
+/// Stage B producer change was reverted (behavior == Stage A baseline).
+///
+/// Measured relative to the first post-dummy LY0 TileNo fetch (1 DMG dot =
+/// 2 SameBoy 8MHz ticks):
+///
+/// - tile 0x42 HIGH_T1 fetch:  rubc +11 vs SameBoy +22  (delta -11)
+/// - FF42<-3 visible:          rubc +11 vs SameBoy +17  (delta  -6)
+/// - write_m start:            rubc  +9 vs SameBoy +14  (delta  -5)
+///
+/// SameBoy makes SCY=3 visible 5 dots BEFORE the HIGH fetch; rubc makes it
+/// visible AT THE SAME dot. rubc's fetch is ahead of SameBoy by more than the
+/// write is, so the honest fix is fetch-phase geometry (a global CPU/PPU phase
+/// change that risks the STAT/intr crown jewels), not SCY tuning.
+///
+/// This test locks the documented wall geometry: SCY=3 becomes visible at the
+/// same dot as the HIGH fetch. If a future change moves it, this test fails so
+/// the wall cannot regress silently.
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_scy_read_new_is_a_documented_fetch_phase_wall() {
+    use rubc_core::diag::ppu_trace::PpuPhase;
+
+    let path = suites_dir().join("mealybug/m3_scy_change.gb");
+    let Ok(rom) = std::fs::read(&path) else {
+        eprintln!("m3_scy_change: ROM absent -- skipping");
+        return;
+    };
+    let mut m = Machine::boot_dmg_with_bootrom(&rom);
+
+    m.bus.ppu.set_phase_trace_line(Some(0));
+    if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+        eprintln!("m3_scy_change: no breakpoint -- skipping");
+        return;
+    }
+
+    m.bus.ppu.set_phase_trace_line(Some(0));
+    if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+        eprintln!("m3_scy_change: no breakpoint -- skipping");
+        return;
+    }
+
+    let trace = m.bus.ppu.phase_trace();
+    let samples = trace.samples();
+    let target_fetch = samples
+        .windows(2)
+        .find(|w| {
+            w[0].ly == 0
+                && w[0].tile == 0x42
+                && w[0].phase == PpuPhase::TileDataLow
+                && w[1].ly == 0
+                && w[1].tile == 0x42
+                && w[1].phase == PpuPhase::TileDataHigh
+        })
+        .expect("trace must capture LY0 tile 0x42 LOW->HIGH fetch");
+    let low = target_fetch[0];
+    let high = target_fetch[1];
+    assert_eq!(low.scy, 2, "LY0 tile 0x42 LOW samples SCY=2");
+    assert_eq!(high.scy, 3, "LY0 tile 0x42 HIGH samples SCY=3");
+
+    // The documented wall: under the honest (un-faked) model the SCY=3 write
+    // becomes visible at the SAME dot as the HIGH fetch (rubc dot 99 == 99),
+    // whereas SameBoy makes it visible 5 dots earlier. This is why the race is
+    // mis-rendered and why a per-register write offset cannot fix it.
+    let scy_write = trace
+        .writes()
+        .iter()
+        .find(|w| {
+            w.ly == 0
+                && w.addr == 0xFF42
+                && w.value == 3
+                && low.dot_ticks < w.dot_ticks
+                && w.dot_ticks <= high.dot_ticks
+        })
+        .expect("SCY=3 write must collide with LY0 tile 0x42 LOW->HIGH fetch");
+    assert_eq!(
+        scy_write.dot_ticks, high.dot_ticks,
+        "WALL: rubc makes SCY=3 visible at the SAME dot as the HIGH fetch; \
+         SameBoy makes it visible ~5 dots earlier (fetch-phase geometry wall)"
+    );
+
+    // The current 3497-baseline `m3_scy_change` rests on the load-bearing
+    // `dots_after_start = 5` future-drain in `PpuWriteDrain` -- it pulls a
+    // not-yet-due write forward onto an earlier fetch (violating time). The
+    // diagnostic counter proves the future-drain is non-zero here: it is the
+    // very mechanism the wall analysis flagged as fake. Neutralizing it
+    // regresses m3_scy_change 3497 -> 8819, so it is kept (best honest
+    // non-regressing baseline) and gated, not removed, until a real
+    // fetch-phase fix exists.
+    assert!(
+        m.bus.ppu_future_drained_write_count() > 0,
+        "the 3497 baseline relies on the future-drain band-aid (kept as the \
+         best honest non-regressing gate); if this is ever 0 the band-aid is \
+         gone and m3_scy_change must be re-measured"
+    );
+}
+
 #[cfg(feature = "trace")]
 #[test]
 fn ppu_scy_change_ly0_fetch_sequence_matches_golden() {
