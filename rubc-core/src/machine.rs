@@ -81,9 +81,10 @@ impl Machine {
     /// Boot directly into the cartridge in **CGB mode** (no boot ROM): post-boot
     /// CGB register state (A=0x11 is the CGB hardware signature the ROM reads to
     /// detect color hardware) and the bus in CGB mode so KEY1/double-speed work.
-    pub fn boot_cgb(rom: &[u8]) -> Self {
+    pub fn boot_cgb_native(rom: &[u8]) -> Self {
         let mut m = Self::new();
         m.load_rom(rom);
+        m.bus.cgb.is_cgb = true;
         m.bus.cgb.cgb_mode = true;
         // Post-boot CGB state (A=0x11 signals CGB to CGB-aware ROMs).
         m.cpu.r.a = 0x11;
@@ -99,10 +100,45 @@ impl Machine {
         m
     }
 
+    pub fn boot_cgb(rom: &[u8]) -> Self {
+        if rom.get(0x0143).is_some_and(|flag| flag & 0x80 != 0) {
+            Self::boot_cgb_native(rom)
+        } else {
+            Self::boot_cgb_compat(rom)
+        }
+    }
+
+    pub fn boot_cgb_compat(rom: &[u8]) -> Self {
+        let mut m = Self::new();
+        m.load_rom(rom);
+        m.bus.cgb.is_cgb = true;
+        m.bus.cgb.cgb_mode = false;
+        m.bus.io[0x4C] = 0x04;
+        m.bus.io[0x6C] = 0x01;
+        m.cpu.r.a = 0x11;
+        m.cpu.r.f = 0x80;
+        m.cpu.r.b = crate::bus::compat_palettes::title_checksum_for_boot_regs(rom);
+        m.cpu.r.c = 0x00;
+        m.cpu.r.d = 0x00;
+        m.cpu.r.e = 0x08;
+        let hl = crate::bus::compat_palettes::compat_hl(m.cpu.r.b);
+        m.cpu.r.h = (hl >> 8) as u8;
+        m.cpu.r.l = hl as u8;
+        m.cpu.r.sp = 0xFFFE;
+        m.cpu.r.pc = 0x0100;
+        crate::bus::compat_palettes::load_compat_palettes(
+            rom,
+            &mut m.bus.bg_palette_ram,
+            &mut m.bus.obj_palette_ram,
+        );
+        m
+    }
+
     /// Boot through the bundled open-source SameBoy CGB bootstrap ROM.
     pub fn boot_cgb_with_bootrom(rom: &[u8]) -> Self {
         let mut m = Self::new();
         m.load_rom(rom);
+        m.bus.cgb.is_cgb = true;
         m.bus.cgb.cgb_mode = true;
         m.bus.cgb_boot_rom = Some(Box::new(*CGB_BOOT_ROM));
         m.bus.boot_rom_mapped = true;
@@ -183,10 +219,13 @@ impl Machine {
     }
 
     pub fn load_state(&mut self, data: &[u8]) -> crate::Result<()> {
-        let payload = crate::savestate::decode_payload(data)?;
+        let (version, payload) = crate::savestate::decode_payload_with_version(data)?;
         let (cpu, bus) = serde_json::from_slice(payload)?;
         self.cpu = cpu;
         self.bus = bus;
+        if version == 1 {
+            self.bus.cgb.is_cgb = self.bus.cgb.cgb_mode;
+        }
         Ok(())
     }
 
@@ -401,6 +440,31 @@ mod tests {
         assert_eq!(m.cpu.r.a, 0x11, "CGB boot hands off with A=0x11");
     }
 
+    #[test]
+    fn boot_cgb_splits_native_and_dmg_compat_by_header_flag() {
+        let mut cgb_rom = vec![0; 0x8000];
+        cgb_rom[0x0143] = 0x80;
+        let native = Machine::boot_cgb(&cgb_rom);
+        assert!(native.bus.cgb.is_cgb);
+        assert!(native.bus.cgb.cgb_mode);
+        assert_eq!(native.cpu.r.a, 0x11);
+
+        let dmg_rom = vec![0; 0x8000];
+        let compat = Machine::boot_cgb(&dmg_rom);
+        assert!(compat.bus.cgb.is_cgb);
+        assert!(!compat.bus.cgb.cgb_mode);
+        assert_eq!(compat.bus.io[0x4C], 0x04);
+        assert_eq!(compat.bus.io[0x6C], 0x01);
+        assert_eq!(
+            &compat.bus.bg_palette_ram[0..8],
+            &[0xFF, 0x7F, 0xEF, 0x1B, 0x80, 0x61, 0x00, 0x00]
+        );
+
+        let native_escape = Machine::boot_cgb_native(&dmg_rom);
+        assert!(native_escape.bus.cgb.is_cgb);
+        assert!(native_escape.bus.cgb.cgb_mode);
+    }
+
     /// Assemble a tiny program at 0x0100 that prints `text` over serial.
     fn serial_print_rom(text: &[u8]) -> Vec<u8> {
         let mut rom = vec![0u8; 0x8000];
@@ -547,7 +611,7 @@ mod tests {
         let Ok(rom) = std::fs::read(&path) else {
             return true; // ROM absent on this checkout -> skip
         };
-        let mut m = Machine::boot_cgb(&rom);
+        let mut m = Machine::boot_cgb_native(&rom);
         m.run_blargg(100_000_000);
         m.blargg_passed()
     }
@@ -662,7 +726,7 @@ mod tests {
             .join(rel);
         let rom =
             std::fs::read(&path).unwrap_or_else(|_| panic!("blargg ROM must exist at {path:?}"));
-        let mut m = Machine::boot_cgb(&rom);
+        let mut m = Machine::boot_cgb_native(&rom);
         let stop = m.run_blargg(100_000_000);
         (stop, m.serial_text())
     }
@@ -830,7 +894,7 @@ mod tests {
         };
 
         // Source machine: Crystal is a battery cart.
-        let mut src = Machine::boot_cgb(&rom);
+        let mut src = Machine::boot_cgb_native(&rom);
         assert!(
             src.has_battery(),
             "Crystal (MBC3+battery) reports a battery"
@@ -860,7 +924,7 @@ mod tests {
         assert_eq!(from_disk, saved, "disk bytes match save_ram() snapshot");
 
         // Fresh machine (simulates a restart): RAM starts blank.
-        let mut restored = Machine::boot_cgb(&rom);
+        let mut restored = Machine::boot_cgb_native(&rom);
         restored.bus.poke(0x0000, 0x0A);
         restored.bus.poke(0x4000, 0x00);
         assert_eq!(restored.bus.peek(0xA000), 0x00, "fresh cart RAM is blank");

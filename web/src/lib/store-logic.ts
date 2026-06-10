@@ -18,6 +18,7 @@ export interface EmulatorSettings {
   haptics: boolean;
   showFps: boolean;
   controls: ControlsLayout;
+  bootMode: "auto" | "dmg" | "cgb";
 }
 
 export interface SaveSlot {
@@ -85,6 +86,7 @@ export const DEFAULT_SETTINGS: EmulatorSettings = {
   haptics: true,
   showFps: true,
   controls: "docked",
+  bootMode: "auto",
 };
 
 export function createEmptySlots(): SaveSlots {
@@ -229,6 +231,7 @@ function normalizeSettings(value: unknown): EmulatorSettings {
   if (typeof value.haptics === "boolean") settings.haptics = value.haptics;
   if (typeof value.showFps === "boolean") settings.showFps = value.showFps;
   if (isControlsLayout(value.controls)) settings.controls = value.controls;
+  if (isBootMode(value.bootMode)) settings.bootMode = value.bootMode;
   return settings;
 }
 
@@ -275,6 +278,10 @@ function isScaling(value: unknown): value is Scaling {
 
 function isControlsLayout(value: unknown): value is ControlsLayout {
   return value === "docked" || value === "overlay";
+}
+
+function isBootMode(value: unknown): value is "auto" | "dmg" | "cgb" {
+  return value === "auto" || value === "dmg" || value === "cgb";
 }
 
 function clamp(value: number, min: number, max: number): number {

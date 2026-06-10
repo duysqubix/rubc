@@ -412,15 +412,17 @@ fn run_windowed(
         }
     };
 
-    // Disable vsync so eframe's present does not lock to the 60 Hz monitor and
-    // cap the 59.7 Hz Game Boy frame at ~56 FPS; our own deadline + sleep paces
-    // the frame (matching the old `PresentMode::Immediate` behavior).
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(TITLE)
             .with_inner_size([WIDTH as f32 * SCALE, HEIGHT as f32 * SCALE])
             .with_min_inner_size([WIDTH as f32, HEIGHT as f32]),
-        vsync: false,
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            present_mode: eframe::wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: Some(1),
+            ..Default::default()
+        },
         ..Default::default()
     };
 

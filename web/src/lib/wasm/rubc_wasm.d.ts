@@ -47,7 +47,7 @@ export class RubcWasm {
      * `0x0143` (bit 7 set => Game Boy Color). `sample_rate` is the Web Audio
      * context rate in Hz; pass `0` to use the 48 kHz default.
      */
-    constructor(rom: Uint8Array, sample_rate: number);
+    constructor(rom: Uint8Array, sample_rate: number, boot_mode?: string | null);
     /**
      * Snapshot the cartridge's battery-backed RAM as a fresh `Uint8Array`,
      * suitable for writing to browser storage (IndexedDB). Empty if the cart
@@ -103,7 +103,7 @@ export interface InitOutput {
     readonly rubcwasm_is_cgb: (a: number) => number;
     readonly rubcwasm_load_ram: (a: number, b: number, c: number) => void;
     readonly rubcwasm_load_state: (a: number, b: number, c: number) => number;
-    readonly rubcwasm_new: (a: number, b: number, c: number) => number;
+    readonly rubcwasm_new: (a: number, b: number, c: number, d: number, e: number) => number;
     readonly rubcwasm_save_ram: (a: number, b: number) => void;
     readonly rubcwasm_save_state: (a: number, b: number) => void;
     readonly rubcwasm_set_button: (a: number, b: number, c: number) => void;

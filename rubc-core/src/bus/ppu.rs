@@ -170,6 +170,7 @@ pub struct DmgPalettes {
 #[derive(Clone, Copy)]
 pub struct CgbRenderState<'a> {
     pub enabled: bool,
+    pub dmg_compat: bool,
     pub bg_palette_ram: &'a [u8; 64],
     pub obj_palette_ram: &'a [u8; 64],
 }
@@ -439,6 +440,7 @@ pub struct Ppu {
     cgb_bg_palette_ram: [u8; 64],
     #[serde_as(as = "[_; 64]")]
     cgb_obj_palette_ram: [u8; 64],
+    dmg_compat: bool,
 
     /// LCD master enable (LCDC bit 7).
     enabled: bool,
@@ -515,6 +517,7 @@ impl Default for Ppu {
             cgb_mode: false,
             cgb_bg_palette_ram: [0xFF; 64],
             cgb_obj_palette_ram: [0xFF; 64],
+            dmg_compat: false,
             // LCD starts enabled with the post-boot LCDC ($91 = on, BG on, ...).
             enabled: true,
             first_line_after_lcd_on: false,
@@ -657,6 +660,7 @@ impl Ppu {
         self.obp0 = palettes.obp0;
         self.obp1 = palettes.obp1;
         self.cgb_mode = cgb.enabled;
+        self.dmg_compat = cgb.dmg_compat;
         self.cgb_bg_palette_ram = *cgb.bg_palette_ram;
         self.cgb_obj_palette_ram = *cgb.obj_palette_ram;
         self.dot_ticks += 1;
@@ -687,7 +691,7 @@ impl Ppu {
 
         self.update_visible_stat_read_mode();
 
-        if self.line_dot == DOTS_PER_LINE - 4 && self.ly == LAST_VISIBLE_LINE && self.cgb_mode {
+        if self.line_dot == DOTS_PER_LINE - 4 && self.ly == LAST_VISIBLE_LINE && self.is_cgb_hw() {
             self.stat_mode2_pulse = true;
         }
     }
@@ -744,6 +748,10 @@ impl Ppu {
         }
     }
 
+    fn is_cgb_hw(&self) -> bool {
+        self.cgb_mode || self.dmg_compat
+    }
+
     fn start_next_scanline(&mut self, irq: &mut Interrupts) {
         let was_lcd_on_first_line = self.first_line_after_lcd_on && self.ly == 0;
         self.line_dot = 0;
@@ -773,7 +781,7 @@ impl Ppu {
             }
             self.set_mode(mode::VBLANK, irq);
             self.stat_read_mode = mode::VBLANK;
-            if !self.cgb_mode && self.ly == LAST_VISIBLE_LINE + 1 {
+            if !self.is_cgb_hw() && self.ly == LAST_VISIBLE_LINE + 1 {
                 self.stat_mode2_pulse = true;
             }
         } else if was_lcd_on_first_line {
@@ -1236,7 +1244,12 @@ impl Ppu {
         // CGB-A/B/C TILE_SEL conflict: if LCDC.4 is reset on the same dot as a
         // BG bitplane fetch, unsigned tile IDs can appear on the data bus. This
         // is the remaining cgb-acid-hell center-pixel quirk; normal reads cover
-        // CGB-D+/DMG behavior and signed tile IDs.
+        // CGB-D+/DMG behavior and signed tile IDs. Gated on `cgb_mode` (not
+        // CGB hardware): SameBoy applies the conflict map by silicon
+        // (sm83_cpu.c cycle_write, GB_is_cgb), but our simplified glitch model
+        // is tuned to the native-mode references (cgb-acid-hell); applying it
+        // in DMG-compat measurably worsens the CGB-C mealybug diffs
+        // (m3_lcdc_tile_sel_change2 1391->1967), so compat keeps normal reads.
         let glitched = self.cgb_mode
             && self.tile_sel_glitch
             && self.bg_fetcher.step == FetchStep::TileDataHigh
@@ -1262,9 +1275,11 @@ impl Ppu {
         let window_x = self.wx.saturating_sub(7) as usize;
         // SameBoy's DMG FIFO path also triggers on WX == position+6 when WX was
         // stable, then applies the one-pixel horizontal desync observed on DMG.
-        // This is distinct from the normal WX == position+7 compare.
+        // This is distinct from the normal WX == position+7 compare. DMG-silicon
+        // only: SameBoy gates the +6 trigger on `!GB_is_cgb` (display.c), so CGB
+        // hardware in DMG-compat mode must NOT take this path.
         let dmg_early_window_x = self.wx.saturating_sub(6) as usize;
-        let dmg_early_window = !self.cgb_mode && self.lcd_x == dmg_early_window_x;
+        let dmg_early_window = !self.is_cgb_hw() && self.lcd_x == dmg_early_window_x;
         if self.lcd_x != window_x && !dmg_early_window {
             return;
         }
@@ -1491,7 +1506,16 @@ impl Ppu {
         };
         let shade = (palette >> ((pixel.color & 0x03) * 2)) & 0x03;
         let index = pixel.ly as usize * SCREEN_WIDTH + pixel.x;
-        self.framebuffer[index] = FramePixel::DmgShade(shade);
+        self.framebuffer[index] = if self.dmg_compat {
+            let (ram, palette) = match pixel.palette {
+                DmgPaletteSource::Bg => (&self.cgb_bg_palette_ram, 0),
+                DmgPaletteSource::Obp0 => (&self.cgb_obj_palette_ram, 0),
+                DmgPaletteSource::Obp1 => (&self.cgb_obj_palette_ram, 1),
+            };
+            FramePixel::CgbRgb555(self.cgb_color(ram, palette, shade))
+        } else {
+            FramePixel::DmgShade(shade)
+        };
     }
 
     /// CGB pixel resolution: the BG/OBJ priority table (Pan Docs), then a
@@ -1760,6 +1784,10 @@ impl Ppu {
         self.enabled
     }
 
+    pub(crate) fn line_dot(&self) -> u32 {
+        self.line_dot
+    }
+
     /// VRAM (`$8000-$9FFF`) is inaccessible during mode 3 (returns 0xFF / writes
     /// dropped). When the LCD is off, VRAM is always accessible.
     pub fn vram_blocked(&self) -> bool {
@@ -1863,6 +1891,7 @@ mod tests {
         let zero = [0u8; 64];
         let cgb = CgbRenderState {
             enabled: false,
+            dmg_compat: false,
             bg_palette_ram: &zero,
             obj_palette_ram: &zero,
         };
@@ -1884,6 +1913,7 @@ mod tests {
         let zero = [0u8; 64];
         let cgb = CgbRenderState {
             enabled: true,
+            dmg_compat: false,
             bg_palette_ram: &zero,
             obj_palette_ram: &zero,
         };
@@ -2168,6 +2198,47 @@ mod tests {
             .map(|px| px.dmg_shade())
             .collect();
         assert_eq!(shades, vec![0, 1, 2, 3, 0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn dmg_compat_pixels_emit_cgb_palette_ram_after_bgp_translation() {
+        let mut p = ppu_at_line_start();
+        let mut vram = zero_vram();
+        let oam = zero_oam();
+        set_tile_row(&mut vram, 0, 0x55, 0x33);
+        vram[0x1800] = 0;
+
+        let mut banks = [[0u8; 0x2000]; 2];
+        banks[0] = vram;
+        let mut bg = [0xFF; 64];
+        for (i, color) in [0x001F_u16, 0x03E0, 0x7C00, 0x4210].into_iter().enumerate() {
+            let [lo, hi] = color.to_le_bytes();
+            bg[i * 2] = lo;
+            bg[i * 2 + 1] = hi;
+        }
+        let obj = [0xFF; 64];
+        let cgb = CgbRenderState {
+            enabled: false,
+            dmg_compat: true,
+            bg_palette_ram: &bg,
+            obj_palette_ram: &obj,
+        };
+        let mut irq = Interrupts::default();
+        for _ in 0..DOTS_PER_LINE {
+            p.tick_dot(&mut irq, &banks, &oam, IDENTITY_PALETTES, cgb);
+        }
+
+        let rgb: Vec<u16> = p.framebuffer[0..8]
+            .iter()
+            .map(|px| match px {
+                FramePixel::CgbRgb555(rgb) => *rgb,
+                FramePixel::DmgShade(_) => panic!("compat pixels must be RGB555"),
+            })
+            .collect();
+        assert_eq!(
+            rgb,
+            vec![0x001F, 0x03E0, 0x7C00, 0x4210, 0x001F, 0x03E0, 0x7C00, 0x4210]
+        );
     }
 
     #[test]

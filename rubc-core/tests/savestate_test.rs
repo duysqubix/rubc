@@ -146,3 +146,37 @@ fn load_state_rejects_bad_magic_and_version() {
     bad_version[5] = 0xFF;
     assert!(machine.load_state(&bad_version).is_err());
 }
+
+#[test]
+fn save_state_v2_preserves_cgb_hardware_flag() {
+    let rom = blank_rom();
+    let saved = Machine::boot_cgb(&rom);
+    assert!(saved.bus.cgb.is_cgb);
+    assert!(!saved.bus.cgb.cgb_mode);
+    let blob = saved.save_state();
+    assert_eq!(u16::from_le_bytes([blob[4], blob[5]]), 2);
+
+    let mut restored = Machine::boot_dmg(&rom);
+    restored.load_state(&blob).expect("valid v2 save state");
+    assert!(restored.bus.cgb.is_cgb);
+    assert!(!restored.bus.cgb.cgb_mode);
+}
+
+#[test]
+fn save_state_v1_missing_is_cgb_defaults_to_cgb_mode() {
+    let rom = blank_rom();
+    let saved = Machine::boot_cgb_native(&rom);
+    let payload = serde_json::to_value((&saved.cpu, &saved.bus)).expect("serialize payload");
+    let mut payload = payload.as_array().expect("tuple payload").clone();
+    payload[1]["cgb"].as_object_mut().unwrap().remove("is_cgb");
+    let payload = serde_json::to_vec(&payload).expect("serialize v1-ish payload");
+    let mut blob = Vec::new();
+    blob.extend_from_slice(b"RUSV");
+    blob.extend_from_slice(&1u16.to_le_bytes());
+    blob.extend_from_slice(&payload);
+
+    let mut restored = Machine::boot_dmg(&rom);
+    restored.load_state(&blob).expect("valid v1 save state");
+    assert!(restored.bus.cgb.cgb_mode);
+    assert!(restored.bus.cgb.is_cgb);
+}
