@@ -970,6 +970,157 @@ fn ppu_bg_fetch_sidecar_predicts_lcdc_bg_map_sample_dots() {
     );
 }
 
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_dmg_lcd_palette_sidecar_matches_sameboy_bgp_change_ly0() {
+    assert_dmg_lcd_palette_trace_matches_golden("m3_bgp_change", 0);
+}
+
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_dmg_lcd_palette_sidecar_matches_sameboy_bgp_change_ly72() {
+    assert_dmg_lcd_palette_trace_matches_golden("m3_bgp_change", 72);
+}
+
+#[cfg(feature = "trace")]
+#[test]
+fn ppu_dmg_lcd_palette_sidecar_matches_sameboy_bgp_change_sprites_ly58() {
+    assert_dmg_lcd_palette_trace_matches_golden("m3_bgp_change_sprites", 58);
+}
+
+#[cfg(feature = "trace")]
+fn assert_dmg_lcd_palette_trace_matches_golden(rom_name: &str, ly: u8) {
+    use rubc_core::diag::ppu_trace::LcdPaletteSource;
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ExpectedPixel {
+        x: usize,
+        raw_color: u8,
+        palette_source: LcdPaletteSource,
+        palette_value: u8,
+    }
+
+    fn source_order(source: LcdPaletteSource) -> u8 {
+        match source {
+            LcdPaletteSource::Bg => 0,
+            LcdPaletteSource::Obp0 => 1,
+            LcdPaletteSource::Obp1 => 2,
+        }
+    }
+
+    fn parse_hex_u8(s: &str) -> u8 {
+        u8::from_str_radix(s, 16).expect("golden hex byte")
+    }
+
+    fn parse_source(s: &str) -> LcdPaletteSource {
+        match s {
+            "BG" => LcdPaletteSource::Bg,
+            "OBJ0" => LcdPaletteSource::Obp0,
+            "OBJ1" => LcdPaletteSource::Obp1,
+            other => panic!("unexpected golden palette kind {other}"),
+        }
+    }
+
+    fn golden_pixels(rom_name: &str, ly: u8) -> Option<Vec<ExpectedPixel>> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../reference/goldens")
+            .join(format!("{rom_name}_ly{ly:03}.tsv"));
+        let text = std::fs::read_to_string(&path).ok()?;
+        let mut lines = text.lines();
+        let header = lines.next()?.trim_start_matches("#QK|");
+        let columns: Vec<_> = header.split('\t').collect();
+        let idx = |name: &str| {
+            columns
+                .iter()
+                .position(|c| *c == name)
+                .unwrap_or_else(|| panic!("golden TSV missing {name}"))
+        };
+        let kind = idx("kind");
+        let screen_x = idx("screen_x");
+        let raw_color = idx("raw_color");
+        let palette_kind = idx("palette_kind");
+        let palette_value = idx("palette_value");
+
+        let mut pixels = Vec::new();
+        for line in lines {
+            let line = line.split_once('|').map(|(_, rest)| rest).unwrap_or(line);
+            let fields: Vec<_> = line.split('\t').collect();
+            if fields.get(kind) != Some(&"pixel") {
+                continue;
+            }
+            pixels.push(ExpectedPixel {
+                x: fields[screen_x].parse().expect("golden screen_x"),
+                raw_color: fields[raw_color].parse().expect("golden raw_color"),
+                palette_source: parse_source(fields[palette_kind]),
+                palette_value: parse_hex_u8(fields[palette_value]),
+            });
+        }
+        Some(pixels)
+    }
+
+    let Some(expected) = golden_pixels(rom_name, ly) else {
+        eprintln!("{rom_name} LY{ly}: golden trace absent -- skipping");
+        return;
+    };
+    let path = suites_dir().join(format!("mealybug/{rom_name}.gb"));
+    let Ok(rom) = std::fs::read(&path) else {
+        eprintln!("{rom_name}: ROM absent -- skipping");
+        return;
+    };
+    let mut m = Machine::boot_dmg_with_bootrom(&rom);
+    m.bus.ppu.set_lcd_palette_trace_line(Some(ly));
+    if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+        eprintln!("{rom_name}: no breakpoint -- skipping");
+        return;
+    }
+
+    let mut actual: Vec<_> = m
+        .bus
+        .ppu
+        .lcd_palette_trace()
+        .samples()
+        .iter()
+        .map(|s| ExpectedPixel {
+            x: s.x,
+            raw_color: s.raw_color,
+            palette_source: s.palette_source,
+            palette_value: s.rubc_palette,
+        })
+        .collect();
+    actual.sort_by_key(|p| (p.x, source_order(p.palette_source), p.raw_color));
+    actual.dedup_by(|a, b| {
+        a.x == b.x && a.raw_color == b.raw_color && a.palette_source == b.palette_source
+    });
+    let mut expected = expected;
+    expected.sort_by_key(|p| (p.x, source_order(p.palette_source), p.raw_color));
+
+    assert!(
+        actual.len() >= 160 && expected.len() >= 160,
+        "{rom_name} LY{ly} sidecar and SameBoy golden must both cover a visible scanline"
+    );
+    let aligned_count = actual
+        .iter()
+        .zip(expected.iter())
+        .filter(|(rubc, hardware)| {
+            rubc.x == hardware.x && rubc.palette_source == hardware.palette_source
+        })
+        .count();
+    assert!(
+        aligned_count > 0,
+        "{rom_name} LY{ly} sidecar must align with the SameBoy visible-column waveform"
+    );
+
+    let palette_gap_count = actual
+        .iter()
+        .zip(expected.iter())
+        .filter(|(rubc, hardware)| rubc.palette_value != hardware.palette_value)
+        .count();
+    assert!(
+        palette_gap_count > 0,
+        "{rom_name} LY{ly} must expose a non-empty rubc-vs-SameBoy palette gap"
+    );
+}
+
 /// ADR 0001 stage 5 OBSERVATION: scan the accumulated LY0 trace for fetches
 /// where the LOW and HIGH bitplane sampled DIFFERENT SCY values -- the exact
 /// mid-mode-3 race m3_scy_change exercises. Prints them so the calibration has

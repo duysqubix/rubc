@@ -502,6 +502,9 @@ pub struct Ppu {
     #[cfg(feature = "trace")]
     #[serde(skip)]
     phase_trace: crate::diag::ppu_trace::PpuPhaseTrace,
+    #[cfg(feature = "trace")]
+    #[serde(skip)]
+    lcd_palette_trace: crate::diag::ppu_trace::LcdPaletteTrace,
 }
 
 impl Default for Ppu {
@@ -559,6 +562,8 @@ impl Default for Ppu {
             drawing_dots: 0,
             #[cfg(feature = "trace")]
             phase_trace: crate::diag::ppu_trace::PpuPhaseTrace::new(),
+            #[cfg(feature = "trace")]
+            lcd_palette_trace: crate::diag::ppu_trace::LcdPaletteTrace::new(),
         }
     }
 }
@@ -604,6 +609,39 @@ impl Ppu {
     #[cfg(feature = "trace")]
     pub fn clear_phase_trace(&mut self) {
         self.phase_trace.clear();
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn lcd_palette_trace(&self) -> &crate::diag::ppu_trace::LcdPaletteTrace {
+        &self.lcd_palette_trace
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn set_lcd_palette_trace_line(&mut self, ly: Option<u8>) {
+        self.lcd_palette_trace.set_line_filter(ly);
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn clear_lcd_palette_trace(&mut self) {
+        self.lcd_palette_trace.clear();
+        self.lcd_palette_trace
+            .reset_palette_state(self.bgp, self.obp0, self.obp1);
+    }
+
+    #[cfg(feature = "trace")]
+    fn trace_dmg_palette_write(&mut self, addr: u16, old: u8, value: u8) {
+        self.lcd_palette_trace.push_palette_write(
+            crate::diag::ppu_trace::PpuWrite {
+                line_dot: self.line_dot,
+                dot_ticks: self.dot_ticks,
+                drawing_dots: self.drawing_dots,
+                ly: self.ly,
+                mode: self.mode,
+                addr,
+                value,
+            },
+            old,
+        );
     }
 
     pub fn oam_bug_scan_row(&self) -> Option<usize> {
@@ -659,6 +697,9 @@ impl Ppu {
         self.bgp = palettes.bgp;
         self.obp0 = palettes.obp0;
         self.obp1 = palettes.obp1;
+        #[cfg(feature = "trace")]
+        self.lcd_palette_trace
+            .sync_palette_state(self.bgp, self.obp0, self.obp1);
         self.cgb_mode = cgb.enabled;
         self.dmg_compat = cgb.dmg_compat;
         self.cgb_bg_palette_ram = *cgb.bg_palette_ram;
@@ -1504,6 +1545,29 @@ impl Ppu {
             DmgPaletteSource::Obp0 => self.obp0,
             DmgPaletteSource::Obp1 => self.obp1,
         };
+        #[cfg(feature = "trace")]
+        if !self.dmg_compat {
+            let palette_source = match pixel.palette {
+                DmgPaletteSource::Bg => crate::diag::ppu_trace::LcdPaletteSource::Bg,
+                DmgPaletteSource::Obp0 => crate::diag::ppu_trace::LcdPaletteSource::Obp0,
+                DmgPaletteSource::Obp1 => crate::diag::ppu_trace::LcdPaletteSource::Obp1,
+            };
+            let hardware_palette = self
+                .lcd_palette_trace
+                .sample_palette(palette_source, self.dot_ticks);
+            self.lcd_palette_trace
+                .push_sample(crate::diag::ppu_trace::LcdPaletteSample {
+                    line_dot: self.line_dot,
+                    dot_ticks: self.dot_ticks,
+                    drawing_dots: self.drawing_dots,
+                    ly: pixel.ly,
+                    x: pixel.x,
+                    raw_color: pixel.color & 0x03,
+                    palette_source,
+                    hardware_palette,
+                    rubc_palette: palette,
+                });
+        }
         let shade = (palette >> ((pixel.color & 0x03) * 2)) & 0x03;
         let index = pixel.ly as usize * SCREEN_WIDTH + pixel.x;
         self.framebuffer[index] = if self.dmg_compat {
@@ -1753,14 +1817,20 @@ impl Ppu {
     }
 
     pub fn write_bgp(&mut self, value: u8) {
+        #[cfg(feature = "trace")]
+        self.trace_dmg_palette_write(0xFF47, self.bgp, value);
         self.bgp = value;
     }
 
     pub fn write_obp0(&mut self, value: u8) {
+        #[cfg(feature = "trace")]
+        self.trace_dmg_palette_write(0xFF48, self.obp0, value);
         self.obp0 = value;
     }
 
     pub fn write_obp1(&mut self, value: u8) {
+        #[cfg(feature = "trace")]
+        self.trace_dmg_palette_write(0xFF49, self.obp1, value);
         self.obp1 = value;
     }
 
