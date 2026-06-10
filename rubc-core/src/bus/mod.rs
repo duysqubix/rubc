@@ -310,6 +310,12 @@ pub struct Bus {
     pending_ppu_writes: VecDeque<scheduler::CpuWriteEvent>,
     #[serde(default)]
     next_write_seq: u64,
+    /// Test-only override of the PPU lag window (`PPU_MIN_LAG_T`), used by the
+    /// lag-invariance proof to show `m3_scy_change` is byte-identical at
+    /// different watermark cadences (ADR 0001 Stage E). `None` = the const.
+    #[cfg(feature = "trace")]
+    #[serde(skip, default)]
+    ppu_min_lag_t_override: Option<u64>,
     #[cfg(feature = "trace")]
     #[serde(skip, default)]
     ppu_future_drained_writes: u64,
@@ -358,6 +364,8 @@ impl Default for Bus {
             pending_cpu_writes: VecDeque::new(),
             pending_ppu_writes: VecDeque::new(),
             next_write_seq: 0,
+            #[cfg(feature = "trace")]
+            ppu_min_lag_t_override: None,
             #[cfg(feature = "trace")]
             ppu_future_drained_writes: 0,
             ticks_at_last_sample: 0,
@@ -832,11 +840,28 @@ impl Bus {
         if lag <= max {
             return;
         }
-        let min = PPU_MIN_LAG_T * scheduler::SUBPHASES_PER_T;
+        let min = self.ppu_min_lag_t() * scheduler::SUBPHASES_PER_T;
         let target = scheduler::Time(self.cpu_time.0.saturating_sub(min));
         if target > self.ppu_time {
             self.sync_ppu_to(target);
         }
+    }
+
+    /// The PPU lag window in T-cycles: the test override when set, else the
+    /// `PPU_MIN_LAG_T` const. ADR 0001 Stage E proves output is invariant to it.
+    #[inline]
+    fn ppu_min_lag_t(&self) -> u64 {
+        #[cfg(feature = "trace")]
+        if let Some(v) = self.ppu_min_lag_t_override {
+            return v;
+        }
+        PPU_MIN_LAG_T
+    }
+
+    /// Test-only: override the PPU lag window to prove lag-invariance.
+    #[cfg(feature = "trace")]
+    pub fn set_ppu_min_lag_t_override(&mut self, value: Option<u64>) {
+        self.ppu_min_lag_t_override = value;
     }
 
     fn dma_needs_ppu_sync(&self) -> bool {

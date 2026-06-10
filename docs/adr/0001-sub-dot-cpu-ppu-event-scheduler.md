@@ -210,3 +210,83 @@ Reaching 0 requires repositioning the whole CPU instruction stream relative to t
 PPU dot clock during mode 3 — a full co-scheduler rewrite (`rubc-t2qr`) that
 touches globally-validated STAT/interrupt timing, pursued separately, never as an
 autonomous change that risks the pixel-exact crown jewels.
+
+## Stage A–E outcome (2026-06-10): the SameBoy `conflict_map` port confirms a two-faced architecture ceiling
+
+After stage 5b located the wall, we ported SameBoy's per-register
+write-conflict model (`Core/sm83_cpu.c:31-319`, the `conflict_map` tables +
+the `cycle_write` switch) to test whether per-register conflict timing could
+drive the mealybug mid-mode-3 facets to 0. The work was staged A→E,
+TDD-gated, each independently revertible. Crown jewels stayed **0/0/0**
+throughout (`dmg-acid2`, `cgb-acid2`, `cgb-acid-hell`); full gate green.
+
+- **Stage A — conflict_map data (landed, commit `3f6bb37`).** A
+  `ConflictType` enum + `conflict_type(model, addr)` lookup transcribed 1:1
+  from the DMG/CGB/CGB-double tables (`bus/scheduler.rs`). Pure data, no
+  behavior change; `m3_scy_change` unchanged at 3497.
+
+- **Stage B — SCY `READ_NEW` is a fetch-phase geometry wall (landed,
+  commit `86b97f1`).** SameBoy's `READ_NEW` commits the SCY write one T-cycle
+  early (a cross-M-cycle borrow). Implemented in rubc as an absolute-timestamp
+  shift, it FAILED honestly. A SameBoy ground-truth probe (instrumented
+  `display.c`/`sm83_cpu.c`; 1 DMG dot = 2 SameBoy 8 MHz ticks), measured
+  relative to the first post-dummy LY0 `TileNo` fetch for `m3_scy_change` tile
+  `0x42`:
+
+  | anchor | rubc | SameBoy | delta |
+  |---|---:|---:|---:|
+  | tile `0x42` HIGH_T1 fetch | +11 | +22 | **−11** |
+  | `FF42 <- 3` visible | +11 | +17 | **−6** |
+  | `write_m` start | +9 | +14 | **−5** |
+
+  SameBoy makes `SCY=3` visible **5 dots before** the HIGH fetch; rubc makes
+  it visible **at the same dot**. rubc's BG fetch is ahead of SameBoy by
+  *more* than the write is — so the residual is **fetch-phase geometry**, not a
+  per-register write offset. Under rubc's `schedule_cpu_write(start + offset)`
+  model the honest fix would require making the write visible *before its own
+  M-cycle starts* (time travel). Both the producer shift and the band-aid
+  neutralization were reverted. The load-bearing `dots_after_start = 5`
+  future-drain (the entire source of the 8819→3497 win) is **kept**; removing
+  it regresses `m3_scy_change` back to 8819. A regression-lock test
+  (`ppu_scy_read_new_is_a_documented_fetch_phase_wall`) pins the wall geometry
+  and asserts the future-drain count is non-zero, so the band-aid cannot be
+  silently removed.
+
+- **Stage C — `PALETTE_DMG` is an output-pipe/sprite coupling ceiling
+  (rejected, reverted clean).** Palette is structurally *independent* of the
+  SCY fetch wall — rubc applies DMG palettes at pixel **emission**
+  (`write_dmg_pixel`), not during the BG fetch. The two-phase `old|new`→`new`
+  transient was implemented correctly as per-address, emission-drained paired
+  events (the `old` computed at apply time). It improved `m3_bgp_change`
+  820→**403** but **regressed `m3_bgp_change_sprites` 2124→2164**. The new
+  co-scheduler model hits the *same* sprite regression the old lockstep overlay
+  did: the BG-vs-OBJ palette phase coupling is **fundamental** to rubc's output
+  pipe, not a lockstep artifact. Per the hard gate, it was reverted (no
+  special-casing BG vs OBJ — that would be a fake pass).
+
+- **Stage D — band-aid removal (dead).** Superseded by Stage B: the
+  `dots_after_start = 5` future-drain is load-bearing and cannot be removed
+  without the (unreachable) fetch-phase fix.
+
+- **Stage E — lag-invariance proof (landed).** `m3_scy_change` renders
+  **byte-identical** at PPU lag windows 16/32/48
+  (`m3_scy_change_byte_identical_across_lag_16_32_48`), proving the
+  co-scheduler output is **timestamp-driven, not watermark-driven** — the
+  architecture is correct; the 3497 result is real, not a scheduling artifact.
+
+**Final decision (binding).** The entire mid-mode-3 register-race class is
+blocked by two distinct facets of the current CPU/PPU phase architecture:
+(1) the **fetch-phase geometry wall** (SCY/scroll/LCDC sampled during the BG
+fetch, which rubc runs ~5–11 dots tighter than hardware relative to mode-3
+entry), and (2) the **output-pipe/sprite coupling** (palette transients that
+rubc applies identically to BG and OBJ emission where hardware does not). The
+co-scheduler **narrowed** the class (`m3_scy_change` 8819→3497) and the
+`conflict_map` data is landed and inert, but every remaining facet either hits
+one of these walls or regresses a sibling when fixed in isolation. The honest,
+no-fake-passes outcome is to **gate the class at its measured baseline** (exact
+diffs visible, never special-cased to 0) and treat full mealybug conformance as
+requiring a deeper rearchitecture of the BG-fetch/output-pipe phase — pursued
+separately, never as an autonomous change that risks the pixel-exact crown
+jewels. The branch `rearch/sub-dot-scheduler` stays unmerged until that larger
+effort is undertaken; `master` remains shippable.
+

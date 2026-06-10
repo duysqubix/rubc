@@ -640,6 +640,62 @@ fn ppu_scy_read_new_is_a_documented_fetch_phase_wall() {
     );
 }
 
+/// ADR 0001 Stage E LAG-INVARIANCE PROOF.
+///
+/// The co-scheduler lets the CPU run ahead and the PPU lag, catching up via a
+/// watermark (`PPU_MIN_LAG_T`/`PPU_MAX_LOOKAHEAD_T`). For the model to be
+/// correct, the rendered output MUST depend only on the event *timestamps*,
+/// never on *when* the PPU happens to catch up. This renders `m3_scy_change`
+/// at three different lag windows (16/32/48 T) and asserts the framebuffers are
+/// byte-identical. If they diverge, a hook is draining by scheduler artifact
+/// rather than by time -- the model would be wrong.
+#[cfg(feature = "trace")]
+#[test]
+fn m3_scy_change_byte_identical_across_lag_16_32_48() {
+    let path = suites_dir().join("mealybug/m3_scy_change.gb");
+    let Ok(rom) = std::fs::read(&path) else {
+        eprintln!("m3_scy_change: ROM absent -- skipping");
+        return;
+    };
+
+    let render_at_lag = |lag: u64| -> Option<Vec<u8>> {
+        let mut m = Machine::boot_dmg_with_bootrom(&rom);
+        m.bus.set_ppu_min_lag_t_override(Some(lag));
+        match m.run_mooneye(MAX_INSTRUCTIONS) {
+            RunStop::MooneyeBreakpoint => Some(
+                m.bus
+                    .ppu
+                    .framebuffer
+                    .iter()
+                    .map(|p| match p {
+                        FramePixel::DmgShade(s) => *s,
+                        FramePixel::CgbRgb555(_) => 0,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        }
+    };
+
+    let Some(at16) = render_at_lag(16) else {
+        eprintln!("m3_scy_change: no breakpoint -- skipping");
+        return;
+    };
+    let at32 = render_at_lag(32).expect("lag=32 must also reach the breakpoint");
+    let at48 = render_at_lag(48).expect("lag=48 must also reach the breakpoint");
+
+    assert_eq!(
+        at16, at32,
+        "m3_scy_change framebuffer must be byte-identical at PPU lag 16 vs 32 \
+         (output must be timestamp-driven, not watermark-driven)"
+    );
+    assert_eq!(
+        at32, at48,
+        "m3_scy_change framebuffer must be byte-identical at PPU lag 32 vs 48 \
+         (output must be timestamp-driven, not watermark-driven)"
+    );
+}
+
 #[cfg(feature = "trace")]
 #[test]
 fn ppu_scy_change_ly0_fetch_sequence_matches_golden() {
