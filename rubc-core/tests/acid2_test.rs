@@ -989,6 +989,40 @@ fn ppu_dmg_lcd_palette_sidecar_matches_sameboy_bgp_change_sprites_ly58() {
 }
 
 #[cfg(feature = "trace")]
+#[test]
+fn ppu_dmg_lcd_palette_sidecar_locks_stage6_latch_gap_ly58() {
+    let path = suites_dir().join("mealybug/m3_bgp_change_sprites.gb");
+    let Ok(rom) = std::fs::read(&path) else {
+        eprintln!("m3_bgp_change_sprites: ROM absent -- skipping");
+        return;
+    };
+    let mut m = Machine::boot_dmg_with_bootrom(&rom);
+    m.bus.ppu.set_lcd_palette_trace_line(Some(58));
+    if !matches!(m.run_mooneye(MAX_INSTRUCTIONS), RunStop::MooneyeBreakpoint) {
+        eprintln!("m3_bgp_change_sprites: no breakpoint -- skipping");
+        return;
+    }
+
+    let first_latch = m
+        .bus
+        .ppu
+        .lcd_palette_trace()
+        .samples()
+        .iter()
+        .find(|s| s.ly == 58 && s.x == 0)
+        .expect("LY58 must record the first LCD column latch");
+    assert_eq!(
+        first_latch.line_dot, 97,
+        "current production emits LY58 x0 at dot 97 before S3 active geometry"
+    );
+    assert_eq!(
+        112 - first_latch.line_dot as i32,
+        15,
+        "Stage-6 evidence: SameBoy LY58 x0 latch target is dot 112, so current gap is 15"
+    );
+}
+
+#[cfg(feature = "trace")]
 fn assert_dmg_lcd_palette_trace_matches_golden(rom_name: &str, ly: u8) {
     use rubc_core::diag::ppu_trace::LcdPaletteSource;
 
