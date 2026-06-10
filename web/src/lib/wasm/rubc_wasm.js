@@ -133,11 +133,14 @@ export class RubcWasm {
      * context rate in Hz; pass `0` to use the 48 kHz default.
      * @param {Uint8Array} rom
      * @param {number} sample_rate
+     * @param {string | null} [boot_mode]
      */
-    constructor(rom, sample_rate) {
+    constructor(rom, sample_rate, boot_mode) {
         const ptr0 = passArray8ToWasm0(rom, wasm.__wbindgen_export2);
         const len0 = WASM_VECTOR_LEN;
-        const ret = wasm.rubcwasm_new(ptr0, len0, sample_rate);
+        var ptr1 = isLikeNone(boot_mode) ? 0 : passStringToWasm0(boot_mode, wasm.__wbindgen_export2, wasm.__wbindgen_export3);
+        var len1 = WASM_VECTOR_LEN;
+        const ret = wasm.rubcwasm_new(ptr0, len0, sample_rate, ptr1, len1);
         this.__wbg_ptr = ret;
         RubcWasmFinalization.register(this, this.__wbg_ptr, this);
         return this;
@@ -304,6 +307,10 @@ let heap = new Array(1024).fill(undefined);
 heap.push(undefined, null, true, false);
 
 let heap_next = heap.length;
+
+function isLikeNone(x) {
+    return x === undefined || x === null;
+}
 
 function passArray8ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 1, 1) >>> 0;

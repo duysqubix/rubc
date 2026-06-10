@@ -191,6 +191,26 @@ export function Settings() {
           />
         </Field>
         <Field
+          label="Hardware"
+          hint={
+            s.bootMode === "auto"
+              ? "// auto-detect from cartridge"
+              : s.bootMode === "dmg"
+                ? "// force classic Game Boy"
+                : "// force Game Boy Color (restarts game)"
+          }
+        >
+          <Segmented<"auto" | "dmg" | "cgb">
+            value={s.bootMode}
+            onChange={(v) => set({ bootMode: v })}
+            options={[
+              { value: "auto", label: "Auto" },
+              { value: "dmg", label: "DMG" },
+              { value: "cgb", label: "GBC" },
+            ]}
+          />
+        </Field>
+        <Field
           label="Screen scaling"
           hint={s.scaling === "integer" ? "// whole-pixel multiples" : "// fill the frame"}
         >

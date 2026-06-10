@@ -249,7 +249,7 @@ export class EmulatorCore {
 
   async init() {
     try {
-      this.wasm = await init({ module_or_path: "/rubc_wasm_bg.wasm" });
+      this.wasm = await init({ module_or_path: "/rubc_wasm_bg.wasm?v=" + Date.now() });
       this.onReady();
     } catch (err: unknown) {
       this.onError(err instanceof Error ? err : new Error("Could not initialize emulator core."));
@@ -433,7 +433,7 @@ export class EmulatorCore {
     }
   }
 
-  async loadRom(bytes: Uint8Array, canvas: HTMLCanvasElement) {
+  async loadRom(bytes: Uint8Array, canvas: HTMLCanvasElement, bootMode: "auto" | "dmg" | "cgb" = "auto") {
     // Tear down any previous game first so reopening is a clean restart.
     await this.flushSave();
     if (this.saveTimer !== null) {
@@ -452,7 +452,7 @@ export class EmulatorCore {
     this.frameAccumulator = 0;
 
     const rate = this.ensureAudio().sampleRate;
-    this.emu = new RubcWasm(bytes, rate);
+    this.emu = new RubcWasm(bytes, rate, bootMode === "auto" ? undefined : bootMode);
     this.currentSaveKey = getRomKey(bytes);
 
     if (this.emu.has_battery) {

@@ -95,6 +95,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadedRomRef = useRef<string | null>(null);
   const loadingRomRef = useRef<string | null>(null);
+  const lastBootModeRef = useRef<"auto" | "dmg" | "cgb" | null>(null);
   const stateRef = useRef(state);
 
   useEffect(() => {
@@ -144,7 +145,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
     async (id: string, force: boolean) => {
       if (!ready || !canvasRef.current) return;
       if (!force && loadingRomRef.current === id) return;
-      if (!force && lastLoadedRomRef.current === id && emulator.emu) return;
+      if (!force && lastLoadedRomRef.current === id && lastBootModeRef.current === state.settings.bootMode && emulator.emu) return;
 
       const bytes = await loadRomBytes(id);
       if (!bytes) {
@@ -155,9 +156,10 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
 
       try {
         loadingRomRef.current = id;
-        await emulator.loadRom(bytes, canvasRef.current);
-        emulator.paused = stateRef.current.phase === "paused";
+        await emulator.loadRom(bytes, canvasRef.current, state.settings.bootMode);
+        emulator.paused = state.phase === "paused";
         lastLoadedRomRef.current = id;
+        lastBootModeRef.current = state.settings.bootMode;
       } catch (err) {
         const message = err instanceof Error ? err.message : "Could not start emulator core.";
         setError(message);
@@ -166,7 +168,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
         if (loadingRomRef.current === id) loadingRomRef.current = null;
       }
     },
-    [ready, showToast],
+    [ready, showToast, state.settings.bootMode, state.phase],
   );
 
   const boot = useCallback(
@@ -214,22 +216,17 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
     },
     [boot, rememberRom, showToast],
   );
-
   const attachCanvas = useCallback(
     (canvas: HTMLCanvasElement | null) => {
       canvasRef.current = canvas;
-      if (!canvas || !stateRef.current.romId || stateRef.current.phase === "empty") return;
-      // If the emulator is already running this ROM (e.g. the Viewport just
-      // remounted after a view switch), rebind the live canvas instead of
-      // reloading -- loadCore(force=false) would bail and leave the new canvas
-      // black. Otherwise load the core normally.
-      if (emulator.emu && lastLoadedRomRef.current === stateRef.current.romId) {
+      if (!canvas || !state.romId || state.phase === "empty") return;
+      if (emulator.emu && lastLoadedRomRef.current === state.romId && lastBootModeRef.current === state.settings.bootMode) {
         emulator.setCanvas(canvas);
       } else {
-        void loadCore(stateRef.current.romId, false);
+        void loadCore(state.romId, false);
       }
     },
-    [loadCore],
+    [loadCore, state.romId, state.phase, state.settings.bootMode],
   );
 
   const set = useCallback((patch: Partial<EmulatorSettings>) => {
@@ -377,6 +374,13 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
     emulator.speed = state.settings.turbo ? 2 : 1;
   }, [state.settings.turbo]);
 
+  useEffect(() => {
+    if (ready && canvasRef.current && state.romId && state.phase !== "empty") {
+      // Power-cycle the ROM if bootMode changes while running
+      void loadCore(state.romId, true);
+    }
+  }, [state.settings.bootMode]); // Only trigger on bootMode change
+
   const value = useMemo<EmulatorContextValue>(
     () => ({
       ...state,
@@ -384,7 +388,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       KEYMAP,
       ready,
       error,
-      filter: paletteFilter(state.settings.palette),
+      filter: (state.settings.bootMode === "cgb" || (state.settings.bootMode === "auto" && rom?.mode === "CGB")) ? "none" : paletteFilter(state.settings.palette),
       rom,
       roms,
       attachCanvas,

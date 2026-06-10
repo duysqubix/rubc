@@ -108,14 +108,20 @@ impl RubcWasm {
     /// `0x0143` (bit 7 set => Game Boy Color). `sample_rate` is the Web Audio
     /// context rate in Hz; pass `0` to use the 48 kHz default.
     #[wasm_bindgen(constructor)]
-    pub fn new(rom: &[u8], sample_rate: u32) -> RubcWasm {
+    pub fn new(rom: &[u8], sample_rate: u32, boot_mode: Option<String>) -> RubcWasm {
         console_error_panic_hook::set_once();
 
-        let is_cgb = rom.get(0x0143).is_some_and(|f| f & 0x80 != 0);
-        let mut machine = if is_cgb {
-            Machine::boot_cgb(rom)
-        } else {
-            Machine::boot_dmg(rom)
+        let mut machine = match boot_mode.as_deref() {
+            Some("cgb") => Machine::boot_cgb(rom),
+            Some("dmg") => Machine::boot_dmg(rom),
+            _ => {
+                let is_cgb = rom.get(0x0143).is_some_and(|f| f & 0x80 != 0);
+                if is_cgb {
+                    Machine::boot_cgb(rom)
+                } else {
+                    Machine::boot_dmg(rom)
+                }
+            }
         };
 
         let rate = if sample_rate == 0 {
