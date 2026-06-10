@@ -71,6 +71,146 @@ pub struct PpuWrite {
     pub value: u8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LcdPaletteSource {
+    Bg,
+    Obp0,
+    Obp1,
+}
+
+impl LcdPaletteSource {
+    fn index(self) -> usize {
+        match self {
+            LcdPaletteSource::Bg => 0,
+            LcdPaletteSource::Obp0 => 1,
+            LcdPaletteSource::Obp1 => 2,
+        }
+    }
+
+    fn addr(self) -> u16 {
+        match self {
+            LcdPaletteSource::Bg => 0xFF47,
+            LcdPaletteSource::Obp0 => 0xFF48,
+            LcdPaletteSource::Obp1 => 0xFF49,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct DmgPaletteWriteEdge {
+    dot_ticks: u64,
+    addr: u16,
+    old: u8,
+    new: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LcdPaletteSample {
+    pub line_dot: u32,
+    pub dot_ticks: u64,
+    pub drawing_dots: u32,
+    pub ly: u8,
+    pub x: usize,
+    pub raw_color: u8,
+    pub palette_source: LcdPaletteSource,
+    pub hardware_palette: u8,
+    pub rubc_palette: u8,
+}
+
+#[derive(Clone, Debug)]
+pub struct LcdPaletteTrace {
+    samples: Vec<LcdPaletteSample>,
+    writes: Vec<PpuWrite>,
+    filter_ly: Option<u8>,
+    hardware_regs: [u8; 3],
+    last_edge: Option<DmgPaletteWriteEdge>,
+}
+
+impl Default for LcdPaletteTrace {
+    fn default() -> Self {
+        Self {
+            samples: Vec::new(),
+            writes: Vec::new(),
+            filter_ly: None,
+            hardware_regs: [0xFC, 0xFF, 0xFF],
+            last_edge: None,
+        }
+    }
+}
+
+impl LcdPaletteTrace {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_line_filter(&mut self, ly: Option<u8>) {
+        self.filter_ly = ly;
+    }
+
+    pub fn reset_palette_state(&mut self, bgp: u8, obp0: u8, obp1: u8) {
+        self.hardware_regs = [bgp, obp0, obp1];
+        self.last_edge = None;
+    }
+
+    pub fn sync_palette_state(&mut self, bgp: u8, obp0: u8, obp1: u8) {
+        self.hardware_regs = [bgp, obp0, obp1];
+    }
+
+    pub fn clear(&mut self) {
+        self.samples.clear();
+        self.writes.clear();
+    }
+
+    pub fn push_palette_write(&mut self, w: PpuWrite, old: u8) {
+        if let Some(source) = match w.addr {
+            0xFF47 => Some(LcdPaletteSource::Bg),
+            0xFF48 => Some(LcdPaletteSource::Obp0),
+            0xFF49 => Some(LcdPaletteSource::Obp1),
+            _ => None,
+        } {
+            self.last_edge = Some(DmgPaletteWriteEdge {
+                dot_ticks: w.dot_ticks,
+                addr: w.addr,
+                old,
+                new: w.value,
+            });
+            self.hardware_regs[source.index()] = w.value;
+        }
+        if let Some(ly) = self.filter_ly {
+            if w.ly != ly {
+                return;
+            }
+        }
+        self.writes.push(w);
+    }
+
+    pub fn sample_palette(&self, source: LcdPaletteSource, dot_ticks: u64) -> u8 {
+        if let Some(edge) = self.last_edge {
+            if edge.addr == source.addr() && edge.dot_ticks == dot_ticks {
+                return edge.old | edge.new;
+            }
+        }
+        self.hardware_regs[source.index()]
+    }
+
+    pub fn push_sample(&mut self, s: LcdPaletteSample) {
+        if let Some(ly) = self.filter_ly {
+            if s.ly != ly {
+                return;
+            }
+        }
+        self.samples.push(s);
+    }
+
+    pub fn samples(&self) -> &[LcdPaletteSample] {
+        &self.samples
+    }
+
+    pub fn writes(&self) -> &[PpuWrite] {
+        &self.writes
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PpuPhaseTrace {
     samples: Vec<PpuSample>,
