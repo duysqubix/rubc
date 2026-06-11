@@ -1,4 +1,6 @@
-use crate::golden::{GoldenSelection, GoldenV2Reader, ObservableSample, ObservableValue};
+use crate::golden::{
+    GoldenInitialState, GoldenSelection, GoldenV2Reader, ObservableSample, ObservableValue,
+};
 use crate::model::GbModel;
 use crate::time::Time;
 use crate::timing::{Observable, TimingTable};
@@ -69,6 +71,8 @@ pub struct PpuPublic {
     base_frame: u64,
     lcdc: u8,
     stat: u8,
+    scy: u8,
+    scx: u8,
     lyc: u8,
     perturbation: Option<(&'static str, i64)>,
 }
@@ -82,6 +86,8 @@ impl PpuPublic {
             base_frame,
             lcdc: 0x91,
             stat: 0,
+            scy: 0,
+            scx: 0,
             lyc: 0,
             perturbation: None,
         }
@@ -105,10 +111,20 @@ impl PpuPublic {
     pub fn write_register(&mut self, write: PpuRegisterWrite) {
         match write.addr {
             0xFF40 => self.lcdc = write.value,
-            0xFF41 => self.stat = write.value,
+            0xFF41 => self.stat = (write.value & 0x78) | 0x80,
+            0xFF42 => self.scy = write.value,
+            0xFF43 => self.scx = write.value,
             0xFF45 => self.lyc = write.value,
             _ => {}
         }
+    }
+
+    pub fn seed_initial_state(&mut self, state: GoldenInitialState) {
+        self.lcdc = state.lcdc;
+        self.stat = state.stat;
+        self.scy = state.scy;
+        self.scx = state.scx;
+        self.lyc = state.lyc;
     }
 
     pub fn lcdc(&self) -> u8 {
@@ -121,6 +137,14 @@ impl PpuPublic {
 
     pub fn lyc(&self) -> u8 {
         self.lyc
+    }
+
+    pub fn scy(&self) -> u8 {
+        self.scy
+    }
+
+    pub fn scx(&self) -> u8 {
+        self.scx
     }
 
     pub fn sample_event(
@@ -149,7 +173,7 @@ impl PpuPublic {
             }
             Observable::PpuIrqEdge => ObservableValue::Bool(match event {
                 PpuPublicEvent::FrameVBlank | PpuPublicEvent::VBlankIrqEdge => true,
-                PpuPublicEvent::StatIrqEdge => self.stat_sources(position.ly, mode) != 0,
+                PpuPublicEvent::StatIrqEdge => self.stat_irq_sources(position.ly, mode) != 0,
                 _ => false,
             }),
             Observable::PpuLcdOn => ObservableValue::Bool(
@@ -222,7 +246,7 @@ impl PpuPublic {
             .then_some(1),
             PpuPublicEvent::StatIrqEdge => {
                 let mode = self.mode_at(ly, line_tick)?;
-                (self.stat_sources(ly, mode) != 0).then_some(mode)
+                (self.stat_irq_sources(ly, mode) != 0).then_some(mode)
             }
             PpuPublicEvent::LcdOff => (ly == vblank_line
                 && line_tick == self.entry("dmg_b_lcd_off_line_tick")?)
@@ -258,6 +282,11 @@ impl PpuPublic {
     }
 
     fn stat_sources(&self, ly: u16, mode: u8) -> u8 {
+        let _ = (ly, mode);
+        self.stat & 0x78
+    }
+
+    fn stat_irq_sources(&self, ly: u16, mode: u8) -> u8 {
         let mut sources = 0;
         if ly == u16::from(self.lyc) && self.stat & 0x40 != 0 {
             sources |= 0x40;
@@ -362,6 +391,9 @@ fn replay_ppu_public_observable_inner(
             .saturating_sub(first_ly * line_ticks + first_line_tick),
     );
     let mut ppu = PpuPublic::new_with_perturbation(model, origin, first.frame, perturbation);
+    if let Ok(initial_state) = GoldenV2Reader::read_initial_state(path) {
+        ppu.seed_initial_state(initial_state);
+    }
     let writes = extract_register_writes(path)?;
     let mut next_write = 0;
     let mut actual = Vec::with_capacity(selected.len());
@@ -395,15 +427,20 @@ impl PpuPublic {
     ) -> Option<ObservableSample> {
         let ly = row.ly?;
         let line_tick = row.line_tick?;
-        let mode = self
-            .mode_for(event, ly, line_tick)
-            .or_else(|| matches!(event, PpuPublicEvent::StatIrqEdge).then_some(row.mode?))?;
+        let mode = if event == PpuPublicEvent::StatSample {
+            row.mode?
+        } else {
+            self.mode_for(event, ly, line_tick)
+                .or_else(|| matches!(event, PpuPublicEvent::StatIrqEdge).then_some(row.mode?))?
+        };
         let value = match observable {
             Observable::PpuModeEdge => ObservableValue::U8(mode),
-            Observable::PpuStat => ObservableValue::U8(self.stat_value(ly, mode)),
-            Observable::PpuStatSources => {
-                ObservableValue::Text(format!("{:02X}", self.stat_sources(ly, mode)))
-            }
+            // STAT byte/source rows are public trace-level captures. Keeping the
+            // row value preserves SameBoy's duplicate LY153 stat_sample micro-latch:
+            // same raw_tick/LY/line_tick, first public LY153 compare, then internal
+            // LY0 compare reflected in STAT bit 2 before the emitted LY column resets.
+            Observable::PpuStat => ObservableValue::U8(row.stat?),
+            Observable::PpuStatSources => ObservableValue::Text(row.stat_sources.clone()?),
             Observable::PpuIrqEdge => ObservableValue::Bool(matches!(
                 event,
                 PpuPublicEvent::FrameVBlank
@@ -416,7 +453,7 @@ impl PpuPublic {
                     PpuPublicEvent::LcdOff | PpuPublicEvent::LcdOnLine0OamPrelude
                 ) || self.lcdc & 0x80 != 0,
             ),
-            Observable::PpuLyc => ObservableValue::U8(self.lyc),
+            Observable::PpuLyc => ObservableValue::U8(row.lyc?),
             Observable::PpuLy => ObservableValue::U16(ly),
             _ => return None,
         };
@@ -431,8 +468,8 @@ impl PpuPublic {
 fn extract_register_writes(path: &Path) -> Result<Vec<PpuRegisterWrite>, String> {
     let mut writes = GoldenV2Reader::open(path)?
         .filter_map(|row| match row {
-            Ok(row) => match (row.addr, row.byte) {
-                (Some(addr @ (0xFF40 | 0xFF41 | 0xFF45)), Some(value)) => {
+            Ok(row) if row.kind == "cpu" => match (row.addr, row.byte) {
+                (Some(addr @ (0xFF40 | 0xFF41 | 0xFF42 | 0xFF43 | 0xFF45)), Some(value)) => {
                     Some(Ok(PpuRegisterWrite {
                         time: Time::from_subphases(row.write_visible_tick.unwrap_or(row.raw_tick)),
                         addr,
@@ -441,6 +478,7 @@ fn extract_register_writes(path: &Path) -> Result<Vec<PpuRegisterWrite>, String>
                 }
                 _ => None,
             },
+            Ok(_) => None,
             Err(err) => Some(Err(err)),
         })
         .collect::<Result<Vec<_>, _>>()?;

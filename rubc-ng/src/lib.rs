@@ -11,8 +11,8 @@ pub mod timing;
 
 pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
 pub use golden::{
-    assert_golden_edges, GoldenRow, GoldenSelection, GoldenTrace, GoldenV2Reader, ObservableSample,
-    ObservableValue, TraceMismatch,
+    assert_golden_edges, GoldenInitialState, GoldenRow, GoldenSelection, GoldenTrace,
+    GoldenV2Reader, ObservableSample, ObservableValue, TraceMismatch,
 };
 pub use machine::{MachineNg, StepRecord};
 pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
@@ -292,6 +292,31 @@ mod tests {
     }
 
     #[test]
+    fn golden_v2_reader_extracts_capture_window_initial_state_block() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let initial =
+            GoldenV2Reader::read_initial_state(&path).expect("v2.2 initial-state block parses");
+
+        assert_eq!(initial.frame, 60);
+        assert_eq!(initial.ly, 145);
+        assert_eq!(initial.line_tick, 8);
+        assert_eq!(initial.mode, 1);
+        assert_eq!(initial.lcdc, 0x91);
+        assert_eq!(initial.stat, 0x01);
+        assert_eq!(initial.scy, 0x00);
+        assert_eq!(initial.scx, 0x00);
+        assert_eq!(initial.lyc, 0x00);
+    }
+
+    #[test]
     fn ppu_public_wave_gate_matches_full_s3_captured_windows_from_replayed_writes() {
         let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -361,48 +386,6 @@ mod tests {
                     {
                         continue;
                     }
-                    if observable == Observable::PpuStat && event == "stat_sample" {
-                        continue;
-                    }
-                    if observable == Observable::PpuStat
-                        && matches!(
-                            event,
-                            "stat_sample"
-                                | "mode2_irq_prepare"
-                                | "mode2_enter"
-                                | "mode3_enter"
-                                | "mode0_enter"
-                                | "frame_vblank"
-                                | "vblank_irq_edge"
-                                | "stat_irq_edge"
-                                | "lcd_off"
-                                | "lcd_on_line0_oam_prelude"
-                                | "mode3_enter_line0"
-                        )
-                    {
-                        continue;
-                    }
-                    if observable == Observable::PpuStatSources && event == "stat_sample" {
-                        continue;
-                    }
-                    if observable == Observable::PpuStatSources
-                        && matches!(
-                            event,
-                            "stat_sample"
-                                | "mode2_irq_prepare"
-                                | "mode2_enter"
-                                | "mode3_enter"
-                                | "mode0_enter"
-                                | "frame_vblank"
-                                | "vblank_irq_edge"
-                                | "stat_irq_edge"
-                                | "lcd_off"
-                                | "lcd_on_line0_oam_prelude"
-                                | "mode3_enter_line0"
-                        )
-                    {
-                        continue;
-                    }
                     if observable == Observable::PpuIrqEdge
                         && !matches!(event, "frame_vblank" | "vblank_irq_edge" | "stat_irq_edge")
                     {
@@ -411,9 +394,6 @@ mod tests {
                     if observable == Observable::PpuLcdOn
                         && !matches!(event, "lcd_off" | "lcd_on_line0_oam_prelude")
                     {
-                        continue;
-                    }
-                    if observable == Observable::PpuLyc {
                         continue;
                     }
                     let actual = replay_ppu_public_observable(
@@ -496,7 +476,7 @@ mod tests {
         });
 
         assert_eq!(ppu.lcdc(), 0x80);
-        assert_eq!(ppu.stat(), 0x78);
+        assert_eq!(ppu.stat(), 0xF8);
         assert_eq!(ppu.lyc(), 0x42);
     }
 
