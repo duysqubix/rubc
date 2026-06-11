@@ -3155,6 +3155,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rubc-ng"
+version = "0.1.0"
+
+[[package]]
 name = "rubc-wasm"
 version = "0.1.0"
 dependencies = [
