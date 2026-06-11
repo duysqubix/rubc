@@ -9,6 +9,7 @@ pub mod model;
 pub mod ppu_internal;
 pub mod ppu_public;
 pub mod time;
+pub mod timer;
 pub mod timing;
 
 pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
@@ -29,6 +30,7 @@ pub use ppu_public::{
     PpuPublicEvent, PpuRegisterWrite,
 };
 pub use time::{ClockPhase, ClockSpine, Time};
+pub use timer::{Timer, TimerRegister};
 pub use timing::{
     Anchor, Observable, PhaseRule, TimingDomain, TimingEntry, TimingProfile, TimingTable,
 };
@@ -86,6 +88,43 @@ mod tests {
         );
         assert_eq!(trace_a.first().map(|r| r.time), Some(Time::ZERO));
         assert_eq!(trace_a.last().map(|r| r.time.subphases()), Some(31));
+    }
+
+    #[test]
+    fn machine_ng_maps_timer_registers_and_ticks_div_from_spine() {
+        let rom = vec![0x00; 0x8000];
+        let mut machine = MachineNg::from_rom(GbModel::DmgB, &rom).expect("valid ROM loads");
+
+        assert!(machine.write_io(0xFF05, 0x34));
+        assert!(machine.write_io(0xFF06, 0xA5));
+        assert!(machine.write_io(0xFF07, 0xFF));
+        assert_eq!(
+            machine.read_io(0xFF05),
+            Some(0x34),
+            "TIMA is memory-mapped at FF05"
+        );
+        assert_eq!(
+            machine.read_io(0xFF06),
+            Some(0xA5),
+            "TMA is memory-mapped at FF06"
+        );
+        assert_eq!(
+            machine.read_io(0xFF07),
+            Some(0xFF),
+            "TAC exposes upper bits as set"
+        );
+
+        assert_ne!(
+            machine.read_io(0xFF04),
+            Some(1),
+            "deliberately wrong expected probe: DIV visible byte must not advance before 256 CPU-T"
+        );
+        machine.run_steps(256 * 4);
+        assert_eq!(
+            machine.read_io(0xFF04),
+            Some(1),
+            "DIV visible byte advances after 256 spine CPU-T ticks"
+        );
     }
 
     #[test]

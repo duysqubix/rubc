@@ -1,6 +1,7 @@
 use crate::bus_intent::{CpuBusIntent, IntentOutcome};
 use crate::model::GbModel;
 use crate::time::{ClockSpine, Time};
+use crate::timer::Timer;
 use crate::timing::TimingTable;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -18,6 +19,7 @@ pub struct MachineNg {
     rom: Vec<u8>,
     pc: u16,
     spine: ClockSpine,
+    timer: Timer,
     table: TimingTable,
 }
 
@@ -27,11 +29,15 @@ impl MachineNg {
             return Err("ROM must contain at least one byte".to_owned());
         }
 
+        let spine = ClockSpine::new();
+        let timer = Timer::power_on(&spine);
+
         Ok(Self {
             model,
             rom: rom.to_vec(),
             pc: 0,
-            spine: ClockSpine::new(),
+            spine,
+            timer,
             table: TimingTable::for_model(model),
         })
     }
@@ -42,6 +48,18 @@ impl MachineNg {
 
     pub fn spine(&self) -> &ClockSpine {
         &self.spine
+    }
+
+    pub fn timer(&self) -> &Timer {
+        &self.timer
+    }
+
+    pub fn read_io(&self, addr: u16) -> Option<u8> {
+        self.timer.read(addr)
+    }
+
+    pub fn write_io(&mut self, addr: u16, value: u8) -> bool {
+        self.timer.write(addr, value)
     }
 
     pub fn run_steps(&mut self, steps: usize) -> Vec<StepRecord> {
@@ -59,6 +77,7 @@ impl MachineNg {
             outcome,
         };
         self.spine.step_subphase(&self.table);
+        self.timer.observe_spine(&self.spine);
         record
     }
 
