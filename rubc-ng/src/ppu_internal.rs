@@ -18,8 +18,54 @@ pub struct PpuInternal {
     wx: u8,
     wy: u8,
     vram: Vram,
+    oam: [u8; 0xA0],
     fetcher_x: u16,
     current_tile_data_addr: Option<u16>,
+    window_active: bool,
+    window_line: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowRestart {
+    pub trigger_x: usize,
+    pub penalty_dots: u8,
+    pub scx_low_bits_after_restart: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SelectedSprite {
+    pub y: u8,
+    pub x: u8,
+    pub tile: u8,
+    pub attr: u8,
+    pub oam_index: u8,
+    pub palette: SpritePalette,
+    pub bg_priority: bool,
+    pub size: SpriteSize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpritePalette {
+    Obp0,
+    Obp1,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpriteSize {
+    Size8x8,
+    Size8x16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpritePriorityMode {
+    DmgXOrder,
+    OamOrder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResolvedDmgPixel {
+    Bg,
+    Obj(SpritePalette),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,9 +120,127 @@ impl PpuInternal {
             wx: state.regs.wx,
             wy: state.regs.wy,
             vram: state.vram,
+            oam: state.oam,
             fetcher_x: 0,
             current_tile_data_addr: None,
+            window_active: false,
+            window_line: 0,
         }
+    }
+
+    pub fn for_test(
+        lcdc: u8,
+        scy: u8,
+        scx: u8,
+        wx: u8,
+        wy: u8,
+        vram: Vram,
+        oam: [u8; 0xA0],
+    ) -> Self {
+        Self {
+            lcdc,
+            scy,
+            scx,
+            wx,
+            wy,
+            vram,
+            oam,
+            fetcher_x: 0,
+            current_tile_data_addr: None,
+            window_active: false,
+            window_line: 0,
+        }
+    }
+
+    pub fn trigger_window_for_test(&mut self, ly: u16, screen_x: usize) -> Option<WindowRestart> {
+        if self.window_triggered(ly, screen_x) {
+            self.window_active = true;
+            self.window_line = ly.saturating_sub(u16::from(self.wy)) as u8;
+            self.fetcher_x = 0;
+            self.current_tile_data_addr = None;
+            Some(WindowRestart {
+                trigger_x: screen_x,
+                penalty_dots: 6,
+                scx_low_bits_after_restart: 0,
+            })
+        } else {
+            None
+        }
+    }
+
+    pub fn fetch_next_tile_for_test(&mut self, ly: u16) -> Result<BgFetchSample, String> {
+        let addr = self.tilemap_addr(ly);
+        let byte = self.vram.read(addr, 0)?;
+        self.current_tile_data_addr = Some(self.tile_data_addr(byte, ly));
+        let sample = BgFetchSample {
+            raw_tick: 0,
+            ly,
+            stage: "GET_TILE_T1".to_owned(),
+            fetcher_x: self.fetcher_x,
+            machine_addr: addr,
+            machine_byte: byte,
+        };
+        self.fetcher_x = self.fetcher_x.wrapping_add(1);
+        Ok(sample)
+    }
+
+    pub fn select_sprites_for_test(lcdc: u8, oam: &[u8; 0xA0], ly: u8) -> Vec<SelectedSprite> {
+        select_scanline_sprites(lcdc, oam, ly)
+    }
+
+    pub fn selected_scanline_sprites_for_test(&self, ly: u8) -> Vec<SelectedSprite> {
+        select_scanline_sprites(self.lcdc, &self.oam, ly)
+    }
+
+    pub fn selected_sprite_for_test(
+        y: u8,
+        x: u8,
+        tile: u8,
+        attr: u8,
+        oam_index: u8,
+    ) -> SelectedSprite {
+        let size = SpriteSize::Size8x8;
+        SelectedSprite {
+            y,
+            x,
+            tile,
+            attr,
+            oam_index,
+            palette: if attr & 0x10 != 0 {
+                SpritePalette::Obp1
+            } else {
+                SpritePalette::Obp0
+            },
+            bg_priority: attr & 0x80 != 0,
+            size,
+        }
+    }
+
+    pub fn resolve_dmg_obj_over_bg_for_test(
+        bg_color: u8,
+        bg_master_priority: bool,
+        obj_color: u8,
+        sprite: SelectedSprite,
+    ) -> ResolvedDmgPixel {
+        if obj_color == 0 || (bg_color != 0 && (bg_master_priority || sprite.bg_priority)) {
+            ResolvedDmgPixel::Bg
+        } else {
+            ResolvedDmgPixel::Obj(sprite.palette)
+        }
+    }
+
+    pub fn sprite_fetch_order_for_test(
+        sprites: &[SelectedSprite],
+        mode: SpritePriorityMode,
+    ) -> Vec<SelectedSprite> {
+        let mut fetch = sprites.to_vec();
+        match mode {
+            SpritePriorityMode::DmgXOrder => {
+                fetch.sort_by_key(|sprite| (sprite.x, sprite.oam_index))
+            }
+            SpritePriorityMode::OamOrder => fetch.sort_by_key(|sprite| sprite.oam_index),
+        }
+        fetch
     }
 
     fn write_register(&mut self, write: PpuRegisterWrite) {
@@ -101,9 +265,9 @@ impl PpuInternal {
         let ly = row.ly.ok_or_else(|| "fetch row missing LY".to_owned())?;
         let (addr, byte) = match stage {
             "GET_TILE_T1" => {
-                let addr = self.bg_tilemap_addr(ly);
+                let addr = self.tilemap_addr(ly);
                 let byte = self.vram.read(addr, 0)?;
-                self.current_tile_data_addr = Some(self.bg_tile_data_addr(byte, ly));
+                self.current_tile_data_addr = Some(self.tile_data_addr(byte, ly));
                 (addr, byte)
             }
             "GET_TILE_DATA_LOWER_T1" => {
@@ -135,6 +299,20 @@ impl PpuInternal {
         }))
     }
 
+    fn window_triggered(&self, ly: u16, screen_x: usize) -> bool {
+        self.lcdc & 0x20 != 0
+            && ly >= u16::from(self.wy)
+            && screen_x.saturating_add(7) >= usize::from(self.wx)
+    }
+
+    fn tilemap_addr(&self, ly: u16) -> u16 {
+        if self.window_active {
+            self.window_tilemap_addr()
+        } else {
+            self.bg_tilemap_addr(ly)
+        }
+    }
+
     fn bg_tilemap_addr(&self, ly: u16) -> u16 {
         let base = if self.lcdc & 0x08 != 0 {
             0x1C00
@@ -147,12 +325,86 @@ impl PpuInternal {
         base + row + col
     }
 
-    fn bg_tile_data_addr(&self, tile_id: u8, ly: u16) -> u16 {
-        let fine_y = u16::from(self.scy.wrapping_add(ly as u8) & 7) * 2;
+    fn window_tilemap_addr(&self) -> u16 {
+        let base = if self.lcdc & 0x40 != 0 {
+            0x1C00
+        } else {
+            0x1800
+        };
+        let row = u16::from(self.window_line >> 3) * 32;
+        let col = self.fetcher_x & 31;
+        base + row + col
+    }
+
+    fn tile_data_addr(&self, tile_id: u8, ly: u16) -> u16 {
+        let fine_source_y = if self.window_active {
+            self.window_line
+        } else {
+            self.scy.wrapping_add(ly as u8)
+        };
+        let fine_y = u16::from(fine_source_y & 7) * 2;
         if self.lcdc & 0x10 != 0 {
             u16::from(tile_id) * 16 + fine_y
         } else {
             (0x1000_i32 + i32::from(tile_id as i8) * 16 + i32::from(fine_y)) as u16
+        }
+    }
+}
+
+fn select_scanline_sprites(lcdc: u8, oam: &[u8; 0xA0], ly: u8) -> Vec<SelectedSprite> {
+    let mut selected = Vec::with_capacity(10);
+    let size = if lcdc & 0x04 != 0 {
+        SpriteSize::Size8x16
+    } else {
+        SpriteSize::Size8x8
+    };
+    let height = match size {
+        SpriteSize::Size8x8 => 8,
+        SpriteSize::Size8x16 => 16,
+    };
+
+    for (index, sprite) in oam.chunks_exact(4).enumerate() {
+        let y = sprite[0];
+        let ly_plus_16 = ly.wrapping_add(16);
+        if ly_plus_16 < y || ly_plus_16 >= y.wrapping_add(height) {
+            continue;
+        }
+        selected.push(SelectedSprite {
+            y,
+            x: sprite[1],
+            tile: if size == SpriteSize::Size8x16 {
+                sprite[2] & !1
+            } else {
+                sprite[2]
+            },
+            attr: sprite[3],
+            oam_index: index as u8,
+            palette: if sprite[3] & 0x10 != 0 {
+                SpritePalette::Obp1
+            } else {
+                SpritePalette::Obp0
+            },
+            bg_priority: sprite[3] & 0x80 != 0,
+            size,
+        });
+        if selected.len() == 10 {
+            break;
+        }
+    }
+    selected
+}
+
+impl Default for SelectedSprite {
+    fn default() -> Self {
+        Self {
+            y: 0,
+            x: 0,
+            tile: 0,
+            attr: 0,
+            oam_index: 0,
+            palette: SpritePalette::Obp0,
+            bg_priority: false,
+            size: SpriteSize::Size8x8,
         }
     }
 }
