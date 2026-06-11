@@ -114,6 +114,8 @@ impl CpuBus for FlatBus {
 
     fn tick_cpu_t(&mut self) {}
 
+    fn advance_to(&mut self, _target: super::scheduler::Time) {}
+
     fn read_latched(&mut self, addr: u16) -> u8 {
         self.mem[addr as usize]
     }

@@ -424,7 +424,7 @@ fn halt_bug_fetch_fixture() -> (Cpu, FlatBus) {
     bus.poke(0x0100, 0x00);
     bus.set_ie(0x01);
     bus.set_if(0x01);
-    cpu.enter_halt(&bus);
+    cpu.enter_halt(&mut bus);
     (cpu, bus)
 }
 
@@ -631,6 +631,8 @@ mod tests {
         fn begin_cpu_cycle(&mut self) {}
 
         fn tick_cpu_t(&mut self) {}
+
+        fn advance_to(&mut self, _target: crate::bus::scheduler::Time) {}
 
         fn read_latched(&mut self, addr: u16) -> u8 {
             self.mem[usize::from(addr)]

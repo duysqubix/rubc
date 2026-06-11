@@ -4,9 +4,16 @@
 //! instructions advance one phase per call; zero-cycle internal transitions
 //! (e.g. boundary -> fetch) loop until exactly one bus operation happens.
 
+use crate::bus::scheduler::{CpuAccessPlan, Time, CPU_ACCESS_END_OFFSET, SUBPHASES_PER_T_U8};
 use crate::bus::CpuBus;
 
 use super::regs::Regs;
+
+const PPU_IRQ_BITS: u8 = 0x03;
+
+fn time_after(start: Time, offset: u8) -> Time {
+    Time(start.0 + u64::from(offset))
+}
 
 /// High-level CPU mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -89,10 +96,29 @@ pub enum ActiveCpuCycle {
     },
 }
 
+impl ActiveCpuCycle {
+    /// The explicit sub-dot timing of this M-cycle (ADR 0001 stage 2). Derived
+    /// from the cycle kind + address so it reproduces today's `write_drive_ticks`
+    /// / read-at-end-of-M placement exactly -- behavior-preserving.
+    fn access_plan<B: CpuBus>(&self, bus: &B) -> CpuAccessPlan {
+        match *self {
+            ActiveCpuCycle::Write { addr, .. } => CpuAccessPlan::write(bus.write_drive_ticks(addr)),
+            ActiveCpuCycle::Fetch { .. }
+            | ActiveCpuCycle::Read { .. }
+            | ActiveCpuCycle::OamBugReadIncDec { .. } => CpuAccessPlan::read_like(),
+            ActiveCpuCycle::Idle { .. } | ActiveCpuCycle::OamBugIdu { .. } => CpuAccessPlan::idle(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ActiveCpuCycleState {
     cycle: ActiveCpuCycle,
     elapsed_t: u8,
+    /// The access plan (ADR 0001 stage 2), computed once at T0 after
+    /// `begin_cpu_cycle`. `None` until the first tick of this M-cycle.
+    #[serde(default)]
+    plan: Option<CpuAccessPlan>,
 }
 
 struct PerTOpcodeBus<'a, B> {
@@ -106,9 +132,9 @@ impl<'a, B: CpuBus> PerTOpcodeBus<'a, B> {
 
     fn run_cycle(&mut self) {
         self.inner.begin_cpu_cycle();
-        for _ in 0..4 {
-            self.inner.tick_cpu_t();
-        }
+        let start = self.inner.now();
+        self.inner
+            .advance_to(time_after(start, CPU_ACCESS_END_OFFSET));
     }
 }
 
@@ -126,16 +152,13 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
 
     fn write_m(&mut self, addr: u16, value: u8) {
         self.inner.begin_cpu_cycle();
-        let drive_ticks = self.inner.write_drive_ticks(addr);
-        for elapsed in 0..4 {
-            if elapsed == drive_ticks {
-                self.inner.write_latched(addr, value);
-            }
-            self.inner.tick_cpu_t();
+        let start = self.inner.now();
+        let plan = CpuAccessPlan::write(self.inner.write_drive_ticks(addr));
+        if let Some(offset) = plan.write_visible_at {
+            self.inner
+                .schedule_cpu_write(time_after(start, offset), addr, value);
         }
-        if drive_ticks == 4 {
-            self.inner.write_latched(addr, value);
-        }
+        self.inner.advance_to(time_after(start, plan.end));
         self.inner.end_cpu_cycle();
     }
 
@@ -190,6 +213,26 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
 
     fn write_latched(&mut self, addr: u16, value: u8) {
         self.inner.write_latched(addr, value);
+    }
+
+    fn now(&self) -> Time {
+        self.inner.now()
+    }
+
+    fn schedule_cpu_write(&mut self, at: Time, addr: u16, value: u8) {
+        self.inner.schedule_cpu_write(at, addr, value);
+    }
+
+    fn drain_cpu_writes_through(&mut self, now: Time) {
+        self.inner.drain_cpu_writes_through(now);
+    }
+
+    fn advance_to(&mut self, target: Time) {
+        self.inner.advance_to(target);
+    }
+
+    fn sync_ppu_to_cpu(&mut self) {
+        self.inner.sync_ppu_to_cpu();
     }
 
     fn end_cpu_cycle(&mut self) {
@@ -248,7 +291,20 @@ impl Cpu {
         self.active_cycle = Some(ActiveCpuCycleState {
             cycle,
             elapsed_t: 0,
+            plan: None,
         });
+    }
+
+    fn sync_ppu_if_irq_can_affect_boundary<B: CpuBus>(&self, bus: &mut B) {
+        if bus.ie() & PPU_IRQ_BITS != 0 {
+            bus.sync_ppu_to_cpu();
+        }
+    }
+
+    fn sync_ppu_if_halt_can_wake<B: CpuBus>(&self, bus: &mut B) {
+        if bus.ie() & PPU_IRQ_BITS != 0 {
+            bus.sync_ppu_to_cpu();
+        }
     }
 
     pub fn step_t<B: CpuBus>(&mut self, bus: &mut B) -> bool {
@@ -258,21 +314,27 @@ impl Cpu {
 
         if state.elapsed_t == 0 {
             bus.begin_cpu_cycle();
+            let start = bus.now();
+            // ADR 0001 stage 2: snapshot the explicit access plan AFTER the
+            // OAM-DMA beat in begin_cpu_cycle, so the T0 (BGP) write still lands
+            // in the same order as before.
+            let plan = state.cycle.access_plan(bus);
+            state.plan = Some(plan);
             if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
-                if bus.write_drive_ticks(addr) == 0 {
-                    bus.write_latched(addr, value);
+                if let Some(offset) = plan.write_visible_at {
+                    bus.schedule_cpu_write(time_after(start, offset), addr, value);
                 }
             }
         }
 
-        bus.tick_cpu_t();
-        state.elapsed_t += 1;
+        debug_assert!(
+            state.plan.is_some(),
+            "CPU access plan must be set at T0 before any tick"
+        );
 
-        if let ActiveCpuCycle::Write { addr, value, .. } = state.cycle {
-            if bus.write_drive_ticks(addr) == state.elapsed_t {
-                bus.write_latched(addr, value);
-            }
-        }
+        let target = time_after(bus.now(), SUBPHASES_PER_T_U8);
+        bus.advance_to(target);
+        state.elapsed_t += 1;
 
         if state.elapsed_t < 4 {
             self.active_cycle = Some(state);
@@ -314,6 +376,7 @@ impl Cpu {
                             self.ime_delay_boundary -= 1;
                         }
                     }
+                    self.sync_ppu_if_irq_can_affect_boundary(bus);
                     bus.boundary();
                     if self.try_dispatch_interrupt(bus) {
                         self.step_dispatch(bus);
@@ -369,6 +432,7 @@ impl Cpu {
                             self.ime_delay_boundary -= 1;
                         }
                     }
+                    self.sync_ppu_if_irq_can_affect_boundary(bus);
                     bus.boundary();
                     if self.try_dispatch_interrupt(bus) {
                         self.step_dispatch_via_t(bus);
@@ -411,6 +475,7 @@ impl Cpu {
         loop {
             match self.mode {
                 CpuMode::Halt => {
+                    self.sync_ppu_if_halt_can_wake(bus);
                     bus.boundary();
                     if bus.irq_pending_mask() != 0 {
                         self.mode = CpuMode::Running;
@@ -444,6 +509,7 @@ impl Cpu {
                                 self.ime_delay_boundary -= 1;
                             }
                         }
+                        self.sync_ppu_if_irq_can_affect_boundary(bus);
                         bus.boundary();
                         if self.try_dispatch_interrupt(bus) {
                             continue;
@@ -518,6 +584,7 @@ impl Cpu {
         loop {
             match self.mode {
                 CpuMode::Halt => {
+                    self.sync_ppu_if_halt_can_wake(bus);
                     bus.boundary();
                     if bus.irq_pending_mask() != 0 {
                         self.mode = CpuMode::Running;
@@ -545,6 +612,7 @@ impl Cpu {
                                 self.ime_delay_boundary -= 1;
                             }
                         }
+                        self.sync_ppu_if_irq_can_affect_boundary(bus);
                         bus.boundary();
                         if self.try_dispatch_interrupt(bus) {
                             continue;
@@ -660,7 +728,8 @@ impl Cpu {
         self.ime_delay_boundary = 0;
     }
 
-    pub(super) fn enter_halt<B: CpuBus>(&mut self, bus: &B) {
+    pub(super) fn enter_halt<B: CpuBus>(&mut self, bus: &mut B) {
+        self.sync_ppu_if_halt_can_wake(bus);
         if !self.ime && bus.irq_pending_mask() != 0 {
             // HALT bug: PC fails to increment on the next fetch.
             self.halt_bug = true;

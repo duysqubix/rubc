@@ -21,6 +21,7 @@ pub mod cartridge;
 pub mod compat_palettes;
 pub mod flat;
 pub mod ppu;
+pub mod scheduler;
 pub mod serial;
 pub mod sm83_vectors;
 pub mod stubs;
@@ -28,13 +29,21 @@ pub mod timer;
 
 pub use cartridge::Cartridge;
 pub use flat::FlatBus;
-pub use ppu::{CgbRenderState, DmgPalettes, Ppu};
+pub use ppu::{CgbRenderState, DmgPalettes, Ppu, PpuPhaseHooks, PpuRegisterPhase};
 
 use apu::Apu;
 use serial::Serial;
+use std::collections::VecDeque;
 pub use stubs::Button;
 use stubs::{CgbState, Interrupts, Joypad};
 use timer::Timer;
+
+const PPU_MAX_LOOKAHEAD_T: u64 = 64;
+const PPU_MIN_LAG_T: u64 = 16;
+
+fn default_next_ppu_dot_time() -> scheduler::Time {
+    scheduler::Time(scheduler::PPU_DOT_SUBPHASES_NORMAL)
+}
 
 fn read_oam_word(oam: &[u8; 0xA0], index: usize) -> u16 {
     u16::from_le_bytes([oam[index], oam[index + 1]])
@@ -93,6 +102,18 @@ pub trait CpuBus {
     fn read_latched(&mut self, addr: u16) -> u8;
     /// Commit a CPU write at the current latched bus time.
     fn write_latched(&mut self, addr: u16, value: u8);
+    /// Current CPU sub-dot timestamp. Test buses that do not model time use zero.
+    fn now(&self) -> scheduler::Time {
+        scheduler::Time::ZERO
+    }
+    /// Schedule a CPU write for later visibility. Default buses commit directly.
+    fn schedule_cpu_write(&mut self, _at: scheduler::Time, addr: u16, value: u8) {
+        self.write_latched(addr, value);
+    }
+    /// Drain scheduled CPU writes through `now`. Default buses have no queue.
+    fn drain_cpu_writes_through(&mut self, _now: scheduler::Time) {}
+    fn advance_to(&mut self, target: scheduler::Time);
+    fn sync_ppu_to_cpu(&mut self) {}
     fn write_drive_ticks(&self, _addr: u16) -> u8 {
         2
     }
@@ -140,6 +161,26 @@ fn is_ppu_visible_write(addr: u16) -> bool {
             | 0xFF47..=0xFF4B // BGP, OBP0, OBP1, WY, WX
             | 0xFF68..=0xFF6B // CGB BCPS/BCPD/OCPS/OCPD
     )
+}
+
+fn is_ppu_affected_read(addr: u16) -> bool {
+    matches!(
+        addr,
+        0x8000..=0x9FFF
+            | 0xFE00..=0xFE9F
+            | 0xFF0F
+            | 0xFF40..=0xFF45
+            | 0xFF47..=0xFF4B
+            | 0xFF68..=0xFF6B
+    )
+}
+
+fn is_ppu_mode_blocked_memory(addr: u16) -> bool {
+    matches!(addr, 0x8000..=0x9FFF | 0xFE00..=0xFE9F)
+}
+
+fn is_oam_bug_addr(addr: u16) -> bool {
+    matches!(addr, 0xFE00..=0xFEFF)
 }
 
 fn ppu_visible_write_pre_ticks(addr: u16) -> u32 {
@@ -252,6 +293,33 @@ pub struct Bus {
     dma: OamDma,
     hdma: Hdma,
 
+    /// CPU sub-dot timing clock (ADR 0001). Stage 1: advances in lockstep with
+    /// `t_tick_count` and changes no behavior; later stages give CPU writes
+    /// explicit sub-dot ordering relative to the PPU clock.
+    #[serde(default)]
+    cpu_time: scheduler::Time,
+    /// PPU sub-dot timing clock (ADR 0001). Stage 1: identical to `cpu_time`;
+    /// later stages may let CPU and PPU timelines diverge.
+    #[serde(default)]
+    ppu_time: scheduler::Time,
+    #[serde(default = "default_next_ppu_dot_time")]
+    next_ppu_dot_time: scheduler::Time,
+    /// Transient timestamped CPU-write queue; empty at save-state boundaries.
+    #[serde(skip, default)]
+    pending_cpu_writes: VecDeque<scheduler::CpuWriteEvent>,
+    #[serde(skip, default)]
+    pending_ppu_writes: VecDeque<scheduler::CpuWriteEvent>,
+    #[serde(default)]
+    next_write_seq: u64,
+    /// Test-only override of the PPU lag window (`PPU_MIN_LAG_T`), used by the
+    /// lag-invariance proof to show `m3_scy_change` is byte-identical at
+    /// different watermark cadences (ADR 0001 Stage E). `None` = the const.
+    #[cfg(feature = "trace")]
+    #[serde(skip, default)]
+    ppu_min_lag_t_override: Option<u64>,
+    #[cfg(feature = "trace")]
+    #[serde(skip, default)]
+    ppu_future_drained_writes: u64,
     /// Test/diagnostic hook: total `tick_cpu_t` calls so far this run.
     t_tick_count: u64,
     /// Snapshot of `t_tick_count` taken at the last latched access (for tests
@@ -291,15 +359,153 @@ impl Default for Bus {
             dma: OamDma::default(),
             hdma: Hdma::default(),
             t_tick_count: 0,
+            cpu_time: scheduler::Time::ZERO,
+            ppu_time: scheduler::Time::ZERO,
+            next_ppu_dot_time: default_next_ppu_dot_time(),
+            pending_cpu_writes: VecDeque::new(),
+            pending_ppu_writes: VecDeque::new(),
+            next_write_seq: 0,
+            #[cfg(feature = "trace")]
+            ppu_min_lag_t_override: None,
+            #[cfg(feature = "trace")]
+            ppu_future_drained_writes: 0,
             ticks_at_last_sample: 0,
             serial_out: Vec::new(),
         }
     }
 }
 
+struct PpuWriteDrain<'a> {
+    queue: &'a mut VecDeque<scheduler::CpuWriteEvent>,
+    dot_time: scheduler::Time,
+    dot_period: u64,
+    io: &'a mut [u8; 0x80],
+    cgb_mode: bool,
+    bcps: &'a mut u8,
+    ocps: &'a mut u8,
+    bg_palette_ram: &'a mut [u8; 64],
+    obj_palette_ram: &'a mut [u8; 64],
+    #[cfg(feature = "trace")]
+    future_drained_writes: &'a mut u64,
+}
+
+impl PpuWriteDrain<'_> {
+    fn drain(
+        &mut self,
+        through: scheduler::Time,
+        phase: PpuRegisterPhase,
+        ppu: &mut Ppu,
+        irq: &mut Interrupts,
+    ) {
+        let mut deferred = VecDeque::new();
+        while matches!(self.queue.front(), Some(event) if event.at <= through) {
+            let event = self.queue.pop_front().expect("front event exists");
+            if phase_accepts_ppu_write(phase, event.addr, self.cgb_mode) {
+                #[cfg(feature = "trace")]
+                if event.at > self.dot_time {
+                    *self.future_drained_writes += 1;
+                }
+                self.apply(event.addr, event.value, ppu, irq);
+            } else {
+                deferred.push_back(event);
+            }
+        }
+        while let Some(event) = deferred.pop_back() {
+            self.queue.push_front(event);
+        }
+    }
+
+    fn apply(&mut self, addr: u16, value: u8, ppu: &mut Ppu, irq: &mut Interrupts) {
+        match addr {
+            0xFF40 => ppu.write_lcdc(value, irq),
+            0xFF41 => ppu.write_stat(value, irq),
+            0xFF42 => ppu.write_scy(value),
+            0xFF43 => ppu.write_scx(value),
+            0xFF45 => ppu.write_lyc(value, irq),
+            0xFF47 => {
+                self.io[0x47] = value;
+                ppu.write_bgp(value);
+            }
+            0xFF48 => {
+                self.io[0x48] = value;
+                ppu.write_obp0(value);
+            }
+            0xFF49 => {
+                self.io[0x49] = value;
+                ppu.write_obp1(value);
+            }
+            0xFF4A => ppu.write_wy(value),
+            0xFF4B => ppu.write_wx(value),
+            0xFF68 if self.cgb_mode => *self.bcps = value & 0xBF,
+            0xFF6A if self.cgb_mode => *self.ocps = value & 0xBF,
+            0xFF69 if self.cgb_mode => {
+                let index = (*self.bcps & 0x3F) as usize;
+                if !ppu.cgb_palette_blocked() {
+                    self.bg_palette_ram[index] = value;
+                    ppu.write_cgb_bg_palette_byte(index, value);
+                }
+                if *self.bcps & 0x80 != 0 {
+                    *self.bcps = (*self.bcps & 0x80) | ((*self.bcps).wrapping_add(1) & 0x3F);
+                }
+            }
+            0xFF6B if self.cgb_mode => {
+                let index = (*self.ocps & 0x3F) as usize;
+                if !ppu.cgb_palette_blocked() {
+                    self.obj_palette_ram[index] = value;
+                    ppu.write_cgb_obj_palette_byte(index, value);
+                }
+                if *self.ocps & 0x80 != 0 {
+                    *self.ocps = (*self.ocps & 0x80) | ((*self.ocps).wrapping_add(1) & 0x3F);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl PpuPhaseHooks for PpuWriteDrain<'_> {
+    fn before_register_phase(
+        &mut self,
+        ppu: &mut Ppu,
+        irq: &mut Interrupts,
+        phase: PpuRegisterPhase,
+    ) {
+        let dots_after_start = match phase {
+            PpuRegisterPhase::BgTileNo
+            | PpuRegisterPhase::BgTileDataLow
+            | PpuRegisterPhase::BgTileDataHigh
+                if ppu.bg_fetcher_x() == 0 =>
+            {
+                0
+            }
+            PpuRegisterPhase::BgTileNo
+            | PpuRegisterPhase::BgTileDataLow
+            | PpuRegisterPhase::BgTileDataHigh => 5,
+            PpuRegisterPhase::PixelShiftOrEmit | PpuRegisterPhase::StatSettle => 0,
+        };
+        let through = scheduler::Time(self.dot_time.0 + self.dot_period * dots_after_start);
+        self.drain(through, phase, ppu, irq);
+    }
+}
+
+fn phase_accepts_ppu_write(phase: PpuRegisterPhase, addr: u16, cgb_mode: bool) -> bool {
+    match phase {
+        PpuRegisterPhase::BgTileNo
+        | PpuRegisterPhase::BgTileDataLow
+        | PpuRegisterPhase::BgTileDataHigh => !cgb_mode && addr == 0xFF42,
+        PpuRegisterPhase::PixelShiftOrEmit => matches!(addr, 0xFF47..=0xFF49 | 0xFF68..=0xFF6B),
+        PpuRegisterPhase::StatSettle => matches!(addr, 0xFF41 | 0xFF45),
+    }
+}
+
 impl Bus {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn ppu_future_drained_write_count(&self) -> u64 {
+        self.ppu_future_drained_writes
     }
 
     fn boot_rom_byte(&self, addr: u16) -> Option<u8> {
@@ -358,6 +564,79 @@ impl Bus {
         self.t_tick_count
     }
 
+    /// The CPU sub-dot timing clock (ADR 0001). Stage 1 invariant: its whole-T
+    /// count equals `total_ticks()`; later stages may add intra-T sub-phase
+    /// ordering but the whole-T count must always track the T-cycle count.
+    pub fn cpu_time(&self) -> scheduler::Time {
+        self.cpu_time
+    }
+
+    /// The PPU sub-dot timing clock (ADR 0001). Stage 1 invariant: this matches
+    /// [`Self::cpu_time`] exactly; later scheduler stages may diverge it.
+    pub fn ppu_time(&self) -> scheduler::Time {
+        self.ppu_time
+    }
+
+    fn push_cpu_write(
+        queue: &mut VecDeque<scheduler::CpuWriteEvent>,
+        next_write_seq: &mut u64,
+        at: scheduler::Time,
+        addr: u16,
+        value: u8,
+    ) {
+        if let Some(back) = queue.back() {
+            debug_assert!(
+                at >= back.at,
+                "CPU write queue must stay time-ordered: new {at:?} after back {:?}",
+                back.at
+            );
+        }
+        let seq = *next_write_seq;
+        *next_write_seq += 1;
+        queue.push_back(scheduler::CpuWriteEvent {
+            at,
+            seq,
+            addr,
+            value,
+        });
+    }
+
+    fn schedule_cpu_write(&mut self, at: scheduler::Time, addr: u16, value: u8) {
+        let queue = if is_ppu_visible_write(addr) {
+            &mut self.pending_ppu_writes
+        } else {
+            &mut self.pending_cpu_writes
+        };
+        Self::push_cpu_write(queue, &mut self.next_write_seq, at, addr, value);
+    }
+
+    fn drain_cpu_writes_through(&mut self, now: scheduler::Time) {
+        while matches!(self.pending_cpu_writes.front(), Some(event) if event.at <= now) {
+            let event = self
+                .pending_cpu_writes
+                .pop_front()
+                .expect("front event exists");
+            self.cpu_write_latched(event.addr, event.value);
+        }
+    }
+
+    fn drain_ppu_writes_through(&mut self, now: scheduler::Time) {
+        while matches!(self.pending_ppu_writes.front(), Some(event) if event.at <= now) {
+            let event = self
+                .pending_ppu_writes
+                .pop_front()
+                .expect("front event exists");
+            self.cpu_write_latched(event.addr, event.value);
+        }
+    }
+
+    pub(crate) fn debug_assert_no_pending_cpu_writes(&self) {
+        debug_assert!(
+            self.pending_cpu_writes.is_empty() && self.pending_ppu_writes.is_empty(),
+            "save state must not capture transient pending CPU writes"
+        );
+    }
+
     /// Build a flight record from the current (post-M-cycle) bus state. The CPU
     /// fills in PC/opcode/regs; the bus contributes its observable fields. This
     /// is side-effect-free (no tick) and is the seam N2's `step_m` uses to feed
@@ -390,7 +669,9 @@ impl Bus {
     /// Ordering per M-cycle: OAM-DMA beat (T0) -> N pre-ticks -> access ->
     /// (4-N) post-ticks -> HBlank-HDMA step.
     fn run_cpu_access(&mut self, access: CpuAccess) -> u8 {
-        // (1) OAM DMA beat happens once at the start of the M-cycle.
+        if self.dma_needs_ppu_sync() {
+            self.sync_ppu_to_cpu();
+        }
         self.oam_dma_beat();
 
         let result = match access {
@@ -437,12 +718,18 @@ impl Bus {
             CpuAccess::OamBugIdu { addr } => {
                 self.tick_t_times(4);
                 self.ticks_at_last_sample = self.t_tick_count;
+                if is_oam_bug_addr(addr) {
+                    self.sync_ppu_to_cpu();
+                }
                 self.corrupt_oam_for_bug(addr, OamBugAccess::Write);
                 0xFF
             }
         };
 
-        // (3) HBlank VRAM DMA: copy one $10 block on each fresh HBlank entry.
+        if self.dma_needs_ppu_sync() {
+            self.sync_ppu_to_cpu();
+        }
+        self.sync_ppu_to_cpu();
         self.hdma_hblank_step();
         result
     }
@@ -455,7 +742,56 @@ impl Bus {
     }
 
     fn tick_cpu_t(&mut self) {
+        let target = scheduler::Time(self.cpu_time.0 + scheduler::SUBPHASES_PER_T);
+        self.advance_to(target);
+    }
+
+    fn advance_to(&mut self, target: scheduler::Time) {
+        self.advance_cpu_to(target);
+    }
+
+    fn advance_cpu_to(&mut self, target: scheduler::Time) {
+        debug_assert!(
+            target >= self.cpu_time,
+            "cannot advance backwards from {:?} to {target:?}",
+            self.cpu_time
+        );
+        debug_assert_eq!(
+            target.subphase_in_t(),
+            0,
+            "ADR 0001 stage 3 only advances to T boundaries"
+        );
+        while self.cpu_time < target {
+            self.drain_cpu_writes_through(self.cpu_time);
+            self.tick_cpu_peripherals_one_t();
+            self.sync_ppu_watermark();
+        }
+        let before_target_drain = self.cpu_time;
+        self.drain_cpu_writes_through(target);
+        debug_assert_eq!(
+            before_target_drain, target,
+            "CPU sub-dot clock must reach advance_to target before target-boundary drain"
+        );
+        debug_assert!(
+            self.cpu_time >= target,
+            "CPU sub-dot clock must not move backwards during target-boundary drain"
+        );
+        debug_assert!(self.ppu_time <= self.cpu_time);
+        debug_assert_eq!(
+            self.cpu_time.t(),
+            self.t_tick_count,
+            "CPU sub-dot clock must track t_tick_count after advance_to"
+        );
+    }
+
+    fn tick_cpu_peripherals_one_t(&mut self) {
         self.t_tick_count += 1;
+        self.cpu_time.advance_t();
+        debug_assert_eq!(
+            self.cpu_time.t(),
+            self.t_tick_count,
+            "CPU sub-dot clock must track t_tick_count"
+        );
 
         let div_apu_before = self.div_apu_bit_high();
         self.timer.tick_t(&mut self.interrupts);
@@ -464,43 +800,113 @@ impl Bus {
         self.clock_div_apu_if_fell(div_apu_before);
 
         if self.cgb.double_speed {
-            // PPU/APU advance every 2nd T (twice per M-cycle). PROVISIONAL: with
-            // t_phase starting false, the toggle-to-true fires on T1/T3 (not
-            // T2/T4). The T-phase PARITY is unverified — calibrate against CGB
-            // dot-accurate tests before the CGB timing wave.
             self.cgb.t_phase = !self.cgb.t_phase;
             if self.cgb.t_phase {
-                let palettes = DmgPalettes {
-                    bgp: self.io[0x47],
-                    obp0: self.io[0x48],
-                    obp1: self.io[0x49],
-                };
-                let cgb = CgbRenderState {
-                    enabled: self.cgb.cgb_mode,
-                    dmg_compat: self.cgb.is_cgb && !self.cgb.cgb_mode,
-                    bg_palette_ram: &self.bg_palette_ram,
-                    obj_palette_ram: &self.obj_palette_ram,
-                };
-                self.ppu
-                    .tick_dot(&mut self.interrupts, &self.vram, &self.oam, palettes, cgb);
                 self.apu.tick_t();
             }
         } else {
-            let palettes = DmgPalettes {
-                bgp: self.io[0x47],
-                obp0: self.io[0x48],
-                obp1: self.io[0x49],
-            };
-            let cgb = CgbRenderState {
-                enabled: self.cgb.cgb_mode,
-                dmg_compat: self.cgb.is_cgb && !self.cgb.cgb_mode,
-                bg_palette_ram: &self.bg_palette_ram,
-                obj_palette_ram: &self.obj_palette_ram,
-            };
-            self.ppu
-                .tick_dot(&mut self.interrupts, &self.vram, &self.oam, palettes, cgb);
             self.apu.tick_t();
         }
+    }
+
+    fn ppu_dot_period(&self) -> u64 {
+        if self.cgb.double_speed {
+            scheduler::PPU_DOT_SUBPHASES_DOUBLE
+        } else {
+            scheduler::PPU_DOT_SUBPHASES_NORMAL
+        }
+    }
+
+    pub fn sync_ppu_to_cpu(&mut self) {
+        self.sync_ppu_to(self.cpu_time);
+    }
+
+    fn sync_ppu_to(&mut self, target: scheduler::Time) {
+        debug_assert!(target <= self.cpu_time);
+        debug_assert!(target >= self.ppu_time);
+
+        while self.next_ppu_dot_time <= target {
+            self.drain_ppu_writes_through(self.next_ppu_dot_time);
+            self.ppu_time = self.next_ppu_dot_time;
+            self.tick_ppu_dot();
+            self.next_ppu_dot_time.advance(self.ppu_dot_period());
+        }
+        self.drain_ppu_writes_through(target);
+        self.ppu_time = target;
+    }
+
+    fn sync_ppu_watermark(&mut self) {
+        let lag = self.cpu_time.0.saturating_sub(self.ppu_time.0);
+        let max = PPU_MAX_LOOKAHEAD_T * scheduler::SUBPHASES_PER_T;
+        if lag <= max {
+            return;
+        }
+        let min = self.ppu_min_lag_t() * scheduler::SUBPHASES_PER_T;
+        let target = scheduler::Time(self.cpu_time.0.saturating_sub(min));
+        if target > self.ppu_time {
+            self.sync_ppu_to(target);
+        }
+    }
+
+    /// The PPU lag window in T-cycles: the test override when set, else the
+    /// `PPU_MIN_LAG_T` const. ADR 0001 Stage E proves output is invariant to it.
+    #[inline]
+    fn ppu_min_lag_t(&self) -> u64 {
+        #[cfg(feature = "trace")]
+        if let Some(v) = self.ppu_min_lag_t_override {
+            return v;
+        }
+        PPU_MIN_LAG_T
+    }
+
+    /// Test-only: override the PPU lag window to prove lag-invariance.
+    #[cfg(feature = "trace")]
+    pub fn set_ppu_min_lag_t_override(&mut self, value: Option<u64>) {
+        self.ppu_min_lag_t_override = value;
+    }
+
+    fn dma_needs_ppu_sync(&self) -> bool {
+        self.dma.active
+            || self.dma.pending_source_hi.is_some()
+            || (self.hdma.hblank_active && self.hdma.remaining > 0)
+    }
+
+    fn tick_ppu_dot(&mut self) {
+        let palettes = DmgPalettes {
+            bgp: self.io[0x47],
+            obp0: self.io[0x48],
+            obp1: self.io[0x49],
+        };
+        let bg_palette_ram = self.bg_palette_ram;
+        let obj_palette_ram = self.obj_palette_ram;
+        let cgb = CgbRenderState {
+            enabled: self.cgb.cgb_mode,
+            dmg_compat: self.cgb.is_cgb && !self.cgb.cgb_mode,
+            bg_palette_ram: &bg_palette_ram,
+            obj_palette_ram: &obj_palette_ram,
+        };
+        let dot_period = self.ppu_dot_period();
+        let mut hooks = PpuWriteDrain {
+            queue: &mut self.pending_ppu_writes,
+            dot_time: self.ppu_time,
+            dot_period,
+            io: &mut self.io,
+            cgb_mode: self.cgb.cgb_mode,
+            bcps: &mut self.bcps,
+            ocps: &mut self.ocps,
+            bg_palette_ram: &mut self.bg_palette_ram,
+            obj_palette_ram: &mut self.obj_palette_ram,
+            #[cfg(feature = "trace")]
+            future_drained_writes: &mut self.ppu_future_drained_writes,
+        };
+        self.ppu.tick_dot_phased(
+            &mut self.interrupts,
+            &self.vram,
+            &self.oam,
+            palettes,
+            cgb,
+            &mut hooks,
+        );
     }
 
     fn div_apu_bit_high(&self) -> bool {
@@ -750,6 +1156,9 @@ impl Bus {
     }
 
     fn cpu_read_latched_for_oam_bug(&mut self, addr: u16, access: OamBugAccess) -> u8 {
+        if is_ppu_affected_read(addr) || is_oam_bug_addr(addr) {
+            self.sync_ppu_to_cpu();
+        }
         self.ticks_at_last_sample = self.t_tick_count;
         self.corrupt_oam_for_bug(addr, access);
 
@@ -780,6 +1189,9 @@ impl Bus {
     }
 
     fn cpu_write_latched(&mut self, addr: u16, value: u8) {
+        if is_ppu_mode_blocked_memory(addr) || is_oam_bug_addr(addr) {
+            self.sync_ppu_to_cpu();
+        }
         self.ticks_at_last_sample = self.t_tick_count;
         self.corrupt_oam_for_bug(addr, OamBugAccess::Write);
 
@@ -1188,8 +1600,10 @@ impl CpuBus for Bus {
     }
 
     fn finish_speed_switch(&mut self) {
+        self.sync_ppu_to_cpu();
         self.cgb.double_speed = !self.cgb.double_speed;
         self.cgb.t_phase = false;
+        self.next_ppu_dot_time = scheduler::Time(self.cpu_time.0 + self.ppu_dot_period());
         // Clear the armed bit; bit 7 now reflects the (toggled) current speed.
         self.io[0x4D] = if self.cgb.double_speed { 0x80 } else { 0x00 };
     }
@@ -1199,6 +1613,9 @@ impl CpuBus for Bus {
     }
 
     fn begin_cpu_cycle(&mut self) {
+        if self.dma_needs_ppu_sync() {
+            self.sync_ppu_to_cpu();
+        }
         self.oam_dma_beat();
     }
 
@@ -1212,6 +1629,26 @@ impl CpuBus for Bus {
 
     fn write_latched(&mut self, addr: u16, value: u8) {
         self.cpu_write_latched(addr, value);
+    }
+
+    fn now(&self) -> scheduler::Time {
+        self.cpu_time
+    }
+
+    fn schedule_cpu_write(&mut self, at: scheduler::Time, addr: u16, value: u8) {
+        Bus::schedule_cpu_write(self, at, addr, value);
+    }
+
+    fn drain_cpu_writes_through(&mut self, now: scheduler::Time) {
+        Bus::drain_cpu_writes_through(self, now);
+    }
+
+    fn advance_to(&mut self, target: scheduler::Time) {
+        Bus::advance_to(self, target);
+    }
+
+    fn sync_ppu_to_cpu(&mut self) {
+        Bus::sync_ppu_to_cpu(self);
     }
 
     fn write_drive_ticks(&self, addr: u16) -> u8 {
@@ -1237,6 +1674,16 @@ impl CpuBus for Bus {
     }
 
     fn end_cpu_cycle(&mut self) {
+        if self.dma_needs_ppu_sync() {
+            self.sync_ppu_to_cpu();
+        }
+        if self.cgb.is_cgb
+            && self.interrupts.ie & 0x03 != 0
+            && self.ppu.ly == 143
+            && self.ppu.line_dot() >= 448
+        {
+            self.sync_ppu_to_cpu();
+        }
         self.hdma_hblank_step();
     }
 }
@@ -1256,6 +1703,49 @@ mod tests {
         // Exactly 4 ticks happened during this M-cycle, BEFORE the sample.
         assert_eq!(bus.ticks_at_last_sample(), before + 4);
         assert_eq!(bus.total_ticks(), before + 4);
+    }
+
+    #[test]
+    fn cpu_access_plan_matches_production_write_drive_ticks() {
+        // ADR 0001 stage 2: the explicit CpuAccessPlan must encode today's
+        // implicit write_drive_ticks timing EXACTLY for every address.
+        use crate::bus::scheduler::{CpuAccessPlan, SUBPHASES_PER_T_U8};
+        let bus = Bus::new();
+        for addr in 0u16..=u16::MAX {
+            let drive_ticks = CpuBus::write_drive_ticks(&bus, addr);
+            let plan = CpuAccessPlan::write(drive_ticks);
+            assert_eq!(
+                plan.write_visible_at,
+                Some(drive_ticks * SUBPHASES_PER_T_U8),
+                "addr ${addr:04X}: plan write offset must encode write_drive_ticks"
+            );
+            assert_eq!(
+                plan.write_visible_at.unwrap() / SUBPHASES_PER_T_U8,
+                drive_ticks,
+                "addr ${addr:04X}: plan offset must round-trip to the production T"
+            );
+        }
+        // Spot-check the canonical classes.
+        assert_eq!(
+            CpuAccessPlan::write(CpuBus::write_drive_ticks(&bus, 0xFF47)).write_visible_at,
+            Some(0),
+            "BGP commits at T0"
+        );
+        assert_eq!(
+            CpuAccessPlan::write(CpuBus::write_drive_ticks(&bus, 0xFF42)).write_visible_at,
+            Some(8),
+            "SCY commits at T2"
+        );
+        assert_eq!(
+            CpuAccessPlan::write(CpuBus::write_drive_ticks(&bus, 0xFF40)).write_visible_at,
+            Some(12),
+            "LCDC commits at T3"
+        );
+        assert_eq!(
+            CpuAccessPlan::write(CpuBus::write_drive_ticks(&bus, 0xC000)).write_visible_at,
+            Some(16),
+            "WRAM write commits at end-of-M"
+        );
     }
 
     #[test]
@@ -1287,6 +1777,66 @@ mod tests {
         assert_eq!(bus.peek(0xFF07) & 0x07, 0x05);
         assert_eq!(bus.ticks_at_last_sample(), before + 2);
         assert_eq!(bus.total_ticks(), before + 4);
+    }
+
+    #[test]
+    fn scheduled_cpu_write_drains_to_wram() {
+        let mut bus = Bus::new();
+        let now = scheduler::Time::from_t(2);
+
+        bus.schedule_cpu_write(now, 0xC123, 0xA5);
+        bus.drain_cpu_writes_through(now);
+
+        assert_eq!(bus.peek(0xC123), 0xA5);
+    }
+
+    #[test]
+    fn cpu_write_drain_only_applies_due_events() {
+        let mut bus = Bus::new();
+        let visible_at = scheduler::Time::from_t(3);
+
+        bus.schedule_cpu_write(visible_at, 0xC124, 0x5A);
+
+        assert_eq!(bus.peek(0xC124), 0x00);
+        bus.drain_cpu_writes_through(scheduler::Time::from_t(2));
+        assert_eq!(bus.peek(0xC124), 0x00);
+        bus.drain_cpu_writes_through(visible_at);
+        assert_eq!(bus.peek(0xC124), 0x5A);
+    }
+
+    #[test]
+    fn cpu_write_drain_preserves_fifo_order_for_same_time() {
+        let mut bus = Bus::new();
+        let now = scheduler::Time::from_t(4);
+
+        bus.schedule_cpu_write(now, 0xC125, 0x11);
+        bus.schedule_cpu_write(now, 0xC125, 0x22);
+        bus.drain_cpu_writes_through(now);
+
+        assert_eq!(bus.peek(0xC125), 0x22);
+    }
+
+    #[test]
+    fn advance_to_drives_one_m_cycle_and_drains_due_wram_write() {
+        let mut bus = Bus::new();
+        let start = bus.cpu_time();
+        let target = scheduler::Time(start.0 + u64::from(scheduler::CPU_ACCESS_END_OFFSET));
+        let before_ticks = bus.total_ticks();
+
+        bus.begin_cpu_cycle();
+        bus.schedule_cpu_write(target, 0xC126, 0xA5);
+        bus.advance_to(target);
+        bus.end_cpu_cycle();
+
+        assert_eq!(bus.peek(0xC126), 0xA5, "WRAM write landed");
+        assert_eq!(
+            bus.total_ticks(),
+            before_ticks + 4,
+            "one M-cycle = 4 T ticks"
+        );
+        assert_eq!(bus.cpu_time(), target);
+        assert!(bus.ppu_time() <= target);
+        assert_eq!(bus.cpu_time().t(), bus.total_ticks());
     }
 
     #[test]

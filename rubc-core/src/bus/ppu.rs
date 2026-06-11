@@ -29,6 +29,14 @@ const DOTS_PER_LINE: u32 = 456;
 const MODE2_DOTS: u32 = 80;
 /// Baseline mode 3 length: 12-dot fetch startup + 160 visible pixels.
 const BASE_MODE3_DOTS: u32 = 172;
+/// Dots between mode-3 entry (end of OAM scan) and the first BG fetch sample
+/// taking effect on screen (ADR 0001 stage 4). Today this is folded into the
+/// public mode-3 length as a literal `+ 3`; naming it makes it the explicit lever
+/// stage 5 calibrates. The decisive `m3_scy_change` finding is that hardware's
+/// HIGH-byte fetch sees a SCY written ~3 dots before rubc's fetch samples it, so
+/// this fetch-start phase (not the CPU write timing) is what stage 5 shifts.
+/// Stage 4 is behavior-preserving: the value is unchanged.
+const MODE3_FETCH_START_DELAY_DOTS: u32 = 3;
 const LCD_ON_FIRST_LINE_DOTS: u32 = DOTS_PER_LINE - 4;
 const LCD_ON_FIRST_MODE3_START: u32 = MODE2_DOTS;
 const LCD_ON_FIRST_MODE3_PUBLIC_START: u32 = LCD_ON_FIRST_MODE3_START;
@@ -165,6 +173,36 @@ pub struct CgbRenderState<'a> {
     pub dmg_compat: bool,
     pub bg_palette_ram: &'a [u8; 64],
     pub obj_palette_ram: &'a [u8; 64],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PpuRegisterPhase {
+    BgTileNo,
+    BgTileDataLow,
+    BgTileDataHigh,
+    PixelShiftOrEmit,
+    StatSettle,
+}
+
+pub trait PpuPhaseHooks {
+    fn before_register_phase(
+        &mut self,
+        ppu: &mut Ppu,
+        irq: &mut Interrupts,
+        phase: PpuRegisterPhase,
+    );
+}
+
+struct NoopPpuPhaseHooks;
+
+impl PpuPhaseHooks for NoopPpuPhaseHooks {
+    fn before_register_phase(
+        &mut self,
+        _ppu: &mut Ppu,
+        _irq: &mut Interrupts,
+        _phase: PpuRegisterPhase,
+    ) {
+    }
 }
 
 /// Per-sprite attributes passed to `overlay_sprite_pixels` (bundled to keep the
@@ -458,6 +496,15 @@ pub struct Ppu {
     window_glitch_x: Option<usize>,
     window_disable_pending: bool,
     drawing_dots: u32,
+    /// PPU phase sample trace (ADR 0001 stage 3). Diagnostic-only, transient
+    /// (never serialized), compiled in only under the `trace` feature. The PPU
+    /// only appends to it -- it never reads it back, so it cannot perturb timing.
+    #[cfg(feature = "trace")]
+    #[serde(skip)]
+    phase_trace: crate::diag::ppu_trace::PpuPhaseTrace,
+    #[cfg(feature = "trace")]
+    #[serde(skip)]
+    lcd_palette_trace: crate::diag::ppu_trace::LcdPaletteTrace,
 }
 
 impl Default for Ppu {
@@ -513,6 +560,10 @@ impl Default for Ppu {
             window_glitch_x: None,
             window_disable_pending: false,
             drawing_dots: 0,
+            #[cfg(feature = "trace")]
+            phase_trace: crate::diag::ppu_trace::PpuPhaseTrace::new(),
+            #[cfg(feature = "trace")]
+            lcd_palette_trace: crate::diag::ppu_trace::LcdPaletteTrace::new(),
         }
     }
 }
@@ -520,6 +571,77 @@ impl Default for Ppu {
 impl Ppu {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Record one PPU phase sample (ADR 0001 stage 3). No-op when the `trace`
+    /// feature is off. Append-only -- never read back during emulation.
+    #[cfg(feature = "trace")]
+    #[inline]
+    fn trace_sample(&mut self, phase: crate::diag::ppu_trace::PpuPhase, x: u8, tile: u8) {
+        let s = crate::diag::ppu_trace::PpuSample {
+            line_dot: self.line_dot,
+            dot_ticks: self.dot_ticks,
+            drawing_dots: self.drawing_dots,
+            ly: self.ly,
+            phase,
+            x,
+            tile,
+            scy: self.scy,
+            scx: self.scx,
+            lcdc: self.lcdc,
+        };
+        self.phase_trace.push(s);
+    }
+
+    /// The PPU phase trace (ADR 0001 stage 3). Tests/diagnostics only.
+    #[cfg(feature = "trace")]
+    pub fn phase_trace(&self) -> &crate::diag::ppu_trace::PpuPhaseTrace {
+        &self.phase_trace
+    }
+
+    /// Restrict the phase trace to one scanline (or `None` for all).
+    #[cfg(feature = "trace")]
+    pub fn set_phase_trace_line(&mut self, ly: Option<u8>) {
+        self.phase_trace.set_line_filter(ly);
+    }
+
+    /// Clear the phase trace.
+    #[cfg(feature = "trace")]
+    pub fn clear_phase_trace(&mut self) {
+        self.phase_trace.clear();
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn lcd_palette_trace(&self) -> &crate::diag::ppu_trace::LcdPaletteTrace {
+        &self.lcd_palette_trace
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn set_lcd_palette_trace_line(&mut self, ly: Option<u8>) {
+        self.lcd_palette_trace.set_line_filter(ly);
+    }
+
+    #[cfg(feature = "trace")]
+    pub fn clear_lcd_palette_trace(&mut self) {
+        self.lcd_palette_trace.clear();
+        self.lcd_palette_trace
+            .reset_palette_state(self.bgp, self.obp0, self.obp1);
+    }
+
+    #[cfg(feature = "trace")]
+    fn trace_dmg_palette_write(&mut self, addr: u16, old: u8, value: u8) {
+        self.lcd_palette_trace.push_palette_write(
+            crate::diag::ppu_trace::PpuWrite {
+                line_dot: self.line_dot,
+                dot_ticks: self.dot_ticks,
+                drawing_dots: self.drawing_dots,
+                ly: self.ly,
+                mode: self.mode,
+                addr,
+                value,
+            },
+            old,
+        );
     }
 
     pub fn oam_bug_scan_row(&self) -> Option<usize> {
@@ -544,9 +666,40 @@ impl Ppu {
         palettes: DmgPalettes,
         cgb: CgbRenderState,
     ) {
+        let mut hooks = NoopPpuPhaseHooks;
+        self.tick_dot_phased(irq, vram, oam, palettes, cgb, &mut hooks);
+    }
+
+    pub fn tick_dot_phased<H: PpuPhaseHooks>(
+        &mut self,
+        irq: &mut Interrupts,
+        vram: &[[u8; 0x2000]; 2],
+        oam: &[u8; 0xA0],
+        palettes: DmgPalettes,
+        cgb: CgbRenderState,
+        hooks: &mut H,
+    ) {
+        if !self.phase_dot_start(palettes, cgb) {
+            return;
+        }
+        if !self.phase_mode_edge_line_advance(irq) {
+            return;
+        }
+        if self.ly <= LAST_VISIBLE_LINE {
+            self.phase_mode_edge_visible_preamble();
+            self.phase_mode_body(vram, oam, irq, hooks);
+        }
+        hooks.before_register_phase(self, irq, PpuRegisterPhase::StatSettle);
+        self.phase_stat_settle(irq);
+    }
+
+    fn phase_dot_start(&mut self, palettes: DmgPalettes, cgb: CgbRenderState<'_>) -> bool {
         self.bgp = palettes.bgp;
         self.obp0 = palettes.obp0;
         self.obp1 = palettes.obp1;
+        #[cfg(feature = "trace")]
+        self.lcd_palette_trace
+            .sync_palette_state(self.bgp, self.obp0, self.obp1);
         self.cgb_mode = cgb.enabled;
         self.dmg_compat = cgb.dmg_compat;
         self.cgb_bg_palette_ram = *cgb.bg_palette_ram;
@@ -554,58 +707,77 @@ impl Ppu {
         self.dot_ticks += 1;
         if !self.enabled {
             self.tile_sel_glitch = false;
-            return;
+            return false;
         }
 
+        true
+    }
+
+    fn phase_mode_edge_line_advance(&mut self, irq: &mut Interrupts) -> bool {
         self.line_dot += 1;
         if self.line_dot >= self.dots_this_line() {
             self.start_next_scanline(irq);
-            self.update_stat_line(irq);
-            return;
+            self.phase_stat_settle(irq);
+            return false;
         }
 
-        if self.ly <= LAST_VISIBLE_LINE {
-            if self.lcd_on_line1_coincidence_delay && self.line_dot >= 4 {
-                self.update_coincidence();
-                self.lcd_on_line1_coincidence_delay = false;
-            }
+        true
+    }
 
-            self.update_visible_stat_read_mode();
-
-            if self.line_dot == DOTS_PER_LINE - 4
-                && self.ly == LAST_VISIBLE_LINE
-                && self.is_cgb_hw()
-            {
-                self.stat_mode2_pulse = true;
-            }
-
-            match self.mode {
-                mode::OAM_SCAN => {
-                    self.tick_oam_scan(oam);
-                    if self.line_dot >= MODE2_DOTS {
-                        self.lcd_on_line1_delayed_mode2 = false;
-                        self.enter_drawing(irq);
-                    }
-                }
-                mode::DRAWING => self.tick_drawing(vram, irq),
-                mode::HBLANK => {
-                    if self.lcd_on_line1_delayed_mode2 && self.line_dot >= 4 {
-                        self.begin_oam_scan();
-                        self.set_mode(mode::OAM_SCAN, irq);
-                        self.stat_read_mode = mode::OAM_SCAN;
-                        self.stat_mode2_pulse = true;
-                    } else if self.first_line_after_lcd_on
-                        && self.ly == 0
-                        && self.line_dot >= LCD_ON_FIRST_MODE3_START
-                        && self.lcd_x == 0
-                    {
-                        self.enter_drawing(irq);
-                    }
-                }
-                _ => {}
-            }
+    fn phase_mode_edge_visible_preamble(&mut self) {
+        if self.lcd_on_line1_coincidence_delay && self.line_dot >= 4 {
+            self.update_coincidence();
+            self.lcd_on_line1_coincidence_delay = false;
         }
 
+        self.update_visible_stat_read_mode();
+
+        if self.line_dot == DOTS_PER_LINE - 4 && self.ly == LAST_VISIBLE_LINE && self.is_cgb_hw() {
+            self.stat_mode2_pulse = true;
+        }
+    }
+
+    fn phase_mode_body(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        oam: &[u8; 0xA0],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) {
+        match self.mode {
+            mode::OAM_SCAN => {
+                self.phase_oam_scan(oam);
+                self.phase_oam_to_drawing_edge(irq);
+            }
+            mode::DRAWING => self.phase_drawing_dot(vram, irq, hooks),
+            mode::HBLANK => self.phase_hblank_mode_edge(irq),
+            _ => {}
+        }
+    }
+
+    fn phase_oam_to_drawing_edge(&mut self, irq: &mut Interrupts) {
+        if self.line_dot >= MODE2_DOTS {
+            self.lcd_on_line1_delayed_mode2 = false;
+            self.enter_drawing(irq);
+        }
+    }
+
+    fn phase_hblank_mode_edge(&mut self, irq: &mut Interrupts) {
+        if self.lcd_on_line1_delayed_mode2 && self.line_dot >= 4 {
+            self.begin_oam_scan();
+            self.set_mode(mode::OAM_SCAN, irq);
+            self.stat_read_mode = mode::OAM_SCAN;
+            self.stat_mode2_pulse = true;
+        } else if self.first_line_after_lcd_on
+            && self.ly == 0
+            && self.line_dot >= LCD_ON_FIRST_MODE3_START
+            && self.lcd_x == 0
+        {
+            self.enter_drawing(irq);
+        }
+    }
+
+    fn phase_stat_settle(&mut self, irq: &mut Interrupts) {
         self.update_stat_line(irq);
     }
 
@@ -625,6 +797,14 @@ impl Ppu {
         let was_lcd_on_first_line = self.first_line_after_lcd_on && self.ly == 0;
         self.line_dot = 0;
         self.ly = if self.ly >= LAST_LINE { 0 } else { self.ly + 1 };
+        // ADR 0001 stage 5 diagnostics: keep only the CURRENT frame's phase
+        // samples, so a trace inspected at the breakpoint reflects the exact
+        // frame that gets pixel-diffed (the trace would otherwise accumulate
+        // every frame and mix settled frames with the active burst frame).
+        #[cfg(feature = "trace")]
+        if self.ly == 0 {
+            self.phase_trace.clear();
+        }
         self.first_line_after_lcd_on = false;
         self.lcd_on_line1_delayed_mode2 = false;
         self.stat_mode0_level = false;
@@ -700,7 +880,7 @@ impl Ppu {
             }
         }
         len += sprite_penalty / 4 * 4;
-        MODE2_DOTS + 3 + len
+        MODE2_DOTS + MODE3_FETCH_START_DELAY_DOTS + len
     }
 
     fn set_mode(&mut self, new_mode: u8, irq: &mut Interrupts) {
@@ -715,7 +895,7 @@ impl Ppu {
         }
     }
 
-    fn tick_oam_scan(&mut self, oam: &[u8; 0xA0]) {
+    fn phase_oam_scan(&mut self, oam: &[u8; 0xA0]) {
         if self.line_dot == 1 {
             self.begin_oam_scan();
         }
@@ -795,31 +975,93 @@ impl Ppu {
         self.set_mode(mode::DRAWING, irq);
     }
 
-    fn tick_drawing(&mut self, vram: &[[u8; 0x2000]; 2], irq: &mut Interrupts) {
-        self.drawing_dots += 1;
-
-        if self.sprite_idle_ticks > 0 {
-            self.clock_bg_fetcher(vram);
-            self.sprite_idle_ticks -= 1;
+    fn phase_drawing_dot(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) {
+        self.phase_drawing_dot_start();
+        if self.phase_sprite_idle(vram, irq, hooks) {
+            return;
+        }
+        if self.phase_pending_sprite_fetch(vram) {
             return;
         }
 
+        self.phase_window_compare_pre_sprite();
+        self.phase_window_glitch_pixel();
+        if self.phase_try_start_sprite_fetch(vram) {
+            return;
+        }
+
+        self.phase_bg_fetcher(vram, irq, hooks);
+        hooks.before_register_phase(self, irq, PpuRegisterPhase::PixelShiftOrEmit);
+        if self.phase_pixel_shift_or_emit(irq) {
+            self.phase_window_compare_post_emit();
+        }
+    }
+
+    fn phase_drawing_dot_start(&mut self) {
+        self.drawing_dots += 1;
+    }
+
+    fn phase_sprite_idle(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) -> bool {
+        if self.sprite_idle_ticks > 0 {
+            self.clock_bg_fetcher(vram, irq, hooks);
+            self.sprite_idle_ticks -= 1;
+            return true;
+        }
+
+        false
+    }
+
+    fn phase_pending_sprite_fetch(&mut self, vram: &[[u8; 0x2000]; 2]) -> bool {
         if self.pending_sprite.is_some() {
             self.advance_sprite_fetch(vram);
-            return;
+            return true;
         }
 
+        false
+    }
+
+    fn phase_window_compare_pre_sprite(&mut self) {
         self.maybe_start_window();
+    }
+
+    fn phase_window_glitch_pixel(&mut self) {
         self.maybe_push_window_glitch_pixel();
+    }
+
+    fn phase_try_start_sprite_fetch(&mut self, vram: &[[u8; 0x2000]; 2]) -> bool {
         if self.try_start_sprite_fetch() {
             self.advance_sprite_fetch(vram);
-            return;
+            return true;
         }
 
-        self.clock_bg_fetcher(vram);
-        if self.shift_pixel(irq) {
-            self.maybe_start_window();
-        }
+        false
+    }
+
+    fn phase_bg_fetcher(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) {
+        self.clock_bg_fetcher(vram, irq, hooks);
+    }
+
+    fn phase_pixel_shift_or_emit(&mut self, irq: &mut Interrupts) -> bool {
+        self.shift_pixel(irq)
+    }
+
+    fn phase_window_compare_post_emit(&mut self) {
+        self.maybe_start_window();
     }
 
     fn finish_drawing(&mut self, irq: &mut Interrupts) {
@@ -835,7 +1077,38 @@ impl Ppu {
         self.set_mode(mode::HBLANK, irq);
     }
 
-    fn clock_bg_fetcher(&mut self, vram: &[[u8; 0x2000]; 2]) {
+    fn clock_bg_fetcher(
+        &mut self,
+        vram: &[[u8; 0x2000]; 2],
+        irq: &mut Interrupts,
+        hooks: &mut impl PpuPhaseHooks,
+    ) {
+        self.phase_bg_window_resume_gate();
+        if self.phase_fifo_push() {
+            return;
+        }
+        if !self.phase_bg_fetcher_tick_counter() {
+            return;
+        }
+
+        match self.bg_fetcher.step {
+            FetchStep::TileNo => {
+                hooks.before_register_phase(self, irq, PpuRegisterPhase::BgTileNo);
+                self.phase_bg_tile_no_sample(vram);
+            }
+            FetchStep::TileDataLow => {
+                hooks.before_register_phase(self, irq, PpuRegisterPhase::BgTileDataLow);
+                self.phase_bg_low_sample(vram);
+            }
+            FetchStep::TileDataHigh => {
+                hooks.before_register_phase(self, irq, PpuRegisterPhase::BgTileDataHigh);
+                self.phase_bg_high_sample(vram);
+            }
+            FetchStep::Push => unreachable!("push step handled before tick accounting"),
+        }
+    }
+
+    fn phase_bg_window_resume_gate(&mut self) {
         if self.window_disable_pending && self.bg_fifo.is_empty() {
             if self.lcdc & 0x20 == 0 {
                 self.stop_window_fetcher_for_bg_resume();
@@ -843,7 +1116,9 @@ impl Ppu {
                 self.window_disable_pending = false;
             }
         }
+    }
 
+    fn phase_fifo_push(&mut self) -> bool {
         if self.bg_fetcher.step == FetchStep::Push {
             if self.bg_fifo.is_empty() {
                 let x_flip = self.cgb_mode && self.bg_fetcher.attr & 0x20 != 0;
@@ -854,61 +1129,87 @@ impl Ppu {
                 self.bg_fifo
                     .push_bg_pixels(colors, cgb_palette, bg_priority);
                 self.bg_fetcher.fetcher_x = self.bg_fetcher.fetcher_x.wrapping_add(1);
+                #[cfg(feature = "trace")]
+                self.trace_sample(
+                    crate::diag::ppu_trace::PpuPhase::Push,
+                    self.bg_fetcher.fetcher_x,
+                    self.bg_fetcher.tile,
+                );
                 self.bg_fetcher.step = FetchStep::TileNo;
                 self.bg_fetcher.step_ticks = 0;
             }
-            return;
+            return true;
         }
 
+        false
+    }
+
+    fn phase_bg_fetcher_tick_counter(&mut self) -> bool {
         self.bg_fetcher.step_ticks += 1;
         if self.bg_fetcher.step_ticks < 2 {
-            return;
+            return false;
         }
         self.bg_fetcher.step_ticks = 0;
 
-        match self.bg_fetcher.step {
-            FetchStep::TileNo => {
-                // Latch map/window Y at TileNo. DMG can re-sample SCY before
-                // the low data byte below; CGB-D+ keeps this TileNo Y for data.
-                self.bg_fetcher.y = if self.bg_fetcher.window {
-                    self.bg_fetcher.y
-                } else {
-                    self.ly.wrapping_add(self.scy)
-                };
-                self.bg_fetcher.scy_at_tile_no = self.scy;
+        true
+    }
 
-                let (tile, attr) = self.fetch_bg_tile_no(vram);
-                self.bg_fetcher.tile = tile;
-                self.bg_fetcher.attr = attr;
-                self.bg_fetcher.step = FetchStep::TileDataLow;
-            }
-            FetchStep::TileDataLow => {
-                if !self.bg_fetcher.window
-                    && !self.cgb_mode
-                    && self.scy != self.bg_fetcher.scy_at_tile_no
-                {
-                    self.bg_fetcher.y = self.ly.wrapping_add(self.scy);
-                    let (tile, attr) = self.fetch_bg_tile_no(vram);
-                    self.bg_fetcher.tile = tile;
-                    self.bg_fetcher.attr = attr;
-                }
-                let addr = self.fetch_bg_tile_data_addr();
-                self.bg_fetcher.low = self.fetch_bg_tile_data_byte(vram, addr);
-                self.bg_fetcher.step = FetchStep::TileDataHigh;
-            }
-            FetchStep::TileDataHigh => {
-                let addr = self.fetch_bg_tile_data_addr() + 1;
-                self.bg_fetcher.high = self.fetch_bg_tile_data_byte(vram, addr);
-                if self.bg_fetcher.dummy_fetch_done {
-                    self.bg_fetcher.step = FetchStep::Push;
-                } else {
-                    // First high-byte completion on a scanline is the documented
-                    // dummy fetch: reset to step 1, creating the 12-dot startup.
-                    self.bg_fetcher.dummy_fetch_done = true;
-                    self.bg_fetcher.step = FetchStep::TileNo;
-                }
-            }
-            FetchStep::Push => unreachable!("push step handled before tick accounting"),
+    fn phase_bg_tile_no_sample(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        // Latch map/window Y at TileNo. DMG can re-sample SCY before
+        // the low data byte below; CGB-D+ keeps this TileNo Y for data.
+        self.bg_fetcher.y = if self.bg_fetcher.window {
+            self.bg_fetcher.y
+        } else {
+            self.ly.wrapping_add(self.scy)
+        };
+        self.bg_fetcher.scy_at_tile_no = self.scy;
+
+        let (tile, attr) = self.fetch_bg_tile_no(vram);
+        self.bg_fetcher.tile = tile;
+        self.bg_fetcher.attr = attr;
+        #[cfg(feature = "trace")]
+        self.trace_sample(
+            crate::diag::ppu_trace::PpuPhase::TileNo,
+            self.bg_fetcher.fetcher_x,
+            tile,
+        );
+        self.bg_fetcher.step = FetchStep::TileDataLow;
+    }
+
+    fn phase_bg_low_sample(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        if !self.bg_fetcher.window && !self.cgb_mode && self.scy != self.bg_fetcher.scy_at_tile_no {
+            self.bg_fetcher.y = self.ly.wrapping_add(self.scy);
+            let (tile, attr) = self.fetch_bg_tile_no(vram);
+            self.bg_fetcher.tile = tile;
+            self.bg_fetcher.attr = attr;
+        }
+        let addr = self.fetch_bg_tile_data_addr();
+        self.bg_fetcher.low = self.fetch_bg_tile_data_byte(vram, addr);
+        #[cfg(feature = "trace")]
+        self.trace_sample(
+            crate::diag::ppu_trace::PpuPhase::TileDataLow,
+            self.bg_fetcher.fetcher_x,
+            self.bg_fetcher.tile,
+        );
+        self.bg_fetcher.step = FetchStep::TileDataHigh;
+    }
+
+    fn phase_bg_high_sample(&mut self, vram: &[[u8; 0x2000]; 2]) {
+        let addr = self.fetch_bg_tile_data_addr() + 1;
+        self.bg_fetcher.high = self.fetch_bg_tile_data_byte(vram, addr);
+        #[cfg(feature = "trace")]
+        self.trace_sample(
+            crate::diag::ppu_trace::PpuPhase::TileDataHigh,
+            self.bg_fetcher.fetcher_x,
+            self.bg_fetcher.tile,
+        );
+        if self.bg_fetcher.dummy_fetch_done {
+            self.bg_fetcher.step = FetchStep::Push;
+        } else {
+            // First high-byte completion on a scanline is the documented
+            // dummy fetch: reset to step 1, creating the 12-dot startup.
+            self.bg_fetcher.dummy_fetch_done = true;
+            self.bg_fetcher.step = FetchStep::TileNo;
         }
     }
 
@@ -1244,6 +1545,29 @@ impl Ppu {
             DmgPaletteSource::Obp0 => self.obp0,
             DmgPaletteSource::Obp1 => self.obp1,
         };
+        #[cfg(feature = "trace")]
+        if !self.dmg_compat {
+            let palette_source = match pixel.palette {
+                DmgPaletteSource::Bg => crate::diag::ppu_trace::LcdPaletteSource::Bg,
+                DmgPaletteSource::Obp0 => crate::diag::ppu_trace::LcdPaletteSource::Obp0,
+                DmgPaletteSource::Obp1 => crate::diag::ppu_trace::LcdPaletteSource::Obp1,
+            };
+            let hardware_palette = self
+                .lcd_palette_trace
+                .sample_palette(palette_source, self.dot_ticks);
+            self.lcd_palette_trace
+                .push_sample(crate::diag::ppu_trace::LcdPaletteSample {
+                    line_dot: self.line_dot,
+                    dot_ticks: self.dot_ticks,
+                    drawing_dots: self.drawing_dots,
+                    ly: pixel.ly,
+                    x: pixel.x,
+                    raw_color: pixel.color & 0x03,
+                    palette_source,
+                    hardware_palette,
+                    rubc_palette: palette,
+                });
+        }
         let shade = (palette >> ((pixel.color & 0x03) * 2)) & 0x03;
         let index = pixel.ly as usize * SCREEN_WIDTH + pixel.x;
         self.framebuffer[index] = if self.dmg_compat {
@@ -1446,6 +1770,17 @@ impl Ppu {
     }
 
     pub fn write_scy(&mut self, value: u8) {
+        #[cfg(feature = "trace")]
+        self.phase_trace
+            .push_write(crate::diag::ppu_trace::PpuWrite {
+                line_dot: self.line_dot,
+                dot_ticks: self.dot_ticks,
+                drawing_dots: self.drawing_dots,
+                ly: self.ly,
+                mode: self.mode,
+                addr: 0xFF42,
+                value,
+            });
         self.scy = value;
     }
 
@@ -1481,12 +1816,46 @@ impl Ppu {
         }
     }
 
+    pub fn write_bgp(&mut self, value: u8) {
+        #[cfg(feature = "trace")]
+        self.trace_dmg_palette_write(0xFF47, self.bgp, value);
+        self.bgp = value;
+    }
+
+    pub fn write_obp0(&mut self, value: u8) {
+        #[cfg(feature = "trace")]
+        self.trace_dmg_palette_write(0xFF48, self.obp0, value);
+        self.obp0 = value;
+    }
+
+    pub fn write_obp1(&mut self, value: u8) {
+        #[cfg(feature = "trace")]
+        self.trace_dmg_palette_write(0xFF49, self.obp1, value);
+        self.obp1 = value;
+    }
+
+    pub fn write_cgb_bg_palette_byte(&mut self, index: usize, value: u8) {
+        self.cgb_bg_palette_ram[index & 0x3F] = value;
+    }
+
+    pub fn write_cgb_obj_palette_byte(&mut self, index: usize, value: u8) {
+        self.cgb_obj_palette_ram[index & 0x3F] = value;
+    }
+
+    pub fn bg_fetcher_x(&self) -> u8 {
+        self.bg_fetcher.fetcher_x
+    }
+
     // ---- VRAM / OAM access gating -------------------------------------------
 
     /// Whether the LCD is currently enabled (LCDC bit 7). HBlank DMA only
     /// advances while the display is on.
     pub fn lcd_enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub(crate) fn line_dot(&self) -> u32 {
+        self.line_dot
     }
 
     /// VRAM (`$8000-$9FFF`) is inaccessible during mode 3 (returns 0xFF / writes
@@ -1868,6 +2237,20 @@ mod tests {
         p.write_scx(3);
         let len = mode3_len(&mut p, &zero_vram(), &zero_oam());
         assert_eq!(len, BASE_MODE3_DOTS + 3);
+    }
+
+    #[test]
+    fn mode3_fetch_start_phase_is_three_dots() {
+        // ADR 0001 stage 4: the named fetch-start phase lever. Stage 4 is
+        // behavior-preserving so this value is still 3; stage 5 calibration may
+        // change it (and this test will be the deliberate, visible record).
+        // With SCX=0 and no sprites, mode 3 is exactly the base length, which
+        // embeds MODE2_DOTS + MODE3_FETCH_START_DELAY_DOTS as its public start.
+        assert_eq!(MODE3_FETCH_START_DELAY_DOTS, 3);
+        let mut p = ppu_at_line_start();
+        p.write_scx(0);
+        let len = mode3_len(&mut p, &zero_vram(), &zero_oam());
+        assert_eq!(len, BASE_MODE3_DOTS, "SCX=0 mode-3 length is the base");
     }
 
     #[test]
