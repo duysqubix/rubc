@@ -14,7 +14,9 @@ set positional-arguments
 
 branch    := `git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD`
 core      := "rubc-core"
+ng        := "rubc-ng"
 ref       := "reference/test-suites"
+goldens   := "reference/goldens/v2"
 blargg    := ref / "gb-test-roms"
 mooneye   := ref / "mooneye-test-suite"
 acidhell  := ref / "cgb-acid-hell"
@@ -50,6 +52,8 @@ help:
     @echo "    just blargg [name]   # blargg gb-test-roms (default: cpu_instrs)"
     @echo "    just mooneye <glob>  # mooneye acceptance ROMs by glob"
     @echo "    just test            # unit tests (rubc-core)"
+    @echo "    just ng-test         # unit tests (rubc-ng)"
+    @echo "    just ng-goldens      # rubc-ng golden harness tests (skip-clean without goldens)"
     @echo "    just check           # fmt-check + clippy + build + unit tests"
     @echo ""
     @echo "  INSPECT"
@@ -375,6 +379,20 @@ clippy:
 
 # Full pre-commit gate: fmt-check + clippy + build + unit tests.
 check: fmt-check clippy build test
+
+# rubc-ng unit tests (timing-core rebuild crate).
+ng-test:
+    /usr/bin/env cargo test -p {{ng}}
+
+# rubc-ng golden-gated harness subset; fresh clones skip cleanly without reference/goldens/v2.
+ng-goldens:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "{{goldens}}" ]; then
+      echo "skip: {{goldens}} absent"
+      exit 0
+    fi
+    /usr/bin/env cargo test -p {{ng}} golden_
 
 # ---- inspection ------------------------------------------------------------
 
