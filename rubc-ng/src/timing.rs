@@ -10,6 +10,11 @@ pub enum Observable {
     CpuIntrPoll,
     PpuLy,
     PpuModeEdge,
+    PpuStat,
+    PpuStatSources,
+    PpuIrqEdge,
+    PpuLcdOn,
+    PpuLyc,
     PpuFetchSample,
     PpuMemoryLock,
     OutputPixelLatch,
@@ -204,6 +209,15 @@ impl TimingTable {
                         2,
                         PhaseRule::AfterAnchor { subphases: 2 },
                     ),
+                    // DMG-B v2.1 public goldens: hblank_ly_scx_timing-GS shows the
+                    // STAT-write-visible mode2 IRQ prepare sample at line_tick=10.
+                    TimingEntry::new(
+                        "dmg_b_mode2_irq_prepare_after_stat_write_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        10,
+                        PhaseRule::AfterAnchor { subphases: 10 },
+                    ),
                     // DMG-B v2 public goldens: mode2_enter at line_tick=8;
                     // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:25-26.
                     TimingEntry::new(
@@ -212,6 +226,24 @@ impl TimingTable {
                         Anchor::PpuLineStart,
                         8,
                         PhaseRule::AfterAnchor { subphases: 8 },
+                    ),
+                    // DMG-B v2.1 public goldens: intr_2_0_timing includes an early
+                    // mode2 enter sample at line_tick=4.
+                    TimingEntry::new(
+                        "dmg_b_mode2_enter_intr_early_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        4,
+                        PhaseRule::AfterAnchor { subphases: 4 },
+                    ),
+                    // DMG-B v2.1 public goldens: hblank_ly_scx_timing-GS shows the
+                    // STAT-write-visible mode2 enter sample at line_tick=16.
+                    TimingEntry::new(
+                        "dmg_b_mode2_enter_after_stat_write_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        16,
+                        PhaseRule::AfterAnchor { subphases: 16 },
                     ),
                     TimingEntry::new(
                         "mode3_public_start",
@@ -229,6 +261,15 @@ impl TimingTable {
                         176,
                         PhaseRule::AfterAnchor { subphases: 176 },
                     ),
+                    // DMG-B v2.1 public goldens: hblank_ly_scx_timing-GS SCX/STAT-write
+                    // windows include a shortened mode3 public entry at line_tick=172.
+                    TimingEntry::new(
+                        "dmg_b_mode3_enter_scx_short_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        172,
+                        PhaseRule::AfterAnchor { subphases: 172 },
+                    ),
                     // DMG-B v2 public goldens: mode0_enter at line_tick=520;
                     // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:30-31.
                     TimingEntry::new(
@@ -237,6 +278,51 @@ impl TimingTable {
                         Anchor::PpuLineStart,
                         520,
                         PhaseRule::AfterAnchor { subphases: 520 },
+                    ),
+                    // DMG-B v2.1 public goldens: hblank_ly_scx_timing-GS variable
+                    // mode3 length reaches HBlank at line_tick=516.
+                    TimingEntry::new(
+                        "dmg_b_mode0_enter_scx_short_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        516,
+                        PhaseRule::AfterAnchor { subphases: 516 },
+                    ),
+                    // DMG-B v2.1 public goldens: hblank_ly_scx_timing-GS variable
+                    // mode3 length also reaches HBlank at line_tick=524.
+                    TimingEntry::new(
+                        "dmg_b_mode0_enter_scx_mid_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        524,
+                        PhaseRule::AfterAnchor { subphases: 524 },
+                    ),
+                    // DMG-B v2.1 public goldens: hblank_ly_scx_timing-GS variable
+                    // mode3 length can delay HBlank to line_tick=528.
+                    TimingEntry::new(
+                        "dmg_b_mode0_enter_scx_long_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        528,
+                        PhaseRule::AfterAnchor { subphases: 528 },
+                    ),
+                    // DMG-B v2.1 public goldens: hblank_ly_scx_timing-GS variable
+                    // mode3 length also reaches HBlank at line_tick=532.
+                    TimingEntry::new(
+                        "dmg_b_mode0_enter_scx_longer_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        532,
+                        PhaseRule::AfterAnchor { subphases: 532 },
+                    ),
+                    // DMG-B v2.1 public goldens: hblank_ly_scx_timing-GS variable
+                    // mode3 length maxes out at line_tick=536 in this W1 capture.
+                    TimingEntry::new(
+                        "dmg_b_mode0_enter_scx_longest_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        536,
+                        PhaseRule::AfterAnchor { subphases: 536 },
                     ),
                     // DMG-B v2 public goldens: frame_vblank/vblank_irq_edge at LY144,
                     // line_tick=6; see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:1321-1323.
@@ -253,6 +339,42 @@ impl TimingTable {
                         Anchor::PpuLineStart,
                         6,
                         PhaseRule::AfterAnchor { subphases: 6 },
+                    ),
+                    // DMG-B v2.1 public goldens: intr_2_0_timing captures one VBlank
+                    // IRQ/public frame edge at line_tick=14.
+                    TimingEntry::new(
+                        "dmg_b_vblank_irq_late_tick",
+                        Observable::PpuIrqEdge,
+                        Anchor::PpuLineStart,
+                        14,
+                        PhaseRule::AfterAnchor { subphases: 14 },
+                    ),
+                    // DMG-B v2.1 public goldens: LCD-disable observation rows appear at
+                    // LY144 line_tick=0 in lcdon_timing-GS/lcdon_write_timing-GS.
+                    TimingEntry::new(
+                        "dmg_b_lcd_off_line_tick",
+                        Observable::PpuLcdOn,
+                        Anchor::PpuLineStart,
+                        0,
+                        PhaseRule::AfterAnchor { subphases: 0 },
+                    ),
+                    // DMG-B v2.1 public goldens: first enabled line's OAM prelude is
+                    // line_tick=156 in lcdon_timing-GS/lcdon_write_timing-GS.
+                    TimingEntry::new(
+                        "dmg_b_lcd_on_line0_oam_prelude_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        156,
+                        PhaseRule::AfterAnchor { subphases: 156 },
+                    ),
+                    // DMG-B v2.1 public goldens: lcdon_write_timing-GS has one delayed
+                    // first line-0 mode3 edge at line_tick=184.
+                    TimingEntry::new(
+                        "dmg_b_lcdon_write_first_mode3_enter_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        184,
+                        PhaseRule::AfterAnchor { subphases: 184 },
                     ),
                     // DMG-B v2 public goldens show the LY153 early sample before LY0 reset;
                     // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:1340-1346.

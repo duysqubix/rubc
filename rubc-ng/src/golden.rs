@@ -199,7 +199,7 @@ impl<R: BufRead> GoldenV2Reader<R> {
             .ok_or_else(|| "missing v2 TSV header".to_owned())?
             .map_err(|err| err.to_string())?;
         let columns: Vec<String> = header.split('\t').map(str::to_owned).collect();
-        if columns != V2_COLUMNS {
+        if columns != V2_COLUMNS && columns != V21_COLUMNS {
             return Err(format!("unexpected v2 golden TSV header: {header}"));
         }
         Ok(Self {
@@ -313,6 +313,46 @@ const V2_COLUMNS: [&str; 35] = [
     "conflict",
 ];
 
+const V21_COLUMNS: [&str; 37] = [
+    "schema",
+    "kind",
+    "frame",
+    "raw_tick",
+    "ly",
+    "line_tick",
+    "dot",
+    "event",
+    "mode",
+    "stat",
+    "stat_sources",
+    "if",
+    "ie",
+    "lyc",
+    "line_dot",
+    "lcd_on",
+    "irq_edge",
+    "model",
+    "double_speed",
+    "state",
+    "x",
+    "screen_x",
+    "addr",
+    "byte",
+    "raw_color",
+    "palette_kind",
+    "palette_reg",
+    "palette_value",
+    "io_scy",
+    "io_scx",
+    "io_lcdc",
+    "io_wx",
+    "io_wy",
+    "pos",
+    "conflict",
+    "write_visible_tick",
+    "write_visible_dot",
+];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GoldenV2Row {
     pub schema: u8,
@@ -350,15 +390,18 @@ pub struct GoldenV2Row {
     pub io_wy: Option<u8>,
     pub pos: Option<i32>,
     pub conflict: Option<String>,
+    pub write_visible_tick: Option<u64>,
+    pub write_visible_dot: Option<f64>,
 }
 
 impl GoldenV2Row {
     fn parse(line: &str) -> Result<Self, String> {
         let fields: Vec<_> = line.split('\t').collect();
-        if fields.len() != V2_COLUMNS.len() {
+        if fields.len() != V2_COLUMNS.len() && fields.len() != V21_COLUMNS.len() {
             return Err(format!(
-                "expected {} fields, got {}",
+                "expected {} or {} fields, got {}",
                 V2_COLUMNS.len(),
+                V21_COLUMNS.len(),
                 fields.len()
             ));
         }
@@ -372,7 +415,7 @@ impl GoldenV2Row {
             frame: parse_dec(fields[2], "frame")?,
             raw_tick: parse_dec(fields[3], "raw_tick")?,
             ly: parse_opt_dec(fields[4], "ly")?,
-            line_tick: parse_opt_dec(fields[5], "line_tick")?,
+            line_tick: parse_opt_nonnegative_i64_as_u64(fields[5], "line_tick")?,
             dot: parse_opt_float(fields[6], "dot")?,
             event: opt_string(fields[7]),
             mode: parse_opt_dec(fields[8], "mode")?,
@@ -402,6 +445,12 @@ impl GoldenV2Row {
             io_wy: parse_opt_hex_u8(fields[32], "io_wy")?,
             pos: parse_opt_dec(fields[33], "pos")?,
             conflict: opt_string(fields[34]),
+            write_visible_tick: fields
+                .get(35)
+                .map_or(Ok(None), |field| parse_opt_dec(field, "write_visible_tick"))?,
+            write_visible_dot: fields.get(36).map_or(Ok(None), |field| {
+                parse_opt_float(field, "write_visible_dot")
+            })?,
         })
     }
 
@@ -409,6 +458,11 @@ impl GoldenV2Row {
         let value = match observable {
             Observable::PpuLy => self.ly.map(ObservableValue::U16),
             Observable::PpuModeEdge => self.mode.map(ObservableValue::U8),
+            Observable::PpuStat => self.stat.map(ObservableValue::U8),
+            Observable::PpuStatSources => self.stat_sources.clone().map(ObservableValue::Text),
+            Observable::PpuIrqEdge => self.irq_edge.map(ObservableValue::Bool),
+            Observable::PpuLcdOn => self.lcd_on.map(ObservableValue::Bool),
+            Observable::PpuLyc => self.lyc.map(ObservableValue::U8),
             Observable::PpuMemoryLock => self.stat_sources.clone().map(ObservableValue::Text),
             Observable::OutputPixelLatch => self.raw_color.map(ObservableValue::U8),
             Observable::CpuReadSample | Observable::CpuWriteDrive | Observable::BusConflict => {
@@ -555,6 +609,14 @@ fn parse_float(field: &str, name: &str) -> Result<f64, String> {
 
 fn parse_opt_float(field: &str, name: &str) -> Result<Option<f64>, String> {
     parse_opt_dec(field, name)
+}
+
+fn parse_opt_nonnegative_i64_as_u64(field: &str, name: &str) -> Result<Option<u64>, String> {
+    match parse_opt_dec::<i64>(field, name)? {
+        Some(value) if value >= 0 => Ok(Some(value as u64)),
+        Some(_) => Ok(None),
+        None => Ok(None),
+    }
 }
 
 fn parse_opt_hex_u8(field: &str, name: &str) -> Result<Option<u8>, String> {
