@@ -3,13 +3,18 @@
 pub mod bus_intent;
 pub mod golden;
 pub mod machine;
+pub mod manifest;
 pub mod model;
 pub mod time;
 pub mod timing;
 
 pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
-pub use golden::{GoldenRow, GoldenTrace};
+pub use golden::{
+    assert_golden_edges, GoldenRow, GoldenSelection, GoldenTrace, GoldenV2Reader, ObservableSample,
+    ObservableValue, TraceMismatch,
+};
 pub use machine::{MachineNg, StepRecord};
+pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
 pub use model::GbModel;
 pub use time::{ClockPhase, ClockSpine, Time};
 pub use timing::{
@@ -94,5 +99,116 @@ mod tests {
             })
             .expect("HIGH_T1 fetch with new SCY is typed");
         assert_eq!(fetch.norm_dot, Some(22.0));
+    }
+
+    #[test]
+    fn golden_v2_reader_streams_real_trace_rows_without_eager_trace_load() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let mut rows = GoldenV2Reader::open(&path)
+            .expect("v2 reader opens")
+            .filter_selection(
+                GoldenSelection::new()
+                    .kind("ppu_public")
+                    .event("stat_sample")
+                    .frames(60..=60)
+                    .lines(145..=145)
+                    .limit(1),
+            );
+        let row = rows
+            .next()
+            .expect("real trace has selected row")
+            .expect("selected row parses");
+
+        assert_eq!(row.schema, 2);
+        assert_eq!(row.kind, "ppu_public");
+        assert_eq!(row.frame, 60);
+        assert_eq!(row.ly, Some(145));
+        assert_eq!(row.mode, Some(1));
+        assert_eq!(row.stat_sources.as_deref(), Some("00"));
+    }
+
+    #[test]
+    fn golden_assertion_reports_first_divergence_and_accepts_matching_stub() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+        let selection = GoldenSelection::new()
+            .kind("ppu_public")
+            .event("stat_sample")
+            .frames(60..=60)
+            .lines(145..=145)
+            .limit(1);
+        let expected = GoldenV2Reader::open(&path)
+            .expect("v2 reader opens")
+            .filter_selection(selection.clone())
+            .next()
+            .expect("selected row exists")
+            .expect("selected row parses")
+            .to_observable_sample(Observable::PpuModeEdge)
+            .expect("row maps to PpuModeEdge sample");
+
+        let mismatching = [ObservableSample {
+            value: ObservableValue::U8(0),
+            ..expected.clone()
+        }];
+        let err = assert_golden_edges(
+            mismatching.iter().cloned(),
+            GoldenV2Reader::open(&path).expect("v2 reader opens"),
+            Observable::PpuModeEdge,
+            "hblank_ly_scx_timing-GS",
+            selection.clone(),
+        )
+        .expect_err("deliberate stub mismatch must report diagnostic");
+        let diagnostic = err.to_string();
+        assert!(diagnostic.contains("first divergence for hblank_ly_scx_timing-GS PpuModeEdge"));
+        assert!(diagnostic.contains("expected"));
+        assert!(diagnostic.contains("actual"));
+
+        assert_golden_edges!(
+            [expected].into_iter(),
+            GoldenV2Reader::open(&path).expect("v2 reader opens"),
+            Observable::PpuModeEdge,
+            "hblank_ly_scx_timing-GS",
+            selection
+        );
+    }
+
+    #[test]
+    fn manifest_loader_parses_rom_entries_and_validates_reference_paths_when_present() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent");
+        let manifest_path = workspace.join("rubc-ng-data/test-manifest.toml");
+        let manifest = Manifest::read(&manifest_path).expect("manifest parses");
+
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.rom_count, 207);
+        assert_eq!(manifest.roms.len(), 207);
+        assert!(manifest
+            .roms
+            .iter()
+            .any(|rom| rom.path == "reference/test-suites/acid2/dmg-acid2.gb"
+                && rom.expectation.kind == "pixel-exact"));
+
+        let reference_root = workspace.join("reference/test-suites");
+        if !reference_root.exists() {
+            eprintln!("skip: {reference_root:?} absent");
+            return;
+        }
+        let missing = manifest.missing_reference_paths(workspace);
+        assert!(missing.is_empty(), "missing manifest paths: {missing:?}");
     }
 }
