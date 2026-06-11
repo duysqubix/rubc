@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod apu;
 pub mod bus_intent;
 pub mod cpu;
 pub mod golden;
@@ -10,6 +11,7 @@ pub mod ppu_public;
 pub mod time;
 pub mod timing;
 
+pub use apu::Apu;
 pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
 pub use golden::{
     assert_golden_edges, GoldenInitialState, GoldenRow, GoldenSelection, GoldenTrace,
