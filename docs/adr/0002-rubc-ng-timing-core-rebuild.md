@@ -77,3 +77,41 @@ Honest estimate ~110–184 focused agent-sessions. "Better than SameBoy"
 means measurably: equal intended-model ROM conformance, golden agreement on
 captured observables, safe-Rust/wasm product integration, auditable timing
 tables, performance no worse than current release.
+
+## Lead review gate: the anti-self-reference rule (enforced every merge)
+
+A golden-driven rebuild has one failure mode worse than a red test: a green
+one that proves nothing. Two early slices hit it:
+
+- **W1 slice 2 (caught, reworked):** STAT/LYC observables were projected from
+  golden rows because the v2.1 captures lacked CPU write streams — the gate
+  compared the golden to itself. Fixed by re-capturing with real write rows
+  (schema v2.1/v2.2) so the machine is *driven* by writes and its output is
+  the thing under test.
+- **W2 slice 1 (rejected, branch deleted):** the fetcher test copied the
+  golden's `addr`/`byte`/`time`/`pos`/`norm_dot` columns into `actual` and
+  asserted equal-to-self; only two register columns could diverge, and those
+  were gated to fall back to the golden when the trace lacked writes. Root
+  cause: rubc-ng had no VRAM/tilemap, so there was no real fetcher to assert.
+  Re-scoped behind a VRAM-capture prerequisite so machine-generated addresses
+  become assertable against an independent oracle.
+
+**Binding rule for every lead review before merge:**
+
+1. Read the actual test diff, not the agent's summary.
+2. Reject any gate where a field of `actual` is copied from the golden /
+   `expected` and then compared to itself. The machine must *produce* every
+   asserted value from its own state + inputs (writes, table entries, VRAM).
+3. Reject any harness that silently skips fields or falls back to golden
+   values "when data is absent" — absence of oracle data is a capture gap to
+   fix, never a reason to weaken the assertion.
+4. Require a demonstrated failure: a perturbation (1-tick table shift, wrong
+   register value) must make the gate fail with a first-divergence
+   diagnostic. A gate that cannot fail does not count as passed.
+5. Only after these hold: ff-merge to `rearch/rebuild`, run the full gate
+   (rubc-ng + rubc-core green, `just check`), push, delete the topic branch,
+   close the bead, launch the next `bd ready`.
+
+This rule is why the SM83 lift (W5 slice 1, 499/499 vectors with field-by-
+field final-state + RAM assertions) was merged and the fetcher was not. The
+discipline is the deliverable as much as the code.
