@@ -163,6 +163,7 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
 
     fn idle_m(&mut self) {
         self.run_cycle();
+        self.inner.observe_idle_m();
         self.inner.end_cpu_cycle();
     }
 
@@ -324,6 +325,12 @@ impl Cpu {
                 if let Some(offset) = plan.write_visible_at {
                     bus.schedule_cpu_write(time_after(start, offset), addr, value);
                 }
+            }
+            if matches!(
+                state.cycle,
+                ActiveCpuCycle::Idle { .. } | ActiveCpuCycle::OamBugIdu { .. }
+            ) {
+                bus.observe_idle_m();
             }
         }
 

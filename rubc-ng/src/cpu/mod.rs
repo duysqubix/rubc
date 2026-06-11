@@ -29,6 +29,7 @@ pub trait CpuBus {
     fn speed_switch_armed(&self) -> bool;
     fn finish_speed_switch(&mut self);
     fn boundary(&mut self) {}
+    fn observe_idle_m(&mut self) {}
     fn begin_cpu_cycle(&mut self) {}
     fn tick_cpu_t(&mut self) {}
     fn now(&self) -> Time {
@@ -73,6 +74,13 @@ pub struct VectorState {
     pub ram: Vec<(u16, u8)>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CpuBusCycle {
+    pub addr: Option<u16>,
+    pub data: Option<u8>,
+    pub kind: &'static str,
+}
+
 impl VectorState {
     pub fn ram_addrs(&self) -> Vec<u16> {
         self.ram.iter().map(|&(addr, _)| addr).collect()
@@ -92,6 +100,7 @@ pub struct FlatIntentBus {
     now: Time,
     m_cycles: u64,
     intents: Vec<CpuBusIntent>,
+    cycles: Vec<CpuBusCycle>,
 }
 
 impl Default for FlatIntentBus {
@@ -103,6 +112,7 @@ impl Default for FlatIntentBus {
             now: Time(0),
             m_cycles: 0,
             intents: Vec::new(),
+            cycles: Vec::new(),
         }
     }
 }
@@ -124,28 +134,85 @@ impl FlatIntentBus {
         self.ie = ie;
     }
 
+    pub fn set_if(&mut self, if_: u8) {
+        self.if_ = if_;
+    }
+
+    pub fn if_(&self) -> u8 {
+        self.if_
+    }
+
+    pub fn m_cycles(&self) -> u64 {
+        self.m_cycles
+    }
+
     pub fn intents(&self) -> &[CpuBusIntent] {
         &self.intents
+    }
+
+    pub fn cycles(&self) -> &[CpuBusCycle] {
+        &self.cycles
+    }
+
+    fn read_visible(&self, addr: u16) -> u8 {
+        self.mem[addr as usize]
+    }
+
+    fn write_visible(&mut self, addr: u16, value: u8) {
+        self.mem[addr as usize] = value;
+        match addr {
+            0xFF0F => self.if_ = value,
+            0xFFFF => self.ie = value,
+            _ => {}
+        }
+    }
+
+    fn record_read(&mut self, addr: u16, value: u8) {
+        self.intents.push(CpuBusIntent::ReadSample { addr });
+        self.cycles.push(CpuBusCycle {
+            addr: Some(addr),
+            data: Some(value),
+            kind: "r-m",
+        });
+    }
+
+    fn record_write(&mut self, addr: u16, value: u8) {
+        self.intents.push(CpuBusIntent::WriteDrive { addr, value });
+        self.cycles.push(CpuBusCycle {
+            addr: Some(addr),
+            data: Some(value),
+            kind: "-wm",
+        });
+    }
+
+    fn record_idle(&mut self) {
+        self.intents.push(CpuBusIntent::Idle);
+        self.cycles.push(CpuBusCycle {
+            addr: None,
+            data: None,
+            kind: "---",
+        });
     }
 }
 
 impl CpuBus for FlatIntentBus {
     fn read_m(&mut self, addr: u16) -> u8 {
-        self.intents.push(CpuBusIntent::ReadSample { addr });
+        let value = self.read_visible(addr);
+        self.record_read(addr, value);
         self.m_cycles += 1;
         self.now.0 += 16;
-        self.mem[addr as usize]
+        value
     }
 
     fn write_m(&mut self, addr: u16, value: u8) {
-        self.intents.push(CpuBusIntent::WriteDrive { addr, value });
+        self.record_write(addr, value);
         self.m_cycles += 1;
         self.now.0 += 16;
-        self.mem[addr as usize] = value;
+        self.write_visible(addr, value);
     }
 
     fn idle_m(&mut self) {
-        self.intents.push(CpuBusIntent::Idle);
+        self.record_idle();
         self.m_cycles += 1;
         self.now.0 += 16;
     }
@@ -159,7 +226,7 @@ impl CpuBus for FlatIntentBus {
     }
 
     fn clear_if_bit(&mut self, bit: u8) {
-        self.if_ &= !(1 << bit);
+        self.set_if(self.if_ & !(1 << bit));
     }
 
     fn speed_switch_armed(&self) -> bool {
@@ -168,7 +235,13 @@ impl CpuBus for FlatIntentBus {
 
     fn finish_speed_switch(&mut self) {}
 
-    fn boundary(&mut self) {}
+    fn boundary(&mut self) {
+        self.intents.push(CpuBusIntent::IntrPoll);
+    }
+
+    fn observe_idle_m(&mut self) {
+        self.record_idle();
+    }
 
     fn begin_cpu_cycle(&mut self) {}
 
@@ -181,8 +254,8 @@ impl CpuBus for FlatIntentBus {
     }
 
     fn schedule_cpu_write(&mut self, _at: Time, addr: u16, value: u8) {
-        self.intents.push(CpuBusIntent::WriteDrive { addr, value });
-        self.mem[addr as usize] = value;
+        self.record_write(addr, value);
+        self.write_visible(addr, value);
     }
 
     fn advance_to(&mut self, target: Time) {
@@ -190,13 +263,14 @@ impl CpuBus for FlatIntentBus {
     }
 
     fn read_latched(&mut self, addr: u16) -> u8 {
-        self.intents.push(CpuBusIntent::ReadSample { addr });
-        self.mem[addr as usize]
+        let value = self.read_visible(addr);
+        self.record_read(addr, value);
+        value
     }
 
     fn write_latched(&mut self, addr: u16, value: u8) {
-        self.intents.push(CpuBusIntent::WriteDrive { addr, value });
-        self.mem[addr as usize] = value;
+        self.record_write(addr, value);
+        self.write_visible(addr, value);
     }
 
     fn end_cpu_cycle(&mut self) {
