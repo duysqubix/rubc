@@ -51,6 +51,55 @@ pub struct GoldenInitialState {
     pub lyc: u8,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GoldenVramState {
+    pub regs: GoldenVramRegisters,
+    pub vram: Vram,
+    pub oam: [u8; 0xA0],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenVramRegisters {
+    pub lcdc: u8,
+    pub scx: u8,
+    pub scy: u8,
+    pub wx: u8,
+    pub wy: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Vram {
+    pub bank0: [u8; 0x2000],
+    pub bank1: [u8; 0x2000],
+}
+
+impl Vram {
+    pub fn read(&self, addr: u16, bank: u8) -> Result<u8, String> {
+        let offset = usize::from(addr);
+        if offset >= 0x2000 {
+            return Err(format!("VRAM offset out of range: {addr:04X}"));
+        }
+        match bank {
+            0 => Ok(self.bank0[offset]),
+            1 => Ok(self.bank1[offset]),
+            _ => Err(format!("unsupported VRAM bank: {bank}")),
+        }
+    }
+
+    pub fn write_for_test(&mut self, addr: u16, bank: u8, value: u8) -> Result<(), String> {
+        let offset = usize::from(addr);
+        if offset >= 0x2000 {
+            return Err(format!("VRAM offset out of range: {addr:04X}"));
+        }
+        match bank {
+            0 => self.bank0[offset] = value,
+            1 => self.bank1[offset] = value,
+            _ => return Err(format!("unsupported VRAM bank: {bank}")),
+        }
+        Ok(())
+    }
+}
+
 impl GoldenTrace {
     pub fn read_tsv(path: impl AsRef<Path>) -> Result<Self, String> {
         let text = fs::read_to_string(path.as_ref()).map_err(|err| err.to_string())?;
@@ -216,6 +265,19 @@ impl GoldenV2Reader<BufReader<File>> {
         }
         state.finish()
     }
+
+    pub fn read_vram_state(path: impl AsRef<Path>) -> Result<GoldenVramState, String> {
+        let mut state = VramStateBuilder::default();
+        for row in Self::open(path)? {
+            let row = row?;
+            if row.kind == "vram_state" {
+                state.push(row)?;
+            } else if state.started {
+                break;
+            }
+        }
+        state.finish()
+    }
 }
 
 impl<R: BufRead> GoldenV2Reader<R> {
@@ -226,7 +288,7 @@ impl<R: BufRead> GoldenV2Reader<R> {
             .ok_or_else(|| "missing v2 TSV header".to_owned())?
             .map_err(|err| err.to_string())?;
         let columns: Vec<String> = header.split('\t').map(str::to_owned).collect();
-        if columns != V2_COLUMNS && columns != V21_COLUMNS {
+        if columns != V2_COLUMNS && columns != V21_COLUMNS && columns != V23_COLUMNS {
             return Err(format!("unexpected v2 golden TSV header: {header}"));
         }
         Ok(Self {
@@ -290,6 +352,97 @@ struct InitialStateBuilder {
     scy: Option<u8>,
     scx: Option<u8>,
     lyc: Option<u8>,
+}
+
+#[derive(Default)]
+struct VramStateBuilder {
+    started: bool,
+    regs: Option<GoldenVramRegisters>,
+    bank0: Option<[u8; 0x2000]>,
+    bank1: Option<[u8; 0x2000]>,
+    oam: Option<[u8; 0xA0]>,
+}
+
+impl VramStateBuilder {
+    fn push(&mut self, row: GoldenV2Row) -> Result<(), String> {
+        self.started = true;
+        let block = row
+            .state_block
+            .as_deref()
+            .ok_or_else(|| "vram_state row missing state_block".to_owned())?;
+        let len = row
+            .state_len
+            .ok_or_else(|| "vram_state row missing state_len".to_owned())?;
+        let data = decode_hex_bytes(
+            row.state_data
+                .as_deref()
+                .ok_or_else(|| "vram_state row missing state_data".to_owned())?,
+            block,
+        )?;
+        if data.len() != len {
+            return Err(format!(
+                "vram_state {block} length mismatch: header {len}, data {}",
+                data.len()
+            ));
+        }
+        match block {
+            "registers_lcdc_scx_scy_wx_wy" => {
+                if data.len() != 5 {
+                    return Err(format!(
+                        "register block expected 5 bytes, got {}",
+                        data.len()
+                    ));
+                }
+                set_once_value(
+                    &mut self.regs,
+                    GoldenVramRegisters {
+                        lcdc: data[0],
+                        scx: data[1],
+                        scy: data[2],
+                        wx: data[3],
+                        wy: data[4],
+                    },
+                    "vram registers",
+                )
+            }
+            "oam" => {
+                let bytes: [u8; 0xA0] = data.try_into().map_err(|data: Vec<u8>| {
+                    format!("OAM expected 160 bytes, got {}", data.len())
+                })?;
+                set_once_value(&mut self.oam, bytes, "OAM")
+            }
+            "vram" => {
+                let bytes: [u8; 0x2000] = data.try_into().map_err(|data: Vec<u8>| {
+                    format!("VRAM bank expected 8192 bytes, got {}", data.len())
+                })?;
+                match row.vram_bank {
+                    Some(0) => set_once_value(&mut self.bank0, bytes, "VRAM bank0"),
+                    Some(1) => set_once_value(&mut self.bank1, bytes, "VRAM bank1"),
+                    bank => Err(format!(
+                        "vram_state vram row has unsupported bank: {bank:?}"
+                    )),
+                }
+            }
+            _ => Err(format!("unsupported vram_state block: {block}")),
+        }
+    }
+
+    fn finish(self) -> Result<GoldenVramState, String> {
+        Ok(GoldenVramState {
+            regs: self
+                .regs
+                .ok_or_else(|| "missing v2.3 VRAM register state".to_owned())?,
+            vram: Vram {
+                bank0: self
+                    .bank0
+                    .ok_or_else(|| "missing v2.3 VRAM bank0 state".to_owned())?,
+                bank1: self.bank1.unwrap_or([0; 0x2000]),
+            },
+            oam: self
+                .oam
+                .ok_or_else(|| "missing v2.3 OAM state".to_owned())?,
+        })
+    }
 }
 
 impl InitialStateBuilder {
@@ -372,6 +525,20 @@ fn set_once(slot: &mut Option<u8>, value: u8, name: &str) -> Result<(), String> 
         Some(existing) => Err(format!(
             "duplicate initial {name} disagrees: {existing:02X} vs {value:02X}"
         )),
+        None => {
+            *slot = Some(value);
+            Ok(())
+        }
+    }
+}
+
+fn set_once_value<T>(slot: &mut Option<T>, value: T, name: &str) -> Result<(), String>
+where
+    T: PartialEq,
+{
+    match slot {
+        Some(existing) if *existing == value => Ok(()),
+        Some(_) => Err(format!("duplicate {name} disagrees")),
         None => {
             *slot = Some(value);
             Ok(())
@@ -482,6 +649,50 @@ const V21_COLUMNS: [&str; 37] = [
     "write_visible_dot",
 ];
 
+const V23_COLUMNS: [&str; 41] = [
+    "schema",
+    "kind",
+    "frame",
+    "raw_tick",
+    "ly",
+    "line_tick",
+    "dot",
+    "event",
+    "mode",
+    "stat",
+    "stat_sources",
+    "if",
+    "ie",
+    "lyc",
+    "line_dot",
+    "lcd_on",
+    "irq_edge",
+    "model",
+    "double_speed",
+    "state",
+    "x",
+    "screen_x",
+    "addr",
+    "byte",
+    "raw_color",
+    "palette_kind",
+    "palette_reg",
+    "palette_value",
+    "io_scy",
+    "io_scx",
+    "io_lcdc",
+    "io_wx",
+    "io_wy",
+    "pos",
+    "conflict",
+    "write_visible_tick",
+    "write_visible_dot",
+    "state_block",
+    "vram_bank",
+    "state_len",
+    "state_data",
+];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct GoldenV2Row {
     pub schema: u8,
@@ -501,7 +712,7 @@ pub struct GoldenV2Row {
     pub line_dot: Option<f64>,
     pub lcd_on: Option<bool>,
     pub irq_edge: Option<bool>,
-    pub model: Option<u8>,
+    pub model: Option<u16>,
     pub double_speed: Option<bool>,
     pub state: Option<String>,
     pub x: Option<i32>,
@@ -521,16 +732,24 @@ pub struct GoldenV2Row {
     pub conflict: Option<String>,
     pub write_visible_tick: Option<u64>,
     pub write_visible_dot: Option<f64>,
+    pub state_block: Option<String>,
+    pub vram_bank: Option<i16>,
+    pub state_len: Option<usize>,
+    pub state_data: Option<String>,
 }
 
 impl GoldenV2Row {
     fn parse(line: &str) -> Result<Self, String> {
         let fields: Vec<_> = line.split('\t').collect();
-        if fields.len() != V2_COLUMNS.len() && fields.len() != V21_COLUMNS.len() {
+        if fields.len() != V2_COLUMNS.len()
+            && fields.len() != V21_COLUMNS.len()
+            && fields.len() != V23_COLUMNS.len()
+        {
             return Err(format!(
-                "expected {} or {} fields, got {}",
+                "expected {}, {}, or {} fields, got {}",
                 V2_COLUMNS.len(),
                 V21_COLUMNS.len(),
+                V23_COLUMNS.len(),
                 fields.len()
             ));
         }
@@ -580,6 +799,14 @@ impl GoldenV2Row {
             write_visible_dot: fields.get(36).map_or(Ok(None), |field| {
                 parse_opt_float(field, "write_visible_dot")
             })?,
+            state_block: fields.get(37).and_then(|field| opt_string(field)),
+            vram_bank: fields
+                .get(38)
+                .map_or(Ok(None), |field| parse_opt_dec(field, "vram_bank"))?,
+            state_len: fields
+                .get(39)
+                .map_or(Ok(None), |field| parse_opt_dec(field, "state_len"))?,
+            state_data: fields.get(40).and_then(|field| opt_string(field)),
         })
     }
 
@@ -755,6 +982,29 @@ fn parse_opt_hex_u8(field: &str, name: &str) -> Result<Option<u8>, String> {
         u8::from_str_radix(field, 16)
             .map(Some)
             .map_err(|err| format!("invalid {name}: {err}"))
+    }
+}
+
+fn decode_hex_bytes(hex: &str, name: &str) -> Result<Vec<u8>, String> {
+    if !hex.len().is_multiple_of(2) {
+        return Err(format!("{name} hex length is odd: {}", hex.len()));
+    }
+    let mut bytes = Vec::with_capacity(hex.len() / 2);
+    let raw = hex.as_bytes();
+    for chunk in raw.chunks_exact(2) {
+        let high = hex_nibble(chunk[0], name)?;
+        let low = hex_nibble(chunk[1], name)?;
+        bytes.push((high << 4) | low);
+    }
+    Ok(bytes)
+}
+
+fn hex_nibble(byte: u8, name: &str) -> Result<u8, String> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(format!("invalid {name} hex digit: {}", byte as char)),
     }
 }
 
