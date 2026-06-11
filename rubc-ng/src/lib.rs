@@ -8,6 +8,7 @@ pub mod manifest;
 pub mod model;
 pub mod ppu_public;
 pub mod time;
+pub mod timer;
 pub mod timing;
 
 pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
@@ -23,6 +24,7 @@ pub use ppu_public::{
     PpuPublicEvent, PpuRegisterWrite,
 };
 pub use time::{ClockPhase, ClockSpine, Time};
+pub use timer::{Timer, TimerRegister};
 pub use timing::{
     Anchor, Observable, PhaseRule, TimingDomain, TimingEntry, TimingProfile, TimingTable,
 };
