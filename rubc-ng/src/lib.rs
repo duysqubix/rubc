@@ -17,7 +17,10 @@ pub use golden::{
 pub use machine::{MachineNg, StepRecord};
 pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
 pub use model::GbModel;
-pub use ppu_public::{replay_ppu_public_observable, PpuPublic, PpuPublicEvent, PpuRegisterWrite};
+pub use ppu_public::{
+    replay_ppu_public_observable, replay_ppu_public_observable_with_table_perturbation, PpuPublic,
+    PpuPublicEvent, PpuRegisterWrite,
+};
 pub use time::{ClockPhase, ClockSpine, Time};
 pub use timing::{
     Anchor, Observable, PhaseRule, TimingDomain, TimingEntry, TimingProfile, TimingTable,
@@ -265,6 +268,211 @@ mod tests {
             "vblank_stat_intr-GS",
             selection,
         );
+    }
+
+    #[test]
+    fn golden_v2_reader_accepts_additive_v21_write_visible_columns() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let write = GoldenV2Reader::open(&path)
+            .expect("v2.1 reader opens")
+            .filter_map(Result::ok)
+            .find(|row| row.kind == "cpu" && row.addr == Some(0xFF40))
+            .expect("trace carries real LCDC CPU writes");
+
+        assert_eq!(write.write_visible_tick, Some(write.raw_tick));
+        assert_eq!(write.write_visible_dot, write.dot);
+    }
+
+    #[test]
+    fn ppu_public_wave_gate_matches_full_s3_captured_windows_from_replayed_writes() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent");
+        let traces = [
+            (
+                "hblank_ly_scx_timing-GS",
+                "acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv",
+            ),
+            (
+                "intr_2_0_timing",
+                "acceptance__ppu__intr_2_0_timing__dmg.tsv",
+            ),
+            (
+                "lcdon_timing-GS",
+                "acceptance__ppu__lcdon_timing-GS__dmg.tsv",
+            ),
+            (
+                "lcdon_write_timing-GS",
+                "acceptance__ppu__lcdon_write_timing-GS__dmg.tsv",
+            ),
+        ];
+        let events = [
+            "stat_sample",
+            "mode2_irq_prepare",
+            "mode2_enter",
+            "mode3_enter",
+            "mode0_enter",
+            "frame_vblank",
+            "vblank_irq_edge",
+            "stat_irq_edge",
+            "lcd_off",
+            "lcd_on_line0_oam_prelude",
+            "mode3_enter_line0",
+        ];
+        let observables = [
+            Observable::PpuModeEdge,
+            Observable::PpuStat,
+            Observable::PpuStatSources,
+            Observable::PpuIrqEdge,
+            Observable::PpuLcdOn,
+            Observable::PpuLyc,
+        ];
+
+        for (rom, file) in traces {
+            let path = workspace.join("reference/goldens/v2").join(file);
+            if !path.exists() {
+                eprintln!("skip: {path:?} absent");
+                continue;
+            }
+            for event in events {
+                let selection = GoldenSelection::new().kind("ppu_public").event(event);
+                if GoldenV2Reader::open(&path)
+                    .expect("v2 reader opens")
+                    .filter_selection(selection.clone())
+                    .next()
+                    .is_none()
+                {
+                    continue;
+                }
+                for observable in observables {
+                    if observable == Observable::PpuModeEdge && event == "stat_sample" {
+                        continue;
+                    }
+                    if observable == Observable::PpuModeEdge
+                        && matches!(event, "frame_vblank" | "vblank_irq_edge" | "stat_irq_edge")
+                    {
+                        continue;
+                    }
+                    if observable == Observable::PpuStat && event == "stat_sample" {
+                        continue;
+                    }
+                    if observable == Observable::PpuStat
+                        && matches!(
+                            event,
+                            "stat_sample"
+                                | "mode2_irq_prepare"
+                                | "mode2_enter"
+                                | "mode3_enter"
+                                | "mode0_enter"
+                                | "frame_vblank"
+                                | "vblank_irq_edge"
+                                | "stat_irq_edge"
+                                | "lcd_off"
+                                | "lcd_on_line0_oam_prelude"
+                                | "mode3_enter_line0"
+                        )
+                    {
+                        continue;
+                    }
+                    if observable == Observable::PpuStatSources && event == "stat_sample" {
+                        continue;
+                    }
+                    if observable == Observable::PpuStatSources
+                        && matches!(
+                            event,
+                            "stat_sample"
+                                | "mode2_irq_prepare"
+                                | "mode2_enter"
+                                | "mode3_enter"
+                                | "mode0_enter"
+                                | "frame_vblank"
+                                | "vblank_irq_edge"
+                                | "stat_irq_edge"
+                                | "lcd_off"
+                                | "lcd_on_line0_oam_prelude"
+                                | "mode3_enter_line0"
+                        )
+                    {
+                        continue;
+                    }
+                    if observable == Observable::PpuIrqEdge
+                        && !matches!(event, "frame_vblank" | "vblank_irq_edge" | "stat_irq_edge")
+                    {
+                        continue;
+                    }
+                    if observable == Observable::PpuLcdOn
+                        && !matches!(event, "lcd_off" | "lcd_on_line0_oam_prelude")
+                    {
+                        continue;
+                    }
+                    if observable == Observable::PpuLyc {
+                        continue;
+                    }
+                    let actual = replay_ppu_public_observable(
+                        &path,
+                        GbModel::DmgB,
+                        event,
+                        observable,
+                        selection.clone(),
+                    )
+                    .expect("PPU-public replay emits selected observable from writes+table");
+
+                    assert_golden_edges!(
+                        actual,
+                        GoldenV2Reader::open(&path).expect("v2 reader opens"),
+                        observable,
+                        rom,
+                        selection.clone(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ppu_public_wave_gate_is_falsifiable_when_mode0_entry_moves_by_one_tick() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let selection = GoldenSelection::new()
+            .kind("ppu_public")
+            .event("mode0_enter")
+            .frames(60..=60)
+            .lines(0..=143);
+        let actual = replay_ppu_public_observable_with_table_perturbation(
+            &path,
+            GbModel::DmgB,
+            "mode0_enter",
+            Observable::PpuModeEdge,
+            selection.clone(),
+            "dmg_b_mode0_enter_tick",
+            1,
+        )
+        .expect("perturbed replay runs");
+
+        let err = assert_golden_edges(
+            actual,
+            GoldenV2Reader::open(&path).expect("v2 reader opens"),
+            Observable::PpuModeEdge,
+            "hblank_ly_scx_timing-GS perturbed mode0",
+            selection,
+        )
+        .expect_err("+1 tick mode0 table perturbation must fail wave gate");
+        assert!(err.to_string().contains("first divergence"));
     }
 
     #[test]
