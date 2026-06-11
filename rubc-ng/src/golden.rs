@@ -37,6 +37,20 @@ pub struct GoldenRow {
     pub norm_dot: Option<f64>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GoldenInitialState {
+    pub frame: u64,
+    pub raw_tick: u64,
+    pub ly: u16,
+    pub line_tick: u64,
+    pub mode: u8,
+    pub lcdc: u8,
+    pub stat: u8,
+    pub scy: u8,
+    pub scx: u8,
+    pub lyc: u8,
+}
+
 impl GoldenTrace {
     pub fn read_tsv(path: impl AsRef<Path>) -> Result<Self, String> {
         let text = fs::read_to_string(path.as_ref()).map_err(|err| err.to_string())?;
@@ -189,6 +203,19 @@ impl GoldenV2Reader<BufReader<File>> {
         let file = File::open(path.as_ref()).map_err(|err| err.to_string())?;
         Self::new(BufReader::new(file))
     }
+
+    pub fn read_initial_state(path: impl AsRef<Path>) -> Result<GoldenInitialState, String> {
+        let mut state = InitialStateBuilder::default();
+        for row in Self::open(path)? {
+            let row = row?;
+            if row.kind == "initial_state" {
+                state.push(row)?;
+            } else if state.started {
+                break;
+            }
+        }
+        state.finish()
+    }
 }
 
 impl<R: BufRead> GoldenV2Reader<R> {
@@ -248,6 +275,108 @@ pub struct GoldenV2Selection<R: BufRead> {
     reader: GoldenV2Reader<R>,
     selection: GoldenSelection,
     yielded: usize,
+}
+
+#[derive(Default)]
+struct InitialStateBuilder {
+    started: bool,
+    frame: Option<u64>,
+    raw_tick: Option<u64>,
+    ly: Option<u16>,
+    line_tick: Option<u64>,
+    mode: Option<u8>,
+    lcdc: Option<u8>,
+    stat: Option<u8>,
+    scy: Option<u8>,
+    scx: Option<u8>,
+    lyc: Option<u8>,
+}
+
+impl InitialStateBuilder {
+    fn push(&mut self, row: GoldenV2Row) -> Result<(), String> {
+        self.started = true;
+        let ly = row
+            .ly
+            .ok_or_else(|| "initial_state row missing LY".to_owned())?;
+        let line_tick = row
+            .line_tick
+            .ok_or_else(|| "initial_state row missing line_tick".to_owned())?;
+        let mode = row
+            .mode
+            .ok_or_else(|| "initial_state row missing mode".to_owned())?;
+        match (
+            self.frame,
+            self.raw_tick,
+            self.ly,
+            self.line_tick,
+            self.mode,
+        ) {
+            (
+                Some(frame),
+                Some(raw_tick),
+                Some(existing_ly),
+                Some(existing_tick),
+                Some(existing_mode),
+            ) if frame == row.frame
+                && raw_tick == row.raw_tick
+                && existing_ly == ly
+                && existing_tick == line_tick
+                && existing_mode == mode => {}
+            (None, None, None, None, None) => {
+                self.frame = Some(row.frame);
+                self.raw_tick = Some(row.raw_tick);
+                self.ly = Some(ly);
+                self.line_tick = Some(line_tick);
+                self.mode = Some(mode);
+            }
+            _ => return Err("initial_state rows disagree on capture-window position".to_owned()),
+        }
+
+        let addr = row
+            .addr
+            .ok_or_else(|| "initial_state row missing addr".to_owned())?;
+        let byte = row
+            .byte
+            .ok_or_else(|| "initial_state row missing byte".to_owned())?;
+        match addr {
+            0xFF40 => set_once(&mut self.lcdc, byte, "FF40"),
+            0xFF41 => set_once(&mut self.stat, byte, "FF41"),
+            0xFF42 => set_once(&mut self.scy, byte, "FF42"),
+            0xFF43 => set_once(&mut self.scx, byte, "FF43"),
+            0xFF45 => set_once(&mut self.lyc, byte, "FF45"),
+            _ => Err(format!("unexpected initial_state addr: {addr:04X}")),
+        }
+    }
+
+    fn finish(self) -> Result<GoldenInitialState, String> {
+        Ok(GoldenInitialState {
+            frame: self
+                .frame
+                .ok_or_else(|| "missing initial_state block".to_owned())?,
+            raw_tick: self.raw_tick.expect("frame presence implies raw_tick"),
+            ly: self.ly.expect("frame presence implies ly"),
+            line_tick: self.line_tick.expect("frame presence implies line_tick"),
+            mode: self.mode.expect("frame presence implies mode"),
+            lcdc: self.lcdc.ok_or_else(|| "missing initial FF40".to_owned())?,
+            stat: self.stat.ok_or_else(|| "missing initial FF41".to_owned())?,
+            scy: self.scy.ok_or_else(|| "missing initial FF42".to_owned())?,
+            scx: self.scx.ok_or_else(|| "missing initial FF43".to_owned())?,
+            lyc: self.lyc.ok_or_else(|| "missing initial FF45".to_owned())?,
+        })
+    }
+}
+
+fn set_once(slot: &mut Option<u8>, value: u8, name: &str) -> Result<(), String> {
+    match slot {
+        Some(existing) if *existing == value => Ok(()),
+        Some(existing) => Err(format!(
+            "duplicate initial {name} disagrees: {existing:02X} vs {value:02X}"
+        )),
+        None => {
+            *slot = Some(value);
+            Ok(())
+        }
+    }
 }
 
 impl<R: BufRead> Iterator for GoldenV2Selection<R> {
