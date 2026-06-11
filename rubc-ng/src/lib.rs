@@ -5,6 +5,7 @@ pub mod golden;
 pub mod machine;
 pub mod manifest;
 pub mod model;
+pub mod ppu_public;
 pub mod time;
 pub mod timing;
 
@@ -16,6 +17,7 @@ pub use golden::{
 pub use machine::{MachineNg, StepRecord};
 pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
 pub use model::GbModel;
+pub use ppu_public::{replay_ppu_public_observable, PpuPublic, PpuPublicEvent, PpuRegisterWrite};
 pub use time::{ClockPhase, ClockSpine, Time};
 pub use timing::{
     Anchor, Observable, PhaseRule, TimingDomain, TimingEntry, TimingProfile, TimingTable,
@@ -48,6 +50,10 @@ mod tests {
         assert_eq!(dmg_entry.anchor, Anchor::PpuMode3Start);
         assert_eq!(dmg_entry.observable, Observable::PpuFetchSample);
         assert_eq!(dmg_entry.offset.subphases(), 22 * 4);
+        let mode3 = dmg
+            .lookup(TimingDomain::PpuPublic, "mode3_public_start")
+            .expect("DMG table must expose golden-derived public mode3 start");
+        assert_eq!(mode3.offset.subphases(), 176);
 
         let cgb_dot = cgb
             .lookup(TimingDomain::PpuPublic, "ppu_dot")
@@ -184,6 +190,106 @@ mod tests {
             "hblank_ly_scx_timing-GS",
             selection
         );
+    }
+
+    #[test]
+    fn ppu_public_replay_matches_hblank_golden_mode_edges() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        for (event, lines) in [
+            ("mode2_enter", 0..=143),
+            ("mode3_enter", 0..=143),
+            ("mode0_enter", 0..=143),
+            ("frame_vblank", 144..=144),
+        ] {
+            let selection = GoldenSelection::new()
+                .kind("ppu_public")
+                .event(event)
+                .frames(60..=61)
+                .lines(lines);
+            let actual = replay_ppu_public_observable(
+                &path,
+                GbModel::DmgB,
+                event,
+                Observable::PpuModeEdge,
+                selection.clone(),
+            )
+            .expect("PPU-public replay emits selected edges");
+
+            assert_golden_edges!(
+                actual,
+                GoldenV2Reader::open(&path).expect("v2 reader opens"),
+                Observable::PpuModeEdge,
+                "hblank_ly_scx_timing-GS",
+                selection,
+            );
+        }
+    }
+
+    #[test]
+    fn ppu_public_replay_matches_vblank_golden_ly_edges() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let selection = GoldenSelection::new()
+            .kind("ppu_public")
+            .event("frame_vblank")
+            .frames(60..=61)
+            .lines(144..=144);
+        let actual = replay_ppu_public_observable(
+            &path,
+            GbModel::DmgB,
+            "frame_vblank",
+            Observable::PpuLy,
+            selection.clone(),
+        )
+        .expect("PPU-public replay emits selected LY edges");
+
+        assert_golden_edges!(
+            actual,
+            GoldenV2Reader::open(&path).expect("v2 reader opens"),
+            Observable::PpuLy,
+            "vblank_stat_intr-GS",
+            selection,
+        );
+    }
+
+    #[test]
+    fn ppu_public_accepts_slice1_register_writes() {
+        let mut ppu = PpuPublic::new(GbModel::DmgB, Time::ZERO, 0);
+
+        ppu.write_register(PpuRegisterWrite {
+            time: Time::from_subphases(10),
+            addr: 0xFF40,
+            value: 0x80,
+        });
+        ppu.write_register(PpuRegisterWrite {
+            time: Time::from_subphases(11),
+            addr: 0xFF41,
+            value: 0x78,
+        });
+        ppu.write_register(PpuRegisterWrite {
+            time: Time::from_subphases(12),
+            addr: 0xFF45,
+            value: 0x42,
+        });
+
+        assert_eq!(ppu.lcdc(), 0x80);
+        assert_eq!(ppu.stat(), 0x78);
+        assert_eq!(ppu.lyc(), 0x42);
     }
 
     #[test]
