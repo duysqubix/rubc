@@ -6,6 +6,7 @@ pub mod golden;
 pub mod machine;
 pub mod manifest;
 pub mod model;
+pub mod ppu_internal;
 pub mod ppu_public;
 pub mod time;
 pub mod timing;
@@ -13,11 +14,16 @@ pub mod timing;
 pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
 pub use golden::{
     assert_golden_edges, GoldenInitialState, GoldenRow, GoldenSelection, GoldenTrace,
-    GoldenV2Reader, ObservableSample, ObservableValue, TraceMismatch,
+    GoldenV2Reader, GoldenVramRegisters, GoldenVramState, ObservableSample, ObservableValue,
+    TraceMismatch, Vram,
 };
 pub use machine::{MachineNg, StepRecord};
 pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
 pub use model::GbModel;
+pub use ppu_internal::{
+    assert_bg_fetch_golden, assert_bg_fetch_golden_with_perturbation, BgFetchDivergence,
+    BgFetchSample, PpuInternal,
+};
 pub use ppu_public::{
     replay_ppu_public_observable, replay_ppu_public_observable_with_table_perturbation, PpuPublic,
     PpuPublicEvent, PpuRegisterWrite,
