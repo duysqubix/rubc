@@ -407,6 +407,7 @@ impl GoldenV2Row {
 
     pub fn to_observable_sample(&self, observable: Observable) -> Option<ObservableSample> {
         let value = match observable {
+            Observable::PpuLy => self.ly.map(ObservableValue::U16),
             Observable::PpuModeEdge => self.mode.map(ObservableValue::U8),
             Observable::PpuMemoryLock => self.stat_sources.clone().map(ObservableValue::Text),
             Observable::OutputPixelLatch => self.raw_color.map(ObservableValue::U8),

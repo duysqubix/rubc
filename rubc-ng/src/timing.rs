@@ -8,6 +8,7 @@ pub enum Observable {
     CpuWriteDrive,
     CpuIdle,
     CpuIntrPoll,
+    PpuLy,
     PpuModeEdge,
     PpuFetchSample,
     PpuMemoryLock,
@@ -168,6 +169,25 @@ impl TimingTable {
             ppu_public: TimingProfile {
                 name: "ppu_public",
                 entries: vec![
+                    // DMG-B v2 public goldens: consecutive LY0/LY1 mode2-prepare rows in
+                    // v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:23 and :32 are
+                    // 912 SameBoy 8MHz ticks apart, i.e. one 456-dot DMG scanline.
+                    TimingEntry::new(
+                        "dmg_b_line_ticks",
+                        Observable::PpuLy,
+                        Anchor::PpuLineStart,
+                        912,
+                        PhaseRule::AfterAnchor { subphases: 912 },
+                    ),
+                    // DMG-B v2 public goldens: LY ranges 0..=153 before returning to LY0;
+                    // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:1340-1346.
+                    TimingEntry::new(
+                        "dmg_b_lines_per_frame",
+                        Observable::PpuLy,
+                        Anchor::PpuLineStart,
+                        154,
+                        PhaseRule::AfterAnchor { subphases: 154 },
+                    ),
                     TimingEntry::new(
                         "ppu_dot",
                         Observable::PpuModeEdge,
@@ -175,12 +195,73 @@ impl TimingTable {
                         0,
                         ppu_dot_phase,
                     ),
+                    // DMG-B v2 public goldens: mode2 IRQ prepare/stat sample at line_tick=2;
+                    // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:23.
+                    TimingEntry::new(
+                        "dmg_b_mode2_irq_prepare_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        2,
+                        PhaseRule::AfterAnchor { subphases: 2 },
+                    ),
+                    // DMG-B v2 public goldens: mode2_enter at line_tick=8;
+                    // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:25-26.
+                    TimingEntry::new(
+                        "dmg_b_mode2_enter_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        8,
+                        PhaseRule::AfterAnchor { subphases: 8 },
+                    ),
                     TimingEntry::new(
                         "mode3_public_start",
                         Observable::PpuModeEdge,
                         Anchor::PpuLineStart,
-                        80 * 4,
-                        PhaseRule::AfterAnchor { subphases: 80 * 4 },
+                        176,
+                        PhaseRule::AfterAnchor { subphases: 176 },
+                    ),
+                    // DMG-B v2 public goldens: mode3_enter at line_tick=176;
+                    // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:28-29.
+                    TimingEntry::new(
+                        "dmg_b_mode3_enter_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        176,
+                        PhaseRule::AfterAnchor { subphases: 176 },
+                    ),
+                    // DMG-B v2 public goldens: mode0_enter at line_tick=520;
+                    // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:30-31.
+                    TimingEntry::new(
+                        "dmg_b_mode0_enter_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        520,
+                        PhaseRule::AfterAnchor { subphases: 520 },
+                    ),
+                    // DMG-B v2 public goldens: frame_vblank/vblank_irq_edge at LY144,
+                    // line_tick=6; see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:1321-1323.
+                    TimingEntry::new(
+                        "dmg_b_vblank_line",
+                        Observable::PpuLy,
+                        Anchor::PpuLineStart,
+                        144,
+                        PhaseRule::AfterAnchor { subphases: 144 },
+                    ),
+                    TimingEntry::new(
+                        "dmg_b_vblank_irq_tick",
+                        Observable::PpuModeEdge,
+                        Anchor::PpuLineStart,
+                        6,
+                        PhaseRule::AfterAnchor { subphases: 6 },
+                    ),
+                    // DMG-B v2 public goldens show the LY153 early sample before LY0 reset;
+                    // see v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv:1340-1346.
+                    TimingEntry::new(
+                        "dmg_b_ly153_early_sample_tick",
+                        Observable::PpuLy,
+                        Anchor::PpuLineStart,
+                        4,
+                        PhaseRule::AfterAnchor { subphases: 4 },
                     ),
                 ],
             },
@@ -285,5 +366,10 @@ impl TimingTable {
         self.lookup(TimingDomain::Cpu, "cpu_intr_poll_boundary")
             .map(|entry| entry.phase)
             .unwrap_or(PhaseRule::AtAnchor)
+    }
+
+    pub fn ppu_public_offset(&self, name: &str) -> Option<u64> {
+        self.lookup(TimingDomain::PpuPublic, name)
+            .map(|entry| entry.offset.subphases())
     }
 }
