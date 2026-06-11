@@ -7,6 +7,7 @@ pub mod golden;
 pub mod machine;
 pub mod manifest;
 pub mod model;
+pub mod output_latch;
 pub mod ppu_internal;
 pub mod ppu_public;
 pub mod time;
@@ -23,6 +24,11 @@ pub use golden::{
 pub use machine::{MachineNg, StepRecord};
 pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
 pub use model::GbModel;
+pub use output_latch::{
+    assert_lcd_output_palette_golden, assert_lcd_output_palette_golden_with_perturbation,
+    assert_lcd_output_palette_golden_with_wrong_register, LatchedPixel, LcdOutputLatch,
+    LcdOutputPaletteDivergence, LcdPaletteSource, OutputRawPixel, PaletteWrite,
+};
 pub use ppu_internal::{
     assert_bg_fetch_golden, assert_bg_fetch_golden_with_perturbation, BgFetchDivergence,
     BgFetchSample, PpuInternal,
