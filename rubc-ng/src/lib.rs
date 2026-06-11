@@ -2,6 +2,7 @@
 
 pub mod apu;
 pub mod bus_intent;
+pub mod cartridge;
 pub mod cpu;
 pub mod golden;
 pub mod machine;
@@ -16,12 +17,13 @@ pub mod timing;
 
 pub use apu::Apu;
 pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
+pub use cartridge::Cartridge;
 pub use golden::{
     assert_golden_edges, GoldenInitialState, GoldenRow, GoldenSelection, GoldenTrace,
     GoldenV2Reader, GoldenVramRegisters, GoldenVramState, ObservableSample, ObservableValue,
     TraceMismatch, Vram,
 };
-pub use machine::{MachineNg, StepRecord};
+pub use machine::{MachineNg, RunStopNg, StepRecord};
 pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
 pub use model::GbModel;
 pub use output_latch::{
@@ -96,7 +98,10 @@ mod tests {
             "same ROM/model must produce identical Time sequence"
         );
         assert_eq!(trace_a.first().map(|r| r.time), Some(Time::ZERO));
-        assert_eq!(trace_a.last().map(|r| r.time.subphases()), Some(31));
+        assert!(
+            trace_a.last().map(|r| r.time.subphases()).unwrap_or(0) > 31,
+            "real CPU execution advances the spine by CPU bus cycles, not fake one-subphase records"
+        );
     }
 
     #[test]
@@ -128,11 +133,54 @@ mod tests {
             Some(1),
             "deliberately wrong expected probe: DIV visible byte must not advance before 256 CPU-T"
         );
-        machine.run_steps(256 * 4);
+        while machine.spine().cpu_t < 256 {
+            machine.step();
+        }
         assert_eq!(
             machine.read_io(0xFF04),
             Some(1),
             "DIV visible byte advances after 256 spine CPU-T ticks"
+        );
+    }
+
+    #[test]
+    fn machine_ng_executes_cpu_instrs_rom_to_blargg_serial_passed() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/test-suites/gb-test-roms/cpu_instrs/individual/01-special.gb");
+        let rom = std::fs::read(&path).expect("blargg cpu_instrs ROM is present");
+        let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
+
+        let stop = machine.run_blargg(8_000_000);
+
+        assert_eq!(
+            stop,
+            RunStopNg::BlarggDone,
+            "ROM must terminate through serial"
+        );
+        assert!(
+            machine.serial_output().contains("Passed"),
+            "blargg serial output must contain Passed, got {:?}",
+            machine.serial_output()
+        );
+    }
+
+    #[test]
+    fn machine_ng_survives_frames_and_produces_framebuffer() {
+        let rom = vec![0x00; 0x8000];
+        let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
+
+        machine.run_frames(2, 100_000);
+
+        assert_eq!(
+            machine.framebuffer().len(),
+            160 * 144,
+            "DMG framebuffer size"
+        );
+        assert!(
+            machine.spine().ppu_dot >= 456 * 2,
+            "PPU dots advance through machine spine"
         );
     }
 

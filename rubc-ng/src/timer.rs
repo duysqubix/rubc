@@ -86,6 +86,16 @@ impl Timer {
         self.if_request
     }
 
+    pub const fn div_counter(&self) -> u16 {
+        self.div
+    }
+
+    pub fn take_interrupt_request(&mut self) -> u8 {
+        let request = self.if_request;
+        self.if_request = 0;
+        request
+    }
+
     fn tick_from_spine_cpu_t(&mut self) {
         if self.reload == Reload::ReloadedThisTick {
             self.reload = Reload::None;
