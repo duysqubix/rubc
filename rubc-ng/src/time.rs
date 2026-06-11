@@ -116,7 +116,9 @@ impl ClockSpine {
 
     const fn phase_fires(phase: PhaseRule, cpu_t: u64) -> bool {
         match phase {
-            PhaseRule::EveryCpuT { divisor } => divisor != 0 && cpu_t % divisor as u64 == 0,
+            PhaseRule::EveryCpuT { divisor } => {
+                divisor != 0 && cpu_t.is_multiple_of(divisor as u64)
+            }
             _ => true,
         }
     }

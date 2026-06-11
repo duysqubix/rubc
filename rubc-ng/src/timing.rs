@@ -125,11 +125,7 @@ pub struct TimingTable {
 
 impl TimingTable {
     pub fn for_model(model: GbModel) -> Self {
-        let ppu_dot_phase = if model.is_cgb() {
-            PhaseRule::EveryCpuT { divisor: 1 }
-        } else {
-            PhaseRule::EveryCpuT { divisor: 1 }
-        };
+        let ppu_dot_phase = PhaseRule::EveryCpuT { divisor: 1 };
 
         Self {
             model,
