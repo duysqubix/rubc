@@ -52,3 +52,44 @@ fn conformance_matrix_pass_count_is_gated_by_honest_floor() {
         report.config.pass_floor
     );
 }
+
+#[test]
+fn conformance_boot_register_and_hwio_profiles_pass_on_intended_models() {
+    let boot_profile_roms = [
+        "boot_hwio-S.gb",
+        "boot_hwio-dmg0.gb",
+        "boot_hwio-dmgABCmgb.gb",
+        "boot_hwio-C.gb",
+        "boot_regs-dmg0.gb",
+        "boot_regs-dmgABC.gb",
+        "boot_regs-mgb.gb",
+        "boot_regs-sgb.gb",
+        "boot_regs-sgb2.gb",
+        "boot_regs-A.gb",
+        "boot_regs-cgb.gb",
+    ];
+    let report = ConformanceReport::run(
+        workspace_root(),
+        ConformanceConfig {
+            pass_floor: boot_profile_roms.len(),
+            full_manifest: false,
+            path_substrings: boot_profile_roms
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect(),
+        },
+    )
+    .expect("boot-profile conformance subset runs");
+
+    println!("{}", report.scoreboard());
+    assert_eq!(
+        report.total_roms,
+        boot_profile_roms.len(),
+        "boot-profile subset must exercise every targeted boot ROM exactly once"
+    );
+    assert_eq!(
+        report.pass_count,
+        report.total_roms,
+        "every boot-profile ROM must reach its own mooneye Fibonacci pass signature on its intended model"
+    );
+}
