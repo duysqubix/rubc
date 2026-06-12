@@ -77,8 +77,12 @@ fn w4_window_and_sprite_representative_fetch_rows_still_match_v23_vram_oracle() 
 
 #[test]
 fn w4_window_oracle_fails_when_trigger_dot_is_wrong() {
-    let state = GoldenV2Reader::read_vram_state(golden_v2("m3_scy_change_ly000_v2.tsv"))
-        .expect("v2.3 state parses");
+    let path = golden_v2("m3_scy_change_ly000_v2.tsv");
+    if !path.exists() {
+        eprintln!("skip: {path:?} absent");
+        return;
+    }
+    let state = GoldenV2Reader::read_vram_state(&path).expect("v2.3 state parses");
     let mut ppu = PpuInternal::for_test(0x91 | 0x20, 0, 0, 0x20, 0, state.vram, state.oam);
 
     assert!(

@@ -24,9 +24,10 @@ Cargo.lock
 .beads-credential-key
 
 
-# GameBoy emulator reference material (docs + test suites).
-# Cloned locally for reference only; .git stripped. NEVER commit to rubc.
-/reference/
+# GameBoy emulator reference material (docs + test suites) is COMMITTED to the
+# repo (rubc-ng's ROM-driven conformance tests need it present in any checkout).
+# Keep out only regenerable build cruft + golden traces (reproducible from
+# reference/goldens/instrumentation.patch against SameBoy).
 
 # Local-only agent / tooling scaffolding (agent configs, skills).
 # Kept per-machine; never committed. (.beads IS tracked — it bootstraps the issue tracker.)
@@ -51,4 +52,13 @@ rubc-wasm/web/pkg/
 deploy/certs/*.pem
 deploy/certs/*.key
 deploy/certs/*.crt
-/reference
+
+# Regenerable reference cruft (do NOT commit): assembler intermediates,
+# golden traces, and redundant source zips superseded by extracted ROMs.
+reference/goldens/
+reference/test-suites/mooneye-test-suite/build/**/*.o
+reference/test-suites/mooneye-test-suite/build/**/*.sym
+reference/test-suites/mooneye-test-suite/build/**/*.map
+reference/test-suites/mooneye-test-suite/build/**/*.d
+reference/test-suites/mealybug/mealybug-tearoom-tests.zip
+reference/docs/pandocs/historical/misc/ATX-GBI.zip
