@@ -68,6 +68,8 @@ struct MachineBus {
     last_ppu_dot: u64,
     frame_counter: u64,
     apu: Apu,
+    key1_prepare: bool,
+    double_speed: bool,
 }
 
 impl MachineNg {
@@ -85,6 +87,29 @@ impl MachineNg {
         machine.cpu.r.e = 0xD8;
         machine.cpu.r.h = 0x01;
         machine.cpu.r.l = 0x4D;
+        machine.cpu.r.sp = 0xFFFE;
+        machine.cpu.r.pc = 0x0100;
+        Ok(machine)
+    }
+
+    pub fn boot_cgb(rom: &[u8]) -> Result<Self, String> {
+        if rom.get(0x0143).is_some_and(|flag| flag & 0x80 != 0) {
+            Self::boot_cgb_native(rom)
+        } else {
+            Self::boot_dmg(rom)
+        }
+    }
+
+    pub fn boot_cgb_native(rom: &[u8]) -> Result<Self, String> {
+        let mut machine = Self::boot_for_model(GbModel::CgbE, rom)?;
+        machine.cpu.r.a = 0x11;
+        machine.cpu.r.f = 0x80;
+        machine.cpu.r.b = 0x00;
+        machine.cpu.r.c = 0x00;
+        machine.cpu.r.d = 0x00;
+        machine.cpu.r.e = 0x08;
+        machine.cpu.r.h = 0x00;
+        machine.cpu.r.l = 0x7C;
         machine.cpu.r.sp = 0xFFFE;
         machine.cpu.r.pc = 0x0100;
         Ok(machine)
@@ -125,6 +150,47 @@ impl MachineNg {
         &self.bus.serial_output
     }
 
+    pub fn blargg_passed(&self) -> bool {
+        if let Some(status) = self.blargg_cart_ram_done() {
+            return status == 0x00;
+        }
+        self.bus.serial_output.contains("Passed")
+    }
+
+    pub fn blargg_cart_text(&self) -> String {
+        (0..512u16)
+            .map(|i| self.bus.read_visible(0xA000 + i))
+            .take_while(|&b| b != 0)
+            .map(|b| {
+                if (0x20..0x7F).contains(&b) {
+                    b as char
+                } else {
+                    '.'
+                }
+            })
+            .collect()
+    }
+
+    fn blargg_cart_ram_status(&self) -> Option<u8> {
+        let sig = [
+            self.bus.read_visible(0xA001),
+            self.bus.read_visible(0xA002),
+            self.bus.read_visible(0xA003),
+        ];
+        if sig == [0xDE, 0xB0, 0x61] {
+            Some(self.bus.read_visible(0xA000))
+        } else {
+            None
+        }
+    }
+
+    fn blargg_cart_ram_done(&self) -> Option<u8> {
+        match self.blargg_cart_ram_status() {
+            Some(0x80) | None => None,
+            Some(status) => Some(status),
+        }
+    }
+
     pub fn framebuffer(&self) -> &[u8] {
         &self.bus.framebuffer
     }
@@ -160,7 +226,8 @@ impl MachineNg {
     }
 
     pub fn run_blargg(&mut self, max_instructions: u64) -> RunStopNg {
-        for _ in 0..max_instructions {
+        let mut cart_ram_was_running = false;
+        for i in 0..max_instructions {
             if matches!(self.cpu.mode, CpuMode::Stopped) {
                 return RunStopNg::Stuck;
             }
@@ -168,6 +235,12 @@ impl MachineNg {
             if self.bus.serial_output.contains("Passed")
                 || self.bus.serial_output.contains("Failed")
             {
+                return RunStopNg::BlarggDone;
+            }
+            if self.blargg_cart_ram_status() == Some(0x80) {
+                cart_ram_was_running = true;
+            }
+            if i % 4096 == 0 && cart_ram_was_running && self.blargg_cart_ram_done().is_some() {
                 return RunStopNg::BlarggDone;
             }
         }
@@ -223,6 +296,8 @@ impl MachineBus {
             last_ppu_dot: 0,
             frame_counter: 0,
             apu: Apu::default(),
+            key1_prepare: false,
+            double_speed: false,
             spine,
             table,
         };
@@ -249,6 +324,10 @@ impl MachineBus {
             0xFF41 => self.ppu_stat(),
             0xFF42 | 0xFF43 | 0xFF45 | 0xFF47..=0xFF4B => self.io[(addr - 0xFF00) as usize],
             0xFF44 => self.ly(),
+            0xFF4D if self.model.is_cgb() => {
+                0x7E | if self.double_speed { 0x80 } else { 0x00 } | u8::from(self.key1_prepare)
+            }
+            0xFF4D => 0xFF,
             0xFF4F => 0xFE | self.vram_bank,
             0xFF70 => 0xF8 | self.wram_bank,
             0xFFFF => self.ie,
@@ -303,6 +382,11 @@ impl MachineBus {
             0xFF10..=0xFF3F => self.apu.write(addr, value, self.model.is_cgb()),
             0xFF46 => self.oam_dma(value),
             0xFF40..=0xFF4B => self.write_ppu_register(addr, value),
+            0xFF4D if self.model.is_cgb() => {
+                self.key1_prepare = (value & 1) != 0;
+                self.io[0x4D] = value & 1;
+            }
+            0xFF4D => {}
             0xFF4F => self.vram_bank = value & 1,
             0xFF70 => self.wram_bank = (value & 0x07).max(1),
             0xFFFF => self.ie = value,
@@ -313,7 +397,7 @@ impl MachineBus {
             self.serial_output.push(self.io[0x01] as char);
             self.io[0x02] = 0x01;
         } else if (0xFF00..=0xFF7F).contains(&addr)
-            && !matches!(addr, 0xFF04..=0xFF07 | 0xFF10..=0xFF3F | 0xFF40..=0xFF4B | 0xFF4F | 0xFF70)
+            && !matches!(addr, 0xFF04..=0xFF07 | 0xFF10..=0xFF3F | 0xFF40..=0xFF4F | 0xFF70)
         {
             self.io[(addr - 0xFF00) as usize] = value;
         }
@@ -386,7 +470,8 @@ impl MachineBus {
         self.timer.observe_spine(&self.spine);
         self.if_ |= self.timer.take_interrupt_request();
         if self.spine.cpu_t != old_cpu_t {
-            self.apu.tick_spine(self.timer.div_counter(), false);
+            self.apu
+                .tick_spine(self.timer.div_counter(), self.double_speed);
         }
         if self.spine.ppu_dot != old_ppu_dot {
             self.on_ppu_dot();
@@ -465,9 +550,13 @@ impl CpuBus for MachineBus {
         self.if_ &= !(1 << bit);
     }
     fn speed_switch_armed(&self) -> bool {
-        false
+        self.model.is_cgb() && self.key1_prepare
     }
-    fn finish_speed_switch(&mut self) {}
+    fn finish_speed_switch(&mut self) {
+        self.double_speed = !self.double_speed;
+        self.key1_prepare = false;
+        self.io[0x4D] = if self.double_speed { 0x80 } else { 0x00 };
+    }
     fn boundary(&mut self) {
         self.if_ |= 0xE0;
     }
