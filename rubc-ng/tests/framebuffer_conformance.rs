@@ -4,8 +4,11 @@ use rubc_ng::{FramePixel, MachineNg, RunStopNg};
 
 const FRAMEBUFFER_PIXELS: usize = 160 * 144;
 const MAX_INSTRUCTIONS: u64 = 20_000_000;
-const MAX_DMG_ACID2_DIFF: usize = 818;
-const MAX_CGB_ACID2_DIFF: usize = 1090;
+// W8b·2b-fifo (rubc-d85o): the real pixel FIFO reached 0-diff on both acid
+// gates — the mid-mode-3 window/sprite geometry class the old core could not
+// cross (ADR 0001 terminal verdict; ADR 0002 independent-geometry thesis).
+const MAX_DMG_ACID2_DIFF: usize = 0;
+const MAX_CGB_ACID2_DIFF: usize = 0;
 
 #[test]
 fn machine_framebuffer_is_render_pipeline_output_not_tilemap_stub() {

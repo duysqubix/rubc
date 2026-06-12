@@ -10,6 +10,7 @@ pub mod machine;
 pub mod manifest;
 pub mod model;
 pub mod output_latch;
+mod pixel_fifo;
 pub mod ppu_internal;
 pub mod ppu_public;
 pub mod time;
@@ -35,8 +36,8 @@ pub use output_latch::{
 };
 pub use ppu_internal::{
     assert_bg_fetch_golden, assert_bg_fetch_golden_with_perturbation, BgFetchDivergence,
-    BgFetchSample, LcdPixelSource, PpuInternal, RenderedPpuPixel, ResolvedDmgPixel, SelectedSprite,
-    SpritePalette, SpritePriorityMode, SpriteSize, WindowRestart,
+    BgFetchSample, FifoOutput, LcdPixelSource, PpuInternal, RenderedPpuPixel, ResolvedDmgPixel,
+    SelectedSprite, SpritePalette, SpritePriorityMode, SpriteSize, WindowRestart,
 };
 pub use ppu_public::{
     replay_ppu_public_observable, replay_ppu_public_observable_with_table_perturbation, PpuPublic,

@@ -1,4 +1,5 @@
 use crate::golden::{GoldenInitialState, GoldenV2Reader, GoldenV2Row, GoldenVramState, Vram};
+use crate::pixel_fifo::{decode_2bpp, FetchStep, FifoPixel, LineRenderState, SpriteOverlay};
 use crate::time::Time;
 use std::fmt;
 use std::path::Path;
@@ -23,6 +24,13 @@ pub struct PpuInternal {
     current_tile_data_addr: Option<u16>,
     window_active: bool,
     window_line: u8,
+    /// W8b·2b-fifo: per-line FIFO render state (rubc-d85o).
+    fifo: LineRenderState,
+    /// Latched once LY==WY matched on any line this frame (SameBoy
+    /// display.c wy_triggered; cleared at frame start).
+    fifo_window_y_condition: bool,
+    /// The window's internal line counter; advances at each activation.
+    fifo_window_line: u8,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +87,15 @@ pub struct RenderedPpuPixel {
 pub enum LcdPixelSource {
     Bg,
     Obj(SpritePalette),
+}
+
+/// One pixel shipped by the FIFO: the LCD column it lands on plus the
+/// resolved raw color / source / CGB palette (palette lookup happens at the
+/// output latch / CGB palette RAM, same as the direct renderer did).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FifoOutput {
+    pub x: usize,
+    pub pixel: RenderedPpuPixel,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -138,6 +155,9 @@ impl PpuInternal {
             current_tile_data_addr: None,
             window_active: false,
             window_line: 0,
+            fifo: LineRenderState::default(),
+            fifo_window_y_condition: false,
+            fifo_window_line: 0,
         }
     }
 
@@ -162,6 +182,9 @@ impl PpuInternal {
             current_tile_data_addr: None,
             window_active: false,
             window_line: 0,
+            fifo: LineRenderState::default(),
+            fifo_window_y_condition: false,
+            fifo_window_line: 0,
         }
     }
 
@@ -334,9 +357,399 @@ impl PpuInternal {
         pixel
     }
 
+    // ---- W8b·2b-fifo: the real per-dot pixel FIFO (rubc-d85o) ------------
+    //
+    // Replaces the direct per-pixel formula (`render_pixel`) in the machine
+    // frame loop. The direct formula computed absolute window coordinates
+    // (map_x = x-(WX-7)) and skipped the FIFO restart / fetch-discard /
+    // fine-X geometry; this is the hardware path: a BG fetcher feeding an
+    // 8-pixel FIFO, window restart at WX == lcd_x+7, SCX&7 discard, and
+    // sprite staging merged at the FIFO (TCAGBD pixel-FIFO chapter; SameBoy
+    // Core/display.c; Pan Docs pixel_fifo.md; cross-checked against the
+    // acid-proven rubc-core FIFO).
+
+    /// Mode-3 line start: latch the WY condition for this line, select and
+    /// X-sort the scanline sprites, and arm the line render state.
+    pub fn begin_drawing(&mut self, ly: u8) {
+        if ly == self.wy {
+            self.fifo_window_y_condition = true;
+        }
+        let mut sprites = select_scanline_sprites(self.lcdc, &self.oam, ly);
+        sprites.sort_by_key(|sprite| (sprite.x, sprite.oam_index));
+        self.fifo = LineRenderState::begin(sprites, self.scx & 0x07);
+    }
+
+    /// Frame boundary (LY==144 line start): the window line counter and the
+    /// WY latch reset (rubc-core ppu.rs resets both when entering VBlank).
+    pub fn begin_frame_window_state(&mut self) {
+        self.fifo_window_y_condition = false;
+        self.fifo_window_line = 0;
+    }
+
+    /// One mode-3 drawing dot. Returns the pixel shipped to the LCD on this
+    /// dot, if any. Dot order follows the hardware pipeline: sprite fetch
+    /// stalls first, then the window compare, then the BG fetcher, then the
+    /// FIFO shift (rubc-core phase_drawing_dot; SameBoy display.c render loop).
+    pub fn fifo_dot(&mut self, cgb: bool, ly: u8) -> Option<FifoOutput> {
+        if !self.fifo.active {
+            return None;
+        }
+        if self.fifo.sprite_idle_ticks > 0 {
+            self.fifo_clock_bg_fetcher(cgb, ly);
+            self.fifo.sprite_idle_ticks -= 1;
+            return None;
+        }
+        if self.fifo.pending_sprite.is_some() {
+            self.fifo_advance_sprite_fetch(cgb, ly);
+            return None;
+        }
+        self.fifo_maybe_start_window(cgb);
+        if self.fifo_try_start_sprite_fetch() {
+            self.fifo_advance_sprite_fetch(cgb, ly);
+            return None;
+        }
+        self.fifo_clock_bg_fetcher(cgb, ly);
+        let (shifted, output) = self.fifo_shift_pixel(cgb);
+        if shifted {
+            self.fifo_maybe_start_window(cgb);
+        }
+        output
+    }
+
+    /// Window activation compare (SameBoy display.c: WX == position+7; the
+    /// DMG-only WX==position+6 late trigger applies a one-pixel desync).
+    /// Activation clears the BG FIFO, restarts the fetcher in window mode
+    /// with X=0, preloads the window line counter, and advances it.
+    fn fifo_maybe_start_window(&mut self, cgb: bool) {
+        if self.fifo.window_active {
+            return;
+        }
+        if self.lcdc & 0x20 == 0 || self.lcdc & 0x01 == 0 || !self.fifo_window_y_condition {
+            return;
+        }
+        let window_x = usize::from(self.wx.saturating_sub(7));
+        let dmg_early_x = usize::from(self.wx.saturating_sub(6));
+        let dmg_early = !cgb && self.fifo.lcd_x == dmg_early_x;
+        if self.fifo.lcd_x != window_x && !dmg_early {
+            return;
+        }
+        if dmg_early && self.fifo.lcd_x != window_x && self.fifo.lcd_x > 0 {
+            self.fifo.lcd_x -= 1;
+        }
+        self.fifo.window_active = true;
+        self.fifo.window_started_this_line = true;
+        // WX<7: the compare fired before the first visible pixel; keep the
+        // X=0 restart but discard the off-screen window columns.
+        if self.fifo.lcd_x == 0 && self.wx < 6 {
+            self.fifo.scx_discard = 7 - self.wx;
+        }
+        self.fifo.bg_fifo.clear();
+        self.fifo.fetcher.reset(true, true);
+        self.fifo.fetcher.y = self.fifo_window_line;
+        self.fifo_window_line = self.fifo_window_line.wrapping_add(1);
+    }
+
+    /// Sprite trigger: the next X-ordered sprite whose trigger column has
+    /// been reached pauses the BG pipeline for a 6-dot fetch. X=0 sprites
+    /// consumed a scan slot but never fetch (Pan Docs OAM scan).
+    fn fifo_try_start_sprite_fetch(&mut self) -> bool {
+        if self.lcdc & 0x02 == 0 {
+            return false;
+        }
+        while self.fifo.next_sprite < self.fifo.sprites.len()
+            && self.fifo.sprites[self.fifo.next_sprite].x == 0
+        {
+            self.fifo.next_sprite += 1;
+        }
+        if self.fifo.next_sprite < self.fifo.sprites.len() {
+            let sprite = self.fifo.sprites[self.fifo.next_sprite];
+            if usize::from(sprite.x) <= self.fifo.lcd_x + 8 {
+                self.fifo.next_sprite += 1;
+                self.fifo.pending_sprite = Some(sprite);
+                self.fifo.sprite_fetch_ticks = 6;
+                // A sprite fetch resets+pauses the BG fetcher but keeps any
+                // queued BG pixels (GBEDG sprite fetching).
+                self.fifo.fetcher.reset_for_sprite();
+                return true;
+            }
+        }
+        false
+    }
+
+    fn fifo_advance_sprite_fetch(&mut self, cgb: bool, ly: u8) {
+        if self.fifo.sprite_fetch_ticks > 0 {
+            self.fifo.sprite_fetch_ticks -= 1;
+        }
+        if self.fifo.sprite_fetch_ticks != 0 {
+            return;
+        }
+        if let Some(sprite) = self.fifo.pending_sprite.take() {
+            self.fifo_load_sprite(cgb, ly, sprite);
+            // The BG fetcher restarts while the FIFO keeps shifting; model
+            // the residual stall as idle dots (rubc-core advance_sprite_fetch).
+            let remaining = self.fifo.bg_fifo.len().min(6) as u8;
+            self.fifo.sprite_idle_ticks = 6 - remaining;
+        }
+    }
+
+    fn fifo_load_sprite(&mut self, cgb: bool, ly: u8, sprite: SelectedSprite) {
+        let height = sprite_height(sprite.size);
+        let mut row = ly.wrapping_add(16).wrapping_sub(sprite.y);
+        if sprite.attr & 0x40 != 0 {
+            row = (height - 1).wrapping_sub(row);
+        }
+        let tile = if height == 16 {
+            (sprite.tile & 0xFE).wrapping_add(row / 8)
+        } else {
+            sprite.tile
+        };
+        let addr = u16::from(tile) * 16 + u16::from(row & 0x07) * 2;
+        let bank = if cgb && sprite.attr & 0x08 != 0 { 1 } else { 0 };
+        let low = self.vram.read(addr, bank).unwrap_or(0);
+        let high = self.vram.read(addr.wrapping_add(1), bank).unwrap_or(0);
+        let colors = decode_2bpp(low, high, sprite.attr & 0x20 != 0);
+        // Sprites at X<8 enter clipped: only the right `x` columns land on
+        // screen (SameBoy object_buffer staging at position+8).
+        let first_visible = 8usize.saturating_sub(usize::from(sprite.x)).min(7);
+        self.fifo.sprite_fifo.overlay_sprite_pixels(
+            colors,
+            first_visible,
+            SpriteOverlay {
+                bg_priority: sprite.bg_priority,
+                palette: sprite.palette,
+                cgb_palette: sprite.attr & 0x07,
+                oam_index: sprite.oam_index,
+                cgb_priority: cgb,
+            },
+        );
+    }
+
+    /// One BG fetcher dot (Pan Docs pixel_fifo.md: 2 dots per step; the push
+    /// step retries until the BG FIFO is empty; the first data-high completion
+    /// of a line restarts the fetcher — the discarded dummy fetch).
+    fn fifo_clock_bg_fetcher(&mut self, cgb: bool, ly: u8) {
+        if self.fifo.window_disable_pending && self.fifo.bg_fifo.is_empty() {
+            if self.lcdc & 0x20 == 0 {
+                let bg_x = (self.fifo.lcd_x as u8).wrapping_add(self.scx);
+                self.fifo.window_active = false;
+                self.fifo.window_disable_pending = false;
+                self.fifo.fetcher.reset(false, true);
+                self.fifo.fetcher.fetcher_x = (bg_x / 8) & 0x1F;
+            } else {
+                self.fifo.window_disable_pending = false;
+            }
+        }
+        if self.fifo.fetcher.step == FetchStep::Push {
+            if self.fifo.bg_fifo.is_empty() {
+                let x_flip = cgb && self.fifo.fetcher.attr & 0x20 != 0;
+                let colors = decode_2bpp(self.fifo.fetcher.low, self.fifo.fetcher.high, x_flip);
+                let cgb_palette = self.fifo.fetcher.attr & 0x07;
+                let bg_priority = cgb && self.fifo.fetcher.attr & 0x80 != 0;
+                self.fifo
+                    .bg_fifo
+                    .push_bg_pixels(colors, cgb_palette, bg_priority);
+                self.fifo.fetcher.fetcher_x = self.fifo.fetcher.fetcher_x.wrapping_add(1);
+                self.fifo.fetcher.step = FetchStep::TileNo;
+                self.fifo.fetcher.step_ticks = 0;
+            }
+            return;
+        }
+        self.fifo.fetcher.step_ticks += 1;
+        if self.fifo.fetcher.step_ticks < 2 {
+            return;
+        }
+        self.fifo.fetcher.step_ticks = 0;
+        match self.fifo.fetcher.step {
+            FetchStep::TileNo => {
+                self.fifo.fetcher.y = if self.fifo.fetcher.window {
+                    self.fifo.fetcher.y
+                } else {
+                    ly.wrapping_add(self.scy)
+                };
+                self.fifo.fetcher.scy_at_tile_no = self.scy;
+                let (tile, attr) = self.fifo_fetch_tile_no(cgb);
+                self.fifo.fetcher.tile = tile;
+                self.fifo.fetcher.attr = attr;
+                self.fifo.fetcher.step = FetchStep::TileDataLow;
+            }
+            FetchStep::TileDataLow => {
+                // DMG re-samples SCY between TileNo and the data fetches;
+                // CGB latches the TileNo row (rubc-core phase_bg_low_sample).
+                if !self.fifo.fetcher.window && !cgb && self.scy != self.fifo.fetcher.scy_at_tile_no
+                {
+                    self.fifo.fetcher.y = ly.wrapping_add(self.scy);
+                    let (tile, attr) = self.fifo_fetch_tile_no(cgb);
+                    self.fifo.fetcher.tile = tile;
+                    self.fifo.fetcher.attr = attr;
+                }
+                let addr = self.fifo_tile_data_addr(cgb, ly);
+                self.fifo.fetcher.low = self.fifo_tile_data_byte(cgb, addr);
+                self.fifo.fetcher.step = FetchStep::TileDataHigh;
+            }
+            FetchStep::TileDataHigh => {
+                let addr = self.fifo_tile_data_addr(cgb, ly).wrapping_add(1);
+                self.fifo.fetcher.high = self.fifo_tile_data_byte(cgb, addr);
+                if self.fifo.fetcher.dummy_fetch_done {
+                    self.fifo.fetcher.step = FetchStep::Push;
+                } else {
+                    self.fifo.fetcher.dummy_fetch_done = true;
+                    self.fifo.fetcher.step = FetchStep::TileNo;
+                }
+            }
+            FetchStep::Push => unreachable!("push handled before tick accounting"),
+        }
+    }
+
+    fn fifo_fetch_tile_no(&self, cgb: bool) -> (u8, u8) {
+        let map_base: u16 = if self.fifo.fetcher.window {
+            if self.lcdc & 0x40 != 0 {
+                0x1C00
+            } else {
+                0x1800
+            }
+        } else if self.lcdc & 0x08 != 0 {
+            0x1C00
+        } else {
+            0x1800
+        };
+        let x_offset = if self.fifo.fetcher.window {
+            self.fifo.fetcher.fetcher_x & 0x1F
+        } else {
+            self.fifo.fetcher.fetcher_x.wrapping_add(self.scx / 8) & 0x1F
+        };
+        let y_offset = 32 * ((u16::from(self.fifo.fetcher.y) / 8) & 0x1F);
+        let offset = (y_offset + u16::from(x_offset)) & 0x03FF;
+        let tile = self.vram.read(map_base + offset, 0).unwrap_or(0);
+        let attr = if cgb {
+            self.vram.read(map_base + offset, 1).unwrap_or(0)
+        } else {
+            0
+        };
+        (tile, attr)
+    }
+
+    fn fifo_tile_data_addr(&self, cgb: bool, ly: u8) -> u16 {
+        // DMG samples SCY live during the data stages; window and CGB use the
+        // row latched at TileNo (rubc-core fetch_bg_tile_data_addr).
+        let y = if self.fifo.fetcher.window || cgb {
+            self.fifo.fetcher.y
+        } else {
+            ly.wrapping_add(self.scy)
+        };
+        let mut row = u16::from(y & 0x07);
+        if cgb && self.fifo.fetcher.attr & 0x40 != 0 {
+            row = 7 - row;
+        }
+        if self.lcdc & 0x10 != 0 {
+            u16::from(self.fifo.fetcher.tile) * 16 + row * 2
+        } else {
+            (0x1000_i32 + i32::from(self.fifo.fetcher.tile as i8) * 16 + i32::from(row) * 2) as u16
+        }
+    }
+
+    fn fifo_tile_data_byte(&self, cgb: bool, addr: u16) -> u8 {
+        let bank = if cgb && self.fifo.fetcher.attr & 0x08 != 0 {
+            1
+        } else {
+            0
+        };
+        self.vram.read(addr, bank).unwrap_or(0)
+    }
+
+    /// Shift one pixel out of the FIFO. Returns (shifted, output): a discard
+    /// (SCX&7 fine scroll) shifts without producing an LCD pixel and eats the
+    /// matching OBJ FIFO slot (rubc-core shift_pixel).
+    fn fifo_shift_pixel(&mut self, cgb: bool) -> (bool, Option<FifoOutput>) {
+        let Some(bg) = self.fifo.bg_fifo.pop() else {
+            return (false, None);
+        };
+        if self.fifo.scx_discard > 0 {
+            self.fifo.scx_discard -= 1;
+            let _ = self.fifo.sprite_fifo.pop();
+            return (true, None);
+        }
+        let sprite = self.fifo.sprite_fifo.pop().unwrap_or_default();
+        let pixel = if cgb {
+            self.fifo_resolve_cgb(bg, sprite)
+        } else {
+            self.fifo_resolve_dmg(bg, sprite)
+        };
+        let x = self.fifo.lcd_x;
+        self.fifo.lcd_x += 1;
+        if self.fifo.lcd_x >= 160 {
+            self.fifo.active = false;
+        }
+        (true, Some(FifoOutput { x, pixel }))
+    }
+
+    fn fifo_resolve_dmg(&self, bg: FifoPixel, sprite: FifoPixel) -> RenderedPpuPixel {
+        let bg_color = if self.lcdc & 0x01 == 0 {
+            0
+        } else {
+            bg.color & 0x03
+        };
+        let sprite_wins =
+            sprite.occupied && sprite.color != 0 && !(sprite.bg_priority && bg_color != 0);
+        if sprite_wins {
+            RenderedPpuPixel {
+                raw_color: sprite.color & 0x03,
+                source: LcdPixelSource::Obj(sprite.palette.unwrap_or(SpritePalette::Obp0)),
+                cgb_palette: sprite.cgb_palette,
+            }
+        } else {
+            RenderedPpuPixel {
+                raw_color: bg_color,
+                source: LcdPixelSource::Bg,
+                cgb_palette: bg.cgb_palette,
+            }
+        }
+    }
+
+    /// CGB BG/OBJ priority (Pan Docs table): LCDC.0 clear means OBJ always
+    /// wins; otherwise BG color 0 loses; otherwise either priority bit keeps
+    /// BG 1-3 in front.
+    fn fifo_resolve_cgb(&self, bg: FifoPixel, sprite: FifoPixel) -> RenderedPpuPixel {
+        let bg_color = bg.color & 0x03;
+        let sprite_opaque = sprite.occupied && sprite.color != 0;
+        let obj_master = self.lcdc & 0x01 == 0;
+        let bg_has_priority = bg.bg_priority || sprite.bg_priority;
+        let sprite_wins = sprite_opaque && (obj_master || bg_color == 0 || !bg_has_priority);
+        if sprite_wins {
+            RenderedPpuPixel {
+                raw_color: sprite.color & 0x03,
+                source: LcdPixelSource::Obj(sprite.palette.unwrap_or(SpritePalette::Obp0)),
+                cgb_palette: sprite.cgb_palette,
+            }
+        } else {
+            RenderedPpuPixel {
+                raw_color: bg_color,
+                source: LcdPixelSource::Bg,
+                cgb_palette: bg.cgb_palette,
+            }
+        }
+    }
+
     fn write_register(&mut self, write: PpuRegisterWrite) {
         match write.addr {
-            0xFF40 => self.lcdc = write.value,
+            0xFF40 => {
+                let old = self.lcdc;
+                self.lcdc = write.value;
+                if write.value & 0x80 == 0 {
+                    // LCD off: the line render state and frame window state
+                    // reset (rubc-core write_lcdc LCD-off path).
+                    self.fifo = LineRenderState::default();
+                    self.fifo_window_y_condition = false;
+                    self.fifo_window_line = 0;
+                } else if self.fifo.active && (old ^ write.value) & 0x20 != 0 {
+                    // LCDC.5 toggled mid-line: a disable takes effect once the
+                    // BG FIFO drains (rubc-core window_disable_pending).
+                    if old & 0x20 != 0 && self.fifo.fetcher.window {
+                        self.fifo.window_disable_pending = true;
+                    } else if write.value & 0x20 != 0 {
+                        self.fifo.window_disable_pending = false;
+                    }
+                }
+            }
             0xFF42 => self.scy = write.value,
             0xFF43 => self.scx = write.value,
             0xFF4A => self.wy = write.value,
