@@ -634,8 +634,8 @@ impl MachineBus {
         {
             return None;
         }
-        let dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE).clamp(1, 80);
-        Some(((dot - 1) / 4) as usize)
+        let dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
+        Some((dot / 4) as usize)
     }
 
     fn corrupt_oam_for_bug(&mut self, addr: u16, access: OamBugAccess) {
@@ -756,6 +756,7 @@ impl MachineBus {
         while i < self.scheduled_writes.len() {
             if self.scheduled_writes[i].at <= now {
                 let write = self.scheduled_writes.remove(i);
+                self.corrupt_oam_for_bug(write.addr, OamBugAccess::Write);
                 self.write_visible(write.addr, write.value);
             } else {
                 i += 1;
@@ -767,13 +768,11 @@ impl MachineBus {
 impl CpuBus for MachineBus {
     fn read_m(&mut self, addr: u16) -> u8 {
         self.advance_to(CpuTime(self.cpu_now.0 + 16));
-        self.read_latched(addr)
+        self.read_latched_for_oam_bug(addr, OamBugAccess::Read)
     }
     fn read_m_oam_bug_idu(&mut self, addr: u16) -> u8 {
         self.advance_to(CpuTime(self.cpu_now.0 + 16));
-        let value = self.read_latched(addr);
-        self.corrupt_oam_for_bug(addr, OamBugAccess::ReadIncDec);
-        value
+        self.read_latched_for_oam_bug(addr, OamBugAccess::ReadIncDec)
     }
     fn write_m(&mut self, addr: u16, value: u8) {
         self.schedule_cpu_write(
@@ -809,7 +808,7 @@ impl CpuBus for MachineBus {
     }
     fn oam_bug_idu_m(&mut self, addr: u16) {
         self.idle_m();
-        self.corrupt_oam_for_bug(addr, OamBugAccess::ReadIncDec);
+        self.corrupt_oam_for_bug(addr, OamBugAccess::Write);
     }
     fn oam_bug_idu_glitch(&mut self, addr: u16) {
         self.corrupt_oam_for_bug(addr, OamBugAccess::Write);
@@ -835,11 +834,7 @@ impl CpuBus for MachineBus {
         }
     }
     fn read_latched(&mut self, addr: u16) -> u8 {
-        self.drain_scheduled_writes();
-        if matches!(addr, 0xFE00..=0xFEFF) {
-            self.corrupt_oam_for_bug(addr, OamBugAccess::Read);
-        }
-        self.read_visible(addr)
+        self.read_latched_for_oam_bug(addr, OamBugAccess::Read)
     }
     fn write_latched(&mut self, addr: u16, value: u8) {
         self.write_visible(addr, value);
@@ -851,6 +846,16 @@ impl CpuBus for MachineBus {
         CPU_ACCESS_END_OFFSET
     }
     fn sync_ppu_to_cpu(&mut self) {}
+}
+
+impl MachineBus {
+    fn read_latched_for_oam_bug(&mut self, addr: u16, access: OamBugAccess) -> u8 {
+        self.drain_scheduled_writes();
+        if matches!(addr, 0xFE00..=0xFEFF) {
+            self.corrupt_oam_for_bug(addr, access);
+        }
+        self.read_visible(addr)
+    }
 }
 
 #[cfg(test)]
@@ -940,6 +945,62 @@ mod tests {
             machine.read_io(0xFF55),
             Some(0xFF),
             "HDMA completes after second HBlank block"
+        );
+    }
+
+    fn dmg_machine_scanning_oam_row(row: usize) -> MachineNg {
+        let mut machine =
+            MachineNg::from_rom(GbModel::DmgB, &[0; 0x8000]).expect("valid DMG machine");
+        machine.bus.io[0x40] = 0x91;
+        let dot = (row as u64) * 4;
+        machine.bus.spine.ppu_dot = dot;
+        machine.bus.spine.line_dot = dot as u16;
+        for (i, byte) in machine.bus.oam.iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        machine
+    }
+
+    #[test]
+    fn oam_bug_read_write_patterns_match_documented_row_formula() {
+        let mut read = dmg_machine_scanning_oam_row(3);
+        read.bus.corrupt_oam_for_bug(0xFE20, OamBugAccess::Read);
+        assert_eq!(
+            &read.bus.oam[24..32],
+            &[0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17],
+            "OAM read during row 3 copies previous row with word0=b|(a&c)"
+        );
+
+        let mut write = dmg_machine_scanning_oam_row(3);
+        write.bus.corrupt_oam_for_bug(0xFE20, OamBugAccess::Write);
+        assert_eq!(
+            &write.bus.oam[24..32],
+            &[0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17],
+            "OAM write during row 3 uses ((a^c)&(b^c))^c for word0, then copies previous row"
+        );
+    }
+
+    #[test]
+    fn oam_bug_inc_dec_pattern_matches_documented_three_row_formula() {
+        let mut machine = dmg_machine_scanning_oam_row(4);
+        machine
+            .bus
+            .corrupt_oam_for_bug(0xFE20, OamBugAccess::ReadIncDec);
+
+        assert_eq!(
+            &machine.bus.oam[16..24],
+            &[0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F],
+            "INC/DEC first corrupts previous row word0 from three-row hardware formula"
+        );
+        assert_eq!(
+            &machine.bus.oam[24..32],
+            &[0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F],
+            "INC/DEC copies the corrupted previous row into current row"
+        );
+        assert_eq!(
+            &machine.bus.oam[32..40],
+            &[0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F],
+            "INC/DEC then applies the normal read-copy pattern to the current scan row"
         );
     }
 }

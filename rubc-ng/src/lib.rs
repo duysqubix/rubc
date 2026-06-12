@@ -202,8 +202,9 @@ mod tests {
         assert_eq!(
             stop,
             RunStopNg::BlarggDone,
-            "{relative} must terminate through serial; serial={:?}",
-            machine.serial_output()
+            "{relative} must terminate through serial/cart oracle; serial={:?} cart={:?}",
+            machine.serial_output(),
+            machine.blargg_cart_text()
         );
         assert!(
             machine.blargg_passed(),
@@ -251,15 +252,20 @@ mod tests {
     }
 
     #[test]
-    fn machine_ng_executes_oam_bug_known_passing_prefix_to_blargg_passed() {
-        // W8a slice 3 wires the assembled MachineNg to the generic blargg oracle
-        // and ports the cheap LCD-on + OAM-corruption hooks. The remaining
-        // scanline/sub-dot OAM-corruption phase starts at single #4 and is
-        // documented on rubc-qaiv for W8b; do not pretend the combined ROM passes.
+    fn machine_ng_executes_oam_bug_passing_subtests_to_blargg_passed() {
+        // W8b·2c raises the OAM floor to the old-core honest 7/8: singles
+        // 1-6 and 8 pass via real blargg cart/serial signatures. Single #7
+        // (timing_effect) remains an exposed diagnostic for the later sub-dot
+        // timing-effect pattern, so it is not claimed here.
         for relative in [
+            "oam_bug/oam_bug.gb",
             "oam_bug/rom_singles/1-lcd_sync.gb",
             "oam_bug/rom_singles/2-causes.gb",
             "oam_bug/rom_singles/3-non_causes.gb",
+            "oam_bug/rom_singles/4-scanline_timing.gb",
+            "oam_bug/rom_singles/5-timing_bug.gb",
+            "oam_bug/rom_singles/6-timing_no_bug.gb",
+            "oam_bug/rom_singles/8-instr_effect.gb",
         ] {
             assert_machine_ng_blargg_dmg_passes(relative, 120_000_000);
         }
