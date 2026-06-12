@@ -51,6 +51,15 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    fn read_reference_rom(relative: &str) -> Vec<u8> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/test-suites/gb-test-roms")
+            .join(relative);
+        std::fs::read(&path).unwrap_or_else(|err| panic!("{} is present: {err}", path.display()))
+    }
+
     #[test]
     fn gb_model_exposes_full_hardware_set_and_predicates() {
         assert_eq!(GbModel::ALL.len(), 13);
@@ -144,12 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn machine_ng_executes_cpu_instrs_rom_to_blargg_serial_passed() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .expect("rubc-ng has workspace parent")
-            .join("reference/test-suites/gb-test-roms/cpu_instrs/individual/01-special.gb");
-        let rom = std::fs::read(&path).expect("blargg cpu_instrs ROM is present");
+    fn machine_ng_executes_cpu_instrs_individual_rom_to_blargg_serial_passed() {
+        let rom = read_reference_rom("cpu_instrs/individual/01-special.gb");
         let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
 
         let stop = machine.run_blargg(8_000_000);
@@ -164,6 +169,56 @@ mod tests {
             "blargg serial output must contain Passed, got {:?}",
             machine.serial_output()
         );
+    }
+
+    #[test]
+    fn machine_ng_executes_combined_cpu_instrs_rom_to_blargg_serial_passed() {
+        let rom = read_reference_rom("cpu_instrs/cpu_instrs.gb");
+        let mut machine = MachineNg::boot_cgb(&rom).expect("ROM boots");
+
+        let stop = machine.run_blargg(120_000_000);
+
+        assert_eq!(
+            stop,
+            RunStopNg::BlarggDone,
+            "combined cpu_instrs must terminate through serial; serial={:?}",
+            machine.serial_output()
+        );
+        assert!(
+            machine.serial_output().contains("Passed"),
+            "combined blargg serial output must contain Passed, got {:?}",
+            machine.serial_output()
+        );
+    }
+
+    fn assert_machine_ng_blargg_dmg_passes(relative: &str, max_instructions: u64) {
+        let rom = read_reference_rom(relative);
+        let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
+
+        let stop = machine.run_blargg(max_instructions);
+
+        assert_eq!(
+            stop,
+            RunStopNg::BlarggDone,
+            "{relative} must terminate through serial; serial={:?}",
+            machine.serial_output()
+        );
+        assert!(
+            machine.blargg_passed(),
+            "{relative} must report Passed, serial={:?} cart={:?}",
+            machine.serial_output(),
+            machine.blargg_cart_text()
+        );
+    }
+
+    #[test]
+    fn machine_ng_executes_mem_timing_to_blargg_serial_passed() {
+        assert_machine_ng_blargg_dmg_passes("mem_timing/mem_timing.gb", 120_000_000);
+    }
+
+    #[test]
+    fn machine_ng_executes_mem_timing_2_to_blargg_serial_passed() {
+        assert_machine_ng_blargg_dmg_passes("mem_timing-2/mem_timing.gb", 120_000_000);
     }
 
     #[test]
