@@ -13,6 +13,31 @@ use crate::timing::TimingTable;
 
 const VBLANK_IRQ: u8 = 0x01;
 const STAT_IRQ: u8 = 0x02;
+
+#[derive(Clone, Copy, Debug)]
+struct BootCpuProfile {
+    a: u8,
+    f: u8,
+    b: u8,
+    c: u8,
+    d: u8,
+    e: u8,
+    h: u8,
+    l: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct BootProfile {
+    cpu: BootCpuProfile,
+    div: u16,
+    p1: u8,
+    sc: u8,
+    nr52: u8,
+    stat: u8,
+    ly: u8,
+    lyc: u8,
+    dma: u8,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StepRecord {
     pub time: Time,
@@ -111,11 +136,189 @@ impl Hdma {
         0x8000 | (u16::from(self.dst_high & 0x1F) << 8) | u16::from(self.dst_low & 0xF0)
     }
 
+    #[allow(dead_code)]
     fn status(&self) -> u8 {
         if self.active {
             0x80 | self.remaining_blocks.saturating_sub(1)
         } else {
             0xFF
+        }
+    }
+}
+
+impl BootProfile {
+    fn for_model(model: GbModel, rom: &[u8]) -> Self {
+        let dmg_checksum_flags = if rom.get(0x014D).copied().unwrap_or(0) == 0 {
+            0x80
+        } else {
+            0xB0
+        };
+        let sgb_div_low: u16 = if rom.get(0x014E..=0x014F) == Some(&[0xA7, 0x96]) {
+            0x84
+        } else {
+            0x74
+        };
+        match model {
+            GbModel::Dmg0 => Self {
+                cpu: BootCpuProfile {
+                    a: 0x01,
+                    f: 0x00,
+                    b: 0xFF,
+                    c: 0x13,
+                    d: 0x00,
+                    e: 0xC1,
+                    h: 0x84,
+                    l: 0x03,
+                },
+                div: 0x1834,
+                p1: 0xCF,
+                sc: 0x7E,
+                nr52: 0xF1,
+                stat: 0x83,
+                ly: 0x91,
+                lyc: 0x00,
+                dma: 0xFF,
+            },
+            GbModel::DmgA | GbModel::DmgB => Self {
+                cpu: BootCpuProfile {
+                    a: 0x01,
+                    f: dmg_checksum_flags,
+                    b: 0x00,
+                    c: 0x13,
+                    d: 0x00,
+                    e: 0xD8,
+                    h: 0x01,
+                    l: 0x4D,
+                },
+                div: 0xABD0,
+                p1: 0xCF,
+                sc: 0x7E,
+                nr52: 0xF1,
+                stat: 0x80,
+                ly: 0x00,
+                lyc: 0x00,
+                dma: 0xFF,
+            },
+            GbModel::Mgb => Self {
+                cpu: BootCpuProfile {
+                    a: 0xFF,
+                    f: dmg_checksum_flags,
+                    b: 0x00,
+                    c: 0x13,
+                    d: 0x00,
+                    e: 0xD8,
+                    h: 0x01,
+                    l: 0x4D,
+                },
+                div: 0xABD0,
+                p1: 0xCF,
+                sc: 0x7E,
+                nr52: 0xF1,
+                stat: 0x80,
+                ly: 0x00,
+                lyc: 0x00,
+                dma: 0xFF,
+            },
+            GbModel::Sgb => Self {
+                cpu: BootCpuProfile {
+                    a: 0x01,
+                    f: 0x00,
+                    b: 0x00,
+                    c: 0x14,
+                    d: 0x00,
+                    e: 0x00,
+                    h: 0xC0,
+                    l: 0x60,
+                },
+                div: 0xD800 | sgb_div_low.saturating_sub(16),
+                p1: 0xFF,
+                sc: 0x7E,
+                nr52: 0xF0,
+                stat: 0x80,
+                ly: 0x00,
+                lyc: 0x00,
+                dma: 0xFF,
+            },
+            GbModel::Sgb2 => Self {
+                cpu: BootCpuProfile {
+                    a: 0xFF,
+                    f: 0x00,
+                    b: 0x00,
+                    c: 0x14,
+                    d: 0x00,
+                    e: 0x00,
+                    h: 0xC0,
+                    l: 0x60,
+                },
+                div: 0xD800 | sgb_div_low.saturating_sub(16),
+                p1: 0xFF,
+                sc: 0x7E,
+                nr52: 0xF0,
+                stat: 0x80,
+                ly: 0x00,
+                lyc: 0x00,
+                dma: 0xFF,
+            },
+            GbModel::Cgb0 => Self {
+                cpu: BootCpuProfile {
+                    a: 0x11,
+                    f: 0x80,
+                    b: 0x00,
+                    c: 0x00,
+                    d: 0x00,
+                    e: 0x08,
+                    h: 0x00,
+                    l: 0x7C,
+                },
+                div: 0x2888,
+                p1: 0xFF,
+                sc: 0x7E,
+                nr52: 0xF1,
+                stat: 0x80,
+                ly: 0x00,
+                lyc: 0x00,
+                dma: 0x00,
+            },
+            GbModel::Agb => Self {
+                cpu: BootCpuProfile {
+                    a: 0x11,
+                    f: 0x00,
+                    b: 0x01,
+                    c: 0x00,
+                    d: 0x00,
+                    e: 0x08,
+                    h: 0x00,
+                    l: 0x7C,
+                },
+                div: 0x2680,
+                p1: 0xFF,
+                sc: 0x7E,
+                nr52: 0xF1,
+                stat: 0x80,
+                ly: 0x00,
+                lyc: 0x00,
+                dma: 0x00,
+            },
+            GbModel::CgbA | GbModel::CgbB | GbModel::CgbC | GbModel::CgbD | GbModel::CgbE => Self {
+                cpu: BootCpuProfile {
+                    a: 0x11,
+                    f: 0x80,
+                    b: 0x00,
+                    c: 0x00,
+                    d: 0x00,
+                    e: 0x08,
+                    h: 0x00,
+                    l: 0x7C,
+                },
+                div: 0x267C,
+                p1: 0xFF,
+                sc: 0x7E,
+                nr52: 0xF1,
+                stat: 0x82,
+                ly: 0x00,
+                lyc: 0x00,
+                dma: 0x00,
+            },
         }
     }
 }
@@ -126,18 +329,7 @@ impl MachineNg {
     }
 
     pub fn boot_dmg(rom: &[u8]) -> Result<Self, String> {
-        let mut machine = Self::boot_for_model(GbModel::DmgB, rom)?;
-        machine.cpu.r.a = 0x01;
-        machine.cpu.r.f = 0xB0;
-        machine.cpu.r.b = 0x00;
-        machine.cpu.r.c = 0x13;
-        machine.cpu.r.d = 0x00;
-        machine.cpu.r.e = 0xD8;
-        machine.cpu.r.h = 0x01;
-        machine.cpu.r.l = 0x4D;
-        machine.cpu.r.sp = 0xFFFE;
-        machine.cpu.r.pc = 0x0100;
-        Ok(machine)
+        Self::boot_for_model(GbModel::DmgB, rom)
     }
 
     pub fn boot_cgb(rom: &[u8]) -> Result<Self, String> {
@@ -149,29 +341,35 @@ impl MachineNg {
     }
 
     pub fn boot_cgb_native(rom: &[u8]) -> Result<Self, String> {
-        let mut machine = Self::boot_for_model(GbModel::CgbE, rom)?;
-        machine.cpu.r.a = 0x11;
-        machine.cpu.r.f = 0x80;
-        machine.cpu.r.b = 0x00;
-        machine.cpu.r.c = 0x00;
-        machine.cpu.r.d = 0x00;
-        machine.cpu.r.e = 0x08;
-        machine.cpu.r.h = 0x00;
-        machine.cpu.r.l = 0x7C;
-        machine.cpu.r.sp = 0xFFFE;
-        machine.cpu.r.pc = 0x0100;
-        Ok(machine)
+        Self::boot_for_model(GbModel::CgbE, rom)
     }
 
     fn boot_for_model(model: GbModel, rom: &[u8]) -> Result<Self, String> {
         if rom.is_empty() {
             return Err("ROM must contain at least one byte".to_owned());
         }
-        Ok(Self {
+        let mut machine = Self {
             model,
             cpu: Cpu::new(),
             bus: MachineBus::new(model, rom),
-        })
+        };
+        machine.apply_post_boot_profile(rom);
+        Ok(machine)
+    }
+
+    fn apply_post_boot_profile(&mut self, rom: &[u8]) {
+        let profile = BootProfile::for_model(self.model, rom);
+        self.cpu.r.a = profile.cpu.a;
+        self.cpu.r.f = profile.cpu.f;
+        self.cpu.r.b = profile.cpu.b;
+        self.cpu.r.c = profile.cpu.c;
+        self.cpu.r.d = profile.cpu.d;
+        self.cpu.r.e = profile.cpu.e;
+        self.cpu.r.h = profile.cpu.h;
+        self.cpu.r.l = profile.cpu.l;
+        self.cpu.r.sp = 0xFFFE;
+        self.cpu.r.pc = 0x0100;
+        self.bus.apply_post_boot_profile(profile);
     }
 
     pub fn model(&self) -> GbModel {
@@ -341,6 +539,17 @@ impl MachineNg {
         [r.b, r.c, r.d, r.e, r.h, r.l] == MOONEYE_PASS
     }
 
+    pub fn mooneye_signature(&self) -> [u8; 6] {
+        let r = &self.cpu.r;
+        [r.b, r.c, r.d, r.e, r.h, r.l]
+    }
+
+    pub fn hram_debug_prefix(&self) -> [u8; 32] {
+        let mut out = [0; 32];
+        out.copy_from_slice(&self.bus.hram[..32]);
+        out
+    }
+
     fn opcode_at_pc(&self) -> u8 {
         self.bus.read_visible(self.cpu.r.pc)
     }
@@ -367,7 +576,7 @@ impl MachineBus {
             wram: [[0; 0x1000]; 8],
             oam: [0; 0xA0],
             hram: [0; 0x7F],
-            io: [0; 0x80],
+            io: [0xFF; 0x80],
             ie: 0,
             if_: 0xE1,
             vram_bank: 0,
@@ -411,32 +620,116 @@ impl MachineBus {
         bus
     }
 
+    fn apply_post_boot_profile(&mut self, profile: BootProfile) {
+        self.timer = Timer::post_boot(&self.spine, profile.div, 0x00, 0x00, 0x00);
+        self.io.fill(0xFF);
+        self.io[0x00] = profile.p1;
+        self.io[0x01] = 0x00;
+        self.io[0x02] = profile.sc;
+        self.io[0x0F] = 0xE1;
+        self.io[0x40] = 0x91;
+        self.io[0x41] = profile.stat;
+        self.io[0x42] = 0x00;
+        self.io[0x43] = 0x00;
+        self.io[0x45] = profile.lyc;
+        self.io[0x46] = profile.dma;
+        self.io[0x47] = 0xFC;
+        self.io[0x48] = 0xFF;
+        self.io[0x49] = 0xFF;
+        self.io[0x4A] = 0x00;
+        self.io[0x4B] = 0x00;
+        self.ie = 0x00;
+        self.if_ = 0xE1;
+        let boot_line_dot = match profile.stat & 0x03 {
+            0 => 252,
+            1 => 0,
+            2 => 0,
+            3 => 80,
+            _ => unreachable!(),
+        };
+        self.spine.ppu_dot = u64::from(profile.ly) * DMG_DOTS_PER_LINE + boot_line_dot;
+        self.spine.line_dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE) as u16;
+        self.spine.frame_dot = self.spine.ppu_dot as u32;
+        self.vram_bank = 0;
+        self.wram_bank = 1;
+        self.hdma = Hdma {
+            src_high: 0xFF,
+            src_low: 0xF0,
+            dst_high: 0x1F,
+            dst_low: 0xF0,
+            remaining_blocks: 0,
+            active: false,
+        };
+        self.apu = Apu::default();
+        let cgb = self.model.is_cgb();
+        self.apu.write(0xFF10, 0x00, cgb);
+        self.apu.write(0xFF11, 0x80, cgb);
+        self.apu.write(0xFF12, 0xF3, cgb);
+        self.apu.write(
+            0xFF14,
+            if profile.nr52 & 0x01 != 0 { 0x80 } else { 0x00 },
+            cgb,
+        );
+        self.apu.write(0xFF16, 0x00, cgb);
+        self.apu.write(0xFF17, 0x00, cgb);
+        self.apu.write(0xFF19, 0x00, cgb);
+        self.apu.write(0xFF1A, 0x00, cgb);
+        self.apu.write(0xFF1C, 0x00, cgb);
+        self.apu.write(0xFF1E, 0x00, cgb);
+        self.apu.write(0xFF21, 0x00, cgb);
+        self.apu.write(0xFF22, 0x00, cgb);
+        self.apu.write(0xFF23, 0x00, cgb);
+        self.apu.write(0xFF24, 0x77, cgb);
+        self.apu.write(0xFF25, 0xF3, cgb);
+        if cgb {
+            self.io[0x4D] = 0x00;
+            self.io[0x4F] = 0x00;
+            self.io[0x56] = 0x3E;
+            self.io[0x68] = 0x88;
+            self.io[0x6A] = 0x90;
+            self.io[0x70] = 0x00;
+            self.io[0x72] = 0x00;
+            self.io[0x73] = 0x00;
+            self.io[0x75] = 0x00;
+            self.io[0x76] = 0x00;
+            self.io[0x77] = 0x00;
+        }
+    }
+
     fn read_io(&self, addr: u16) -> Option<u8> {
         if !(0xFF00..=0xFFFF).contains(&addr) {
             return None;
         }
         Some(match addr {
+            0xFF03 | 0xFF08..=0xFF0E => 0xFF,
             0xFF04..=0xFF07 => self.timer.read(addr)?,
             0xFF0F => self.if_ | 0xE0,
             0xFF10..=0xFF3F => self.apu.read_for_model(addr, self.model.is_cgb()),
+            0xFF00 => self.io[0x00] | 0xC0,
+            0xFF02 => self.io[0x02] | 0x7E,
             0xFF40 => self.io[0x40],
-            0xFF41 => self.ppu_stat(),
+            0xFF41 => self.io[0x41] | 0x80,
             0xFF42 | 0xFF43 | 0xFF45 | 0xFF47..=0xFF4B => self.io[(addr - 0xFF00) as usize],
             0xFF44 => self.ly(),
+            0xFF4D if matches!(self.model, GbModel::Cgb0) => 0xFF,
             0xFF4D if self.model.is_cgb() => {
                 0x7E | if self.double_speed { 0x80 } else { 0x00 } | u8::from(self.key1_prepare)
             }
             0xFF4D => 0xFF,
-            0xFF4F => 0xFE | self.vram_bank,
-            0xFF51..=0xFF55 if self.model.is_cgb() => match addr {
-                0xFF51 => self.hdma.src_high,
-                0xFF52 => self.hdma.src_low & 0xF0,
-                0xFF53 => self.hdma.dst_high & 0x1F,
-                0xFF54 => self.hdma.dst_low & 0xF0,
-                0xFF55 => self.hdma.status(),
-                _ => unreachable!(),
-            },
-            0xFF70 => 0xF8 | self.wram_bank,
+            0xFF4C | 0xFF4E => 0xFF,
+            0xFF4F if self.model.is_cgb() => 0xFE | self.vram_bank,
+            0xFF4F => 0xFF,
+            0xFF50 => 0xFF,
+            0xFF55 if self.model.is_cgb() && self.hdma.active => self.hdma.status(),
+            0xFF51..=0xFF55 if self.model.is_cgb() => 0xFF,
+            0xFF51..=0xFF67 => 0xFF,
+            0xFF68 | 0xFF6A if self.model.is_cgb() => self.io[(addr - 0xFF00) as usize] | 0x40,
+            0xFF68..=0xFF7F if !self.model.is_cgb() => 0xFF,
+            0xFF69 | 0xFF6B..=0xFF71 | 0xFF74 => 0xFF,
+            0xFF72 | 0xFF73 if self.model.is_cgb() => self.io[(addr - 0xFF00) as usize],
+            0xFF75 if self.model.is_cgb() => self.io[0x75] | 0x8F,
+            0xFF76 | 0xFF77 if self.model.is_cgb() => 0x00,
+            0xFF78..=0xFF7F => 0xFF,
             0xFFFF => self.ie,
             _ => self.io[(addr - 0xFF00) as usize],
         })
@@ -497,6 +790,9 @@ impl MachineBus {
             0xFF4F => self.vram_bank = value & 1,
             0xFF51..=0xFF55 if self.model.is_cgb() => self.write_hdma_register(addr, value),
             0xFF70 => self.wram_bank = (value & 0x07).max(1),
+            0xFF72 | 0xFF73 if self.model.is_cgb() => self.io[(addr - 0xFF00) as usize] = value,
+            0xFF75 if self.model.is_cgb() => self.io[0x75] = value & 0x70,
+            0xFF76 | 0xFF77 if self.model.is_cgb() => {}
             0xFFFF => self.ie = value,
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
             _ => self.io[(addr - 0xFF00) as usize] = value,
@@ -613,6 +909,7 @@ impl MachineBus {
             0
         }
     }
+    #[allow(dead_code)]
     fn ppu_stat(&self) -> u8 {
         let lyc = u8::from(self.ly() == self.io[0x45]);
         0x80 | (self.io[0x41] & 0x78) | (lyc << 2) | self.ppu_mode()
