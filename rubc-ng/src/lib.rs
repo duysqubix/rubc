@@ -222,6 +222,48 @@ mod tests {
     }
 
     #[test]
+    fn machine_ng_executes_halt_bug_to_blargg_passed() {
+        assert_machine_ng_blargg_dmg_passes("halt_bug.gb", 120_000_000);
+    }
+
+    #[test]
+    fn machine_ng_executes_interrupt_time_cgb_double_speed_to_blargg_passed() {
+        let rom = read_reference_rom("interrupt_time/interrupt_time.gb");
+        let mut machine = MachineNg::boot_cgb_native(&rom).expect("ROM boots as native CGB");
+
+        let stop = machine.run_blargg(120_000_000);
+
+        assert_eq!(
+            stop,
+            RunStopNg::BlarggDone,
+            "interrupt_time CGB double-speed gate must terminate; serial={:?} cart={:?}",
+            machine.serial_output(),
+            machine.blargg_cart_text()
+        );
+        assert!(
+            machine.blargg_passed(),
+            "interrupt_time CGB double-speed must report Passed; serial={:?} cart={:?}",
+            machine.serial_output(),
+            machine.blargg_cart_text()
+        );
+    }
+
+    #[test]
+    fn machine_ng_executes_oam_bug_known_passing_prefix_to_blargg_passed() {
+        // W8a slice 3 wires the assembled MachineNg to the generic blargg oracle
+        // and ports the cheap LCD-on + OAM-corruption hooks. The remaining
+        // scanline/sub-dot OAM-corruption phase starts at single #4 and is
+        // documented on rubc-qaiv for W8b; do not pretend the combined ROM passes.
+        for relative in [
+            "oam_bug/rom_singles/1-lcd_sync.gb",
+            "oam_bug/rom_singles/2-causes.gb",
+            "oam_bug/rom_singles/3-non_causes.gb",
+        ] {
+            assert_machine_ng_blargg_dmg_passes(relative, 120_000_000);
+        }
+    }
+
+    #[test]
     fn machine_ng_survives_frames_and_produces_framebuffer() {
         let rom = vec![0x00; 0x8000];
         let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
