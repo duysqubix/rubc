@@ -51,3 +51,4 @@ rubc-wasm/web/pkg/
 deploy/certs/*.pem
 deploy/certs/*.key
 deploy/certs/*.crt
+/reference
