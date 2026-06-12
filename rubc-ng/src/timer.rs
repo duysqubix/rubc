@@ -55,6 +55,16 @@ impl Timer {
         }
     }
 
+    pub fn post_boot(spine: &ClockSpine, div: u16, tima: u8, tma: u8, tac: u8) -> Self {
+        let mut timer = Self::power_on(spine);
+        timer.div = div;
+        timer.tima = tima;
+        timer.tma = tma;
+        timer.tac = tac & 0x07;
+        timer.previous_and_result = timer.timer_input();
+        timer
+    }
+
     pub fn observe_spine(&mut self, spine: &ClockSpine) {
         while self.observed_cpu_t < spine.cpu_t {
             self.observed_cpu_t += 1;

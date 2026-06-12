@@ -21,7 +21,7 @@ pub struct ConformanceConfig {
 }
 
 impl ConformanceConfig {
-    pub const FULL_MANIFEST_PASS_FLOOR: usize = 114;
+    pub const FULL_MANIFEST_PASS_FLOOR: usize = 121;
     pub const DEFAULT_SUBSET_PASS_FLOOR: usize = 3;
 
     pub fn default_test_subset() -> Self {
@@ -222,17 +222,18 @@ fn run_mooneye(
     } else {
         (
             ConformanceOutcome::Fail,
-            format!("mooneye oracle not reached: stop={stop:?}, pass_signature=false"),
+            format!(
+                "mooneye oracle not reached: stop={stop:?}, signature={:02X?}, hram0={:02X?}, serial={:?}",
+                machine.mooneye_signature(),
+                machine.hram_debug_prefix(),
+                machine.serial_output()
+            ),
         )
     }
 }
 
 fn boot_machine(model: GbModel, rom: &[u8]) -> Result<MachineNg, String> {
-    if model.is_cgb() {
-        MachineNg::boot_cgb_native(rom)
-    } else {
-        MachineNg::boot_dmg(rom)
-    }
+    MachineNg::from_rom(model, rom)
 }
 
 fn read_rom(workspace_root: &Path, manifest_path: &str) -> Result<Vec<u8>, String> {
@@ -241,14 +242,30 @@ fn read_rom(workspace_root: &Path, manifest_path: &str) -> Result<Vec<u8>, Strin
 }
 
 fn effective_model(intended: &[String]) -> (GbModel, &'static str) {
-    if intended
+    intended
         .iter()
-        .any(|model| model.starts_with("cgb") || model == "agb")
-    {
-        (GbModel::CgbE, " (slice1 representative for CGB family)")
-    } else {
-        (GbModel::DmgB, " (slice1 representative for DMG family)")
-    }
+        .find_map(|model| parse_model(model))
+        .map(|model| (model, ""))
+        .unwrap_or((GbModel::DmgB, " (fallback)"))
+}
+
+fn parse_model(model: &str) -> Option<GbModel> {
+    Some(match model {
+        "dmg0" => GbModel::Dmg0,
+        "dmg-a" => GbModel::DmgA,
+        "dmg-b" | "dmg-c" => GbModel::DmgB,
+        "mgb" => GbModel::Mgb,
+        "sgb" => GbModel::Sgb,
+        "sgb2" => GbModel::Sgb2,
+        "cgb0" => GbModel::Cgb0,
+        "cgb-a" => GbModel::CgbA,
+        "cgb-b" => GbModel::CgbB,
+        "cgb-c" => GbModel::CgbC,
+        "cgb-d" => GbModel::CgbD,
+        "cgb-e" => GbModel::CgbE,
+        "agb" => GbModel::Agb,
+        _ => return None,
+    })
 }
 
 fn real_oracle_detail(machine: &MachineNg) -> String {

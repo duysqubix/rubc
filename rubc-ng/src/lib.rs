@@ -139,18 +139,14 @@ mod tests {
             "TAC exposes upper bits as set"
         );
 
-        assert_ne!(
-            machine.read_io(0xFF04),
-            Some(1),
-            "deliberately wrong expected probe: DIV visible byte must not advance before 256 CPU-T"
-        );
+        let initial_div = machine.read_io(0xFF04).expect("DIV is mapped");
         while machine.spine().cpu_t < 256 {
             machine.step();
         }
         assert_eq!(
             machine.read_io(0xFF04),
-            Some(1),
-            "DIV visible byte advances after 256 spine CPU-T ticks"
+            Some(initial_div.wrapping_add(1)),
+            "DIV visible byte advances after 256 spine CPU-T ticks from post-boot seed"
         );
     }
 
