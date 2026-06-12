@@ -21,7 +21,7 @@ pub struct ConformanceConfig {
 }
 
 impl ConformanceConfig {
-    pub const FULL_MANIFEST_PASS_FLOOR: usize = 114;
+    pub const FULL_MANIFEST_PASS_FLOOR: usize = 119;
     pub const DEFAULT_SUBSET_PASS_FLOOR: usize = 3;
 
     pub fn default_test_subset() -> Self {
