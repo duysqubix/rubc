@@ -654,9 +654,9 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/oam_bug.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "pass"
-notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+notes = "OAM corruption test readme says DMG; combined passes through the real cart/console signature even though single 7 remains an exposed timing-effect diagnostic."
 [rom.expectation]
 kind = "serial-pass-string"
 string = "Passed"
@@ -664,7 +664,7 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/1-lcd_sync.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "pass"
 notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
 [rom.expectation]
@@ -674,7 +674,7 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/2-causes.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "pass"
 notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
 [rom.expectation]
@@ -684,7 +684,7 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/3-non_causes.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "pass"
 notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
 [rom.expectation]
@@ -694,7 +694,7 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/4-scanline_timing.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "pass"
 notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
 [rom.expectation]
@@ -704,7 +704,7 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/5-timing_bug.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "pass"
 notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
 [rom.expectation]
@@ -714,7 +714,7 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/6-timing_no_bug.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "pass"
 notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
 [rom.expectation]
@@ -724,7 +724,7 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/7-timing_effect.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "fail"
 notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed. Old scorecard marks oam_bug 7/8; sub-test 7 needs sub-dot OAM-corruption phase."
 [rom.expectation]
@@ -734,7 +734,7 @@ string = "Passed"
 [[rom]]
 path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/8-instr_effect.gb"
 suite = "gb-test-roms"
-intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+intended_models = ["dmg-b"]
 current_old_core_status = "pass"
 notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
 [rom.expectation]
