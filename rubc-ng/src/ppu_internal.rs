@@ -68,6 +68,19 @@ pub enum ResolvedDmgPixel {
     Obj(SpritePalette),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RenderedPpuPixel {
+    pub raw_color: u8,
+    pub source: LcdPixelSource,
+    pub cgb_palette: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LcdPixelSource {
+    Bg,
+    Obj(SpritePalette),
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BgFetchSample {
     pub raw_tick: u64,
@@ -222,6 +235,15 @@ impl PpuInternal {
         obj_color: u8,
         sprite: SelectedSprite,
     ) -> ResolvedDmgPixel {
+        Self::resolve_dmg_obj_over_bg(bg_color, bg_master_priority, obj_color, sprite)
+    }
+
+    fn resolve_dmg_obj_over_bg(
+        bg_color: u8,
+        bg_master_priority: bool,
+        obj_color: u8,
+        sprite: SelectedSprite,
+    ) -> ResolvedDmgPixel {
         if obj_color == 0 || (bg_color != 0 && (bg_master_priority || sprite.bg_priority)) {
             ResolvedDmgPixel::Bg
         } else {
@@ -241,6 +263,75 @@ impl PpuInternal {
             SpritePriorityMode::OamOrder => fetch.sort_by_key(|sprite| sprite.oam_index),
         }
         fetch
+    }
+
+    pub fn write_register_at(&mut self, addr: u16, value: u8) {
+        self.write_register(PpuRegisterWrite {
+            time: Time::ZERO,
+            addr,
+            value,
+        });
+    }
+
+    pub fn write_vram(&mut self, addr: u16, bank: u8, value: u8) {
+        let _ = self.vram.write_for_test(addr & 0x1FFF, bank & 1, value);
+    }
+
+    pub fn write_oam(&mut self, offset: usize, value: u8) {
+        if let Some(byte) = self.oam.get_mut(offset) {
+            *byte = value;
+        }
+    }
+
+    pub fn render_pixel(&self, cgb: bool, ly: u8, x: usize) -> RenderedPpuPixel {
+        let (bg_color, bg_palette, bg_priority) = self.bg_or_window_pixel(cgb, ly, x);
+        let mut pixel = RenderedPpuPixel {
+            raw_color: bg_color,
+            source: LcdPixelSource::Bg,
+            cgb_palette: bg_palette,
+        };
+
+        if self.lcdc & 0x02 == 0 {
+            return pixel;
+        }
+
+        let mode = if cgb {
+            SpritePriorityMode::OamOrder
+        } else {
+            SpritePriorityMode::DmgXOrder
+        };
+        for sprite in Self::sprite_fetch_order_for_test(
+            &select_scanline_sprites(self.lcdc, &self.oam, ly),
+            mode,
+        ) {
+            let Some((obj_color, obj_palette)) = self.sprite_pixel(cgb, ly, x, sprite) else {
+                continue;
+            };
+            if obj_color == 0 {
+                continue;
+            }
+            if cgb {
+                if bg_priority || (sprite.bg_priority && bg_color != 0) {
+                    return pixel;
+                }
+                return RenderedPpuPixel {
+                    raw_color: obj_color,
+                    source: LcdPixelSource::Obj(sprite.palette),
+                    cgb_palette: obj_palette,
+                };
+            }
+            pixel.source = match Self::resolve_dmg_obj_over_bg(bg_color, false, obj_color, sprite) {
+                ResolvedDmgPixel::Bg => LcdPixelSource::Bg,
+                ResolvedDmgPixel::Obj(palette) => LcdPixelSource::Obj(palette),
+            };
+            if matches!(pixel.source, LcdPixelSource::Obj(_)) {
+                pixel.raw_color = obj_color;
+                pixel.cgb_palette = obj_palette;
+                return pixel;
+            }
+        }
+
+        pixel
     }
 
     fn write_register(&mut self, write: PpuRegisterWrite) {
@@ -303,6 +394,106 @@ impl PpuInternal {
         self.lcdc & 0x20 != 0
             && ly >= u16::from(self.wy)
             && screen_x.saturating_add(7) >= usize::from(self.wx)
+    }
+
+    fn bg_or_window_pixel(&self, cgb: bool, ly: u8, x: usize) -> (u8, u8, bool) {
+        if self.lcdc & 0x01 == 0 && !cgb {
+            return (0, 0, false);
+        }
+        let window = self.window_triggered(u16::from(ly), x);
+        let (map_base, map_x, map_y) = if window {
+            let wx = usize::from(self.wx.saturating_sub(7));
+            let x = x.saturating_sub(wx);
+            let y = ly.saturating_sub(self.wy);
+            (
+                if self.lcdc & 0x40 != 0 {
+                    0x1C00
+                } else {
+                    0x1800
+                },
+                x,
+                usize::from(y),
+            )
+        } else {
+            (
+                if self.lcdc & 0x08 != 0 {
+                    0x1C00
+                } else {
+                    0x1800
+                },
+                x.wrapping_add(usize::from(self.scx)),
+                usize::from(ly.wrapping_add(self.scy)),
+            )
+        };
+        let map_addr = map_base + ((map_y / 8) & 31) as u16 * 32 + ((map_x / 8) & 31) as u16;
+        let tile = self.vram.read(map_addr, 0).unwrap_or(0);
+        let attr = if cgb {
+            self.vram.read(map_addr, 1).unwrap_or(0)
+        } else {
+            0
+        };
+        let mut fine_x = (map_x & 7) as u8;
+        let mut fine_y = (map_y & 7) as u8;
+        if attr & 0x20 != 0 {
+            fine_x = 7 - fine_x;
+        }
+        if attr & 0x40 != 0 {
+            fine_y = 7 - fine_y;
+        }
+        let bank = if cgb { (attr >> 3) & 1 } else { 0 };
+        let addr = self.tile_data_addr_for(tile, fine_y);
+        let lo = self.vram.read(addr, bank).unwrap_or(0);
+        let hi = self.vram.read(addr.wrapping_add(1), bank).unwrap_or(0);
+        (
+            ((lo >> (7 - fine_x)) & 1) | (((hi >> (7 - fine_x)) & 1) << 1),
+            attr & 7,
+            attr & 0x80 != 0,
+        )
+    }
+
+    fn sprite_pixel(
+        &self,
+        cgb: bool,
+        ly: u8,
+        x: usize,
+        sprite: SelectedSprite,
+    ) -> Option<(u8, u8)> {
+        let sx = usize::from(sprite.x.wrapping_sub(8));
+        let sy = sprite.y.wrapping_sub(16);
+        if x < sx || x >= sx + 8 || ly < sy || ly >= sy.wrapping_add(sprite_height(sprite.size)) {
+            return None;
+        }
+        let mut fine_x = (x - sx) as u8;
+        let mut fine_y = ly.wrapping_sub(sy);
+        if sprite.attr & 0x20 != 0 {
+            fine_x = 7 - fine_x;
+        }
+        if sprite.attr & 0x40 != 0 {
+            fine_y = sprite_height(sprite.size) - 1 - fine_y;
+        }
+        let tile = if sprite.size == SpriteSize::Size8x16 {
+            (sprite.tile & !1).wrapping_add(u8::from(fine_y >= 8))
+        } else {
+            sprite.tile
+        };
+        let fine_y = fine_y & 7;
+        let bank = if cgb { (sprite.attr >> 3) & 1 } else { 0 };
+        let addr = u16::from(tile) * 16 + u16::from(fine_y) * 2;
+        let lo = self.vram.read(addr, bank).ok()?;
+        let hi = self.vram.read(addr.wrapping_add(1), bank).ok()?;
+        Some((
+            ((lo >> (7 - fine_x)) & 1) | (((hi >> (7 - fine_x)) & 1) << 1),
+            sprite.attr & 7,
+        ))
+    }
+
+    fn tile_data_addr_for(&self, tile_id: u8, fine_y: u8) -> u16 {
+        let fine_y = u16::from(fine_y) * 2;
+        if self.lcdc & 0x10 != 0 {
+            u16::from(tile_id) * 16 + fine_y
+        } else {
+            (0x1000_i32 + i32::from(tile_id as i8) * 16 + i32::from(fine_y)) as u16
+        }
     }
 
     fn tilemap_addr(&self, ly: u16) -> u16 {
@@ -392,6 +583,13 @@ fn select_scanline_sprites(lcdc: u8, oam: &[u8; 0xA0], ly: u8) -> Vec<SelectedSp
         }
     }
     selected
+}
+
+fn sprite_height(size: SpriteSize) -> u8 {
+    match size {
+        SpriteSize::Size8x8 => 8,
+        SpriteSize::Size8x16 => 16,
+    }
 }
 
 impl Default for SelectedSprite {

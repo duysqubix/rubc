@@ -25,7 +25,7 @@ pub use golden::{
     GoldenV2Reader, GoldenVramRegisters, GoldenVramState, ObservableSample, ObservableValue,
     TraceMismatch, Vram,
 };
-pub use machine::{MachineNg, RunStopNg, StepRecord};
+pub use machine::{FramePixel, MachineNg, RunStopNg, StepRecord};
 pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
 pub use model::GbModel;
 pub use output_latch::{
@@ -35,8 +35,8 @@ pub use output_latch::{
 };
 pub use ppu_internal::{
     assert_bg_fetch_golden, assert_bg_fetch_golden_with_perturbation, BgFetchDivergence,
-    BgFetchSample, PpuInternal, ResolvedDmgPixel, SelectedSprite, SpritePalette,
-    SpritePriorityMode, SpriteSize, WindowRestart,
+    BgFetchSample, LcdPixelSource, PpuInternal, RenderedPpuPixel, ResolvedDmgPixel, SelectedSprite,
+    SpritePalette, SpritePriorityMode, SpriteSize, WindowRestart,
 };
 pub use ppu_public::{
     replay_ppu_public_observable, replay_ppu_public_observable_with_table_perturbation, PpuPublic,

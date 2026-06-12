@@ -5,7 +5,7 @@ use crate::cpu::scheduler::{Time as CpuTime, CPU_ACCESS_END_OFFSET};
 use crate::cpu::{Cpu, CpuBus, CpuMode};
 use crate::model::GbModel;
 use crate::output_latch::{LcdOutputLatch, LcdPaletteSource, OutputRawPixel, PaletteWrite};
-use crate::ppu_internal::PpuInternal;
+use crate::ppu_internal::{LcdPixelSource, PpuInternal, SpritePalette};
 use crate::ppu_public::{PpuPublic, PpuRegisterWrite};
 use crate::time::{ClockSpine, Time, DMG_DOTS_PER_FRAME, DMG_DOTS_PER_LINE};
 use crate::timer::Timer;
@@ -55,6 +55,12 @@ pub enum RunStopNg {
     Stuck,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FramePixel {
+    DmgShade(u8),
+    CgbRgb555(u16),
+}
+
 pub const MOONEYE_PASS: [u8; 6] = [3, 5, 8, 13, 21, 34];
 
 pub struct MachineNg {
@@ -90,11 +96,16 @@ struct MachineBus {
     ppu_public: PpuPublic,
     ppu_internal: PpuInternal,
     output_latch: LcdOutputLatch,
-    framebuffer: Vec<u8>,
+    framebuffer: Vec<FramePixel>,
+    bg_palette_ram: [u8; 0x40],
+    obj_palette_ram: [u8; 0x40],
+    bg_palette_index: u8,
+    obj_palette_index: u8,
     cpu_now: CpuTime,
     scheduled_writes: Vec<ScheduledWrite>,
     last_ppu_dot: u64,
     frame_counter: u64,
+    stat_irq_line: bool,
     apu: Apu,
     key1_prepare: bool,
     double_speed: bool,
@@ -125,6 +136,24 @@ fn read_oam_word(oam: &[u8; 0xA0], offset: usize) -> u16 {
 fn write_oam_word(oam: &mut [u8; 0xA0], offset: usize, value: u16) {
     oam[offset] = value as u8;
     oam[offset + 1] = (value >> 8) as u8;
+}
+
+fn dmg_compatible_cgb_palette_ram() -> [u8; 0x40] {
+    let mut ram = [0u8; 0x40];
+    for palette in 0..8usize {
+        for color in 0..4usize {
+            let shade = match color {
+                0 => 0x7FFF,
+                1 => 0x56B5,
+                2 => 0x294A,
+                _ => 0x0000,
+            };
+            let offset = palette * 8 + color * 2;
+            ram[offset] = shade as u8;
+            ram[offset + 1] = (shade >> 8) as u8;
+        }
+    }
+    ram
 }
 
 impl Hdma {
@@ -396,6 +425,10 @@ impl MachineNg {
         &self.bus.serial_output
     }
 
+    pub fn debug_pc(&self) -> u16 {
+        self.cpu.r.pc
+    }
+
     pub fn blargg_passed(&self) -> bool {
         if let Some(status) = self.blargg_cart_ram_done() {
             return status == 0x00;
@@ -458,7 +491,7 @@ impl MachineNg {
         }
     }
 
-    pub fn framebuffer(&self) -> &[u8] {
+    pub fn framebuffer(&self) -> &[FramePixel] {
         &self.bus.framebuffer
     }
 
@@ -597,11 +630,16 @@ impl MachineBus {
                 [0; 0xA0],
             ),
             output_latch: LcdOutputLatch::dmg_default(),
-            framebuffer: vec![0; 160 * 144],
+            framebuffer: vec![FramePixel::DmgShade(0); 160 * 144],
+            bg_palette_ram: dmg_compatible_cgb_palette_ram(),
+            obj_palette_ram: dmg_compatible_cgb_palette_ram(),
+            bg_palette_index: 0,
+            obj_palette_index: 0,
             cpu_now: CpuTime(0),
             scheduled_writes: Vec::new(),
             last_ppu_dot: 0,
             frame_counter: 0,
+            stat_irq_line: false,
             apu: Apu::default(),
             key1_prepare: false,
             double_speed: false,
@@ -723,9 +761,16 @@ impl MachineBus {
             0xFF55 if self.model.is_cgb() && self.hdma.active => self.hdma.status(),
             0xFF51..=0xFF55 if self.model.is_cgb() => 0xFF,
             0xFF51..=0xFF67 => 0xFF,
-            0xFF68 | 0xFF6A if self.model.is_cgb() => self.io[(addr - 0xFF00) as usize] | 0x40,
+            0xFF68 if self.model.is_cgb() => self.bg_palette_index | 0x40,
+            0xFF69 if self.model.is_cgb() => {
+                self.bg_palette_ram[(self.bg_palette_index & 0x3F) as usize]
+            }
+            0xFF6A if self.model.is_cgb() => self.obj_palette_index | 0x40,
+            0xFF6B if self.model.is_cgb() => {
+                self.obj_palette_ram[(self.obj_palette_index & 0x3F) as usize]
+            }
             0xFF68..=0xFF7F if !self.model.is_cgb() => 0xFF,
-            0xFF69 | 0xFF6B..=0xFF71 | 0xFF74 => 0xFF,
+            0xFF6C..=0xFF71 | 0xFF74 => 0xFF,
             0xFF72 | 0xFF73 if self.model.is_cgb() => self.io[(addr - 0xFF00) as usize],
             0xFF75 if self.model.is_cgb() => self.io[0x75] | 0x8F,
             0xFF76 | 0xFF77 if self.model.is_cgb() => 0x00,
@@ -763,7 +808,12 @@ impl MachineBus {
     fn write_visible(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x7FFF => self.cart.write_reg(addr, value),
-            0x8000..=0x9FFF => self.vram[self.vram_bank as usize][(addr - 0x8000) as usize] = value,
+            0x8000..=0x9FFF => {
+                let offset = (addr - 0x8000) as usize;
+                self.vram[self.vram_bank as usize][offset] = value;
+                self.ppu_internal
+                    .write_vram(offset as u16, self.vram_bank, value);
+            }
             0xA000..=0xBFFF => self.cart.write_ram(addr, value),
             0xC000..=0xCFFF => self.wram[0][(addr - 0xC000) as usize] = value,
             0xD000..=0xDFFF => {
@@ -773,7 +823,11 @@ impl MachineBus {
             0xF000..=0xFDFF => {
                 self.wram[self.selected_wram_bank()][(addr - 0xF000) as usize] = value
             }
-            0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize] = value,
+            0xFE00..=0xFE9F => {
+                let offset = (addr - 0xFE00) as usize;
+                self.oam[offset] = value;
+                self.ppu_internal.write_oam(offset, value);
+            }
             0xFEA0..=0xFEFF => {}
             0xFF04..=0xFF07 => {
                 self.timer.write(addr, value);
@@ -789,6 +843,10 @@ impl MachineBus {
             0xFF4D => {}
             0xFF4F => self.vram_bank = value & 1,
             0xFF51..=0xFF55 if self.model.is_cgb() => self.write_hdma_register(addr, value),
+            0xFF68 if self.model.is_cgb() => self.bg_palette_index = value & 0xBF,
+            0xFF69 if self.model.is_cgb() => self.write_cgb_palette(true, value),
+            0xFF6A if self.model.is_cgb() => self.obj_palette_index = value & 0xBF,
+            0xFF6B if self.model.is_cgb() => self.write_cgb_palette(false, value),
             0xFF70 => self.wram_bank = (value & 0x07).max(1),
             0xFF72 | 0xFF73 if self.model.is_cgb() => self.io[(addr - 0xFF00) as usize] = value,
             0xFF75 if self.model.is_cgb() => self.io[0x75] = value & 0x70,
@@ -839,6 +897,8 @@ impl MachineBus {
             let value = self.read_visible(src.wrapping_add(i));
             let offset = (dst - 0x8000 + i) as usize & 0x1FFF;
             self.vram[self.vram_bank as usize][offset] = value;
+            self.ppu_internal
+                .write_vram(offset as u16, self.vram_bank, value);
         }
         let next_src = src.wrapping_add(0x10);
         let next_dst = 0x8000 | ((dst - 0x8000 + 0x10) & 0x1FFF);
@@ -888,6 +948,32 @@ impl MachineBus {
             }),
             _ => {}
         }
+        if matches!(addr, 0xFF40 | 0xFF42 | 0xFF43 | 0xFF4A | 0xFF4B) {
+            self.ppu_internal.write_register_at(addr, value);
+        }
+        if matches!(addr, 0xFF41 | 0xFF45) {
+            self.update_stat_irq_line();
+        }
+    }
+
+    fn write_cgb_palette(&mut self, bg: bool, value: u8) {
+        let index = if bg {
+            self.bg_palette_index
+        } else {
+            self.obj_palette_index
+        };
+        let offset = (index & 0x3F) as usize;
+        if bg {
+            self.bg_palette_ram[offset] = value;
+            if index & 0x80 != 0 {
+                self.bg_palette_index = 0x80 | ((index.wrapping_add(1)) & 0x3F);
+            }
+        } else {
+            self.obj_palette_ram[offset] = value;
+            if index & 0x80 != 0 {
+                self.obj_palette_index = 0x80 | ((index.wrapping_add(1)) & 0x3F);
+            }
+        }
     }
 
     fn selected_wram_bank(&self) -> usize {
@@ -919,7 +1005,9 @@ impl MachineBus {
         self.io[0x46] = source_hi;
         let base = u16::from(source_hi) << 8;
         for i in 0..0xA0u16 {
-            self.oam[i as usize] = self.read_visible(base.wrapping_add(i));
+            let value = self.read_visible(base.wrapping_add(i));
+            self.oam[i as usize] = value;
+            self.ppu_internal.write_oam(i as usize, value);
         }
     }
 
@@ -1018,33 +1106,67 @@ impl MachineBus {
             self.frame_counter += 1;
         }
         let ly = self.ly();
-        let x = (self.spine.ppu_dot % DMG_DOTS_PER_LINE) as usize;
-        if ly == 144 && x == 0 {
+        let line_dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE) as usize;
+        if ly == 144 && line_dot == 0 {
             self.if_ |= VBLANK_IRQ;
         }
-        if x == 0 && (self.io[0x41] & 0x20) != 0 {
-            self.if_ |= STAT_IRQ;
-        }
-        if ly < 144 && x < 160 {
-            let tilemap_addr = 0x1800 + ((u16::from(ly) / 8) * 32 + (x as u16 / 8)) as usize;
-            let raw = self.vram[0][tilemap_addr % 0x2000] & 0x03;
-            let latched = self
-                .output_latch
-                .latch_pixel(OutputRawPixel {
-                    time: self.spine.now,
-                    ly: u16::from(ly),
-                    x,
-                    source: LcdPaletteSource::Bg,
-                    raw_color: raw,
-                })
-                .expect("output latch accepts machine pixel");
-            self.framebuffer[usize::from(ly) * 160 + x] = latched.final_color;
+        self.update_stat_irq_line();
+        if ly < 144 && (80..240).contains(&line_dot) && self.io[0x40] & 0x80 != 0 {
+            let x = line_dot - 80;
+            let rendered = self.ppu_internal.render_pixel(self.model.is_cgb(), ly, x);
+            let frame_pixel = if self.model.is_cgb() {
+                FramePixel::CgbRgb555(self.cgb_rgb555(
+                    rendered.source,
+                    rendered.cgb_palette,
+                    rendered.raw_color,
+                ))
+            } else {
+                let source = match rendered.source {
+                    LcdPixelSource::Bg => LcdPaletteSource::Bg,
+                    LcdPixelSource::Obj(SpritePalette::Obp0) => LcdPaletteSource::Obp0,
+                    LcdPixelSource::Obj(SpritePalette::Obp1) => LcdPaletteSource::Obp1,
+                };
+                let latched = self
+                    .output_latch
+                    .latch_pixel(OutputRawPixel {
+                        time: self.spine.now,
+                        ly: u16::from(ly),
+                        x,
+                        source,
+                        raw_color: rendered.raw_color,
+                    })
+                    .expect("output latch accepts machine pixel");
+                FramePixel::DmgShade(latched.final_color)
+            };
+            self.framebuffer[usize::from(ly) * 160 + x] = frame_pixel;
             self.last_ppu_dot = self.spine.ppu_dot;
-            let _ = self.ppu_internal.fetch_next_tile_for_test(u16::from(ly));
         }
-        if ly < 144 && x == 252 && self.hdma.active {
+        if ly < 144 && line_dot == 252 && self.hdma.active {
             self.copy_hdma_block();
         }
+    }
+
+    fn cgb_rgb555(&self, source: LcdPixelSource, palette: u8, raw_color: u8) -> u16 {
+        let ram = match source {
+            LcdPixelSource::Bg => &self.bg_palette_ram,
+            LcdPixelSource::Obj(_) => &self.obj_palette_ram,
+        };
+        let offset = (usize::from(palette & 7) * 8 + usize::from(raw_color & 3) * 2) & 0x3F;
+        u16::from_le_bytes([ram[offset], ram[(offset + 1) & 0x3F]]) & 0x7FFF
+    }
+
+    fn update_stat_irq_line(&mut self) {
+        let stat = self.io[0x41];
+        let mode = self.ppu_mode();
+        let lyc = self.ly() == self.io[0x45];
+        let line = (lyc && stat & 0x40 != 0)
+            || (mode == 2 && stat & 0x20 != 0)
+            || (mode == 1 && stat & 0x10 != 0)
+            || (mode == 0 && stat & 0x08 != 0);
+        if line && !self.stat_irq_line {
+            self.if_ |= STAT_IRQ;
+        }
+        self.stat_irq_line = line;
     }
 
     fn drain_scheduled_writes(&mut self) {
