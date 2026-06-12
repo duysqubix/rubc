@@ -24,10 +24,13 @@ pub struct StepRecord {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RunStopNg {
+    MooneyeBreakpoint,
     BlarggDone,
     Timeout,
     Stuck,
 }
+
+pub const MOONEYE_PASS: [u8; 6] = [3, 5, 8, 13, 21, 34];
 
 pub struct MachineNg {
     model: GbModel,
@@ -318,6 +321,28 @@ impl MachineNg {
             }
         }
         RunStopNg::Timeout
+    }
+
+    pub fn run_mooneye(&mut self, max_instructions: u64) -> RunStopNg {
+        for _ in 0..max_instructions {
+            if matches!(self.cpu.mode, CpuMode::Stopped) {
+                return RunStopNg::Stuck;
+            }
+            if self.opcode_at_pc() == 0x40 {
+                return RunStopNg::MooneyeBreakpoint;
+            }
+            self.step_instruction();
+        }
+        RunStopNg::Timeout
+    }
+
+    pub fn mooneye_passed(&self) -> bool {
+        let r = &self.cpu.r;
+        [r.b, r.c, r.d, r.e, r.h, r.l] == MOONEYE_PASS
+    }
+
+    fn opcode_at_pc(&self) -> u8 {
+        self.bus.read_visible(self.cpu.r.pc)
     }
 
     pub fn run_frames(&mut self, frames: u64, max_instructions: u64) {
