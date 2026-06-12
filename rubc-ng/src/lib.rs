@@ -3,6 +3,7 @@
 pub mod apu;
 pub mod bus_intent;
 pub mod cartridge;
+pub mod conformance;
 pub mod cpu;
 pub mod golden;
 pub mod machine;
@@ -18,6 +19,7 @@ pub mod timing;
 pub use apu::Apu;
 pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
 pub use cartridge::Cartridge;
+pub use conformance::{ConformanceConfig, ConformanceOutcome, ConformanceReport, ConformanceRow};
 pub use golden::{
     assert_golden_edges, GoldenInitialState, GoldenRow, GoldenSelection, GoldenTrace,
     GoldenV2Reader, GoldenVramRegisters, GoldenVramState, ObservableSample, ObservableValue,
