@@ -1107,37 +1107,48 @@ impl MachineBus {
         let line_dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE) as usize;
         if ly == 144 && line_dot == 0 {
             self.if_ |= VBLANK_IRQ;
+            self.ppu_internal.begin_frame_window_state();
         }
         self.update_stat_irq_line();
-        if ly < 144 && (80..240).contains(&line_dot) && self.io[0x40] & 0x80 != 0 {
-            let x = line_dot - 80;
-            let rendered = self.ppu_internal.render_pixel(self.model.is_cgb(), ly, x);
-            let frame_pixel = if self.model.is_cgb() {
-                FramePixel::CgbRgb555(self.cgb_rgb555(
-                    rendered.source,
-                    rendered.cgb_palette,
-                    rendered.raw_color,
-                ))
-            } else {
-                let source = match rendered.source {
-                    LcdPixelSource::Bg => LcdPaletteSource::Bg,
-                    LcdPixelSource::Obj(SpritePalette::Obp0) => LcdPaletteSource::Obp0,
-                    LcdPixelSource::Obj(SpritePalette::Obp1) => LcdPaletteSource::Obp1,
-                };
-                let latched = self
-                    .output_latch
-                    .latch_pixel(OutputRawPixel {
-                        time: self.spine.now,
-                        ly: u16::from(ly),
-                        x,
-                        source,
-                        raw_color: rendered.raw_color,
-                    })
-                    .expect("output latch accepts machine pixel");
-                FramePixel::DmgShade(latched.final_color)
-            };
-            self.framebuffer[usize::from(ly) * 160 + x] = frame_pixel;
-            self.last_ppu_dot = self.spine.ppu_dot;
+        // W8b·2b-fifo (rubc-d85o): the framebuffer is fed by the real pixel
+        // FIFO. Pixel columns ship when the FIFO shifts them out (12-dot
+        // fetch warm-up, SCX&7 discard, window restart, sprite stalls), not
+        // at a fixed line_dot-80 formula — the internal output geometry is
+        // independent of the public mode-3 window (ADR 0002).
+        if ly < 144 && self.io[0x40] & 0x80 != 0 {
+            if line_dot == 80 {
+                self.ppu_internal.begin_drawing(ly);
+            }
+            if line_dot >= 80 {
+                if let Some(shipped) = self.ppu_internal.fifo_dot(self.model.is_cgb(), ly) {
+                    let frame_pixel = if self.model.is_cgb() {
+                        FramePixel::CgbRgb555(self.cgb_rgb555(
+                            shipped.pixel.source,
+                            shipped.pixel.cgb_palette,
+                            shipped.pixel.raw_color,
+                        ))
+                    } else {
+                        let source = match shipped.pixel.source {
+                            LcdPixelSource::Bg => LcdPaletteSource::Bg,
+                            LcdPixelSource::Obj(SpritePalette::Obp0) => LcdPaletteSource::Obp0,
+                            LcdPixelSource::Obj(SpritePalette::Obp1) => LcdPaletteSource::Obp1,
+                        };
+                        let latched = self
+                            .output_latch
+                            .latch_pixel(OutputRawPixel {
+                                time: self.spine.now,
+                                ly: u16::from(ly),
+                                x: shipped.x,
+                                source,
+                                raw_color: shipped.pixel.raw_color,
+                            })
+                            .expect("output latch accepts machine pixel");
+                        FramePixel::DmgShade(latched.final_color)
+                    };
+                    self.framebuffer[usize::from(ly) * 160 + shipped.x] = frame_pixel;
+                    self.last_ppu_dot = self.spine.ppu_dot;
+                }
+            }
         }
         if ly < 144 && line_dot == 252 && self.hdma.active {
             self.copy_hdma_block();
