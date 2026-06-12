@@ -732,6 +732,8 @@ impl MachineBus {
             self.io[0x76] = 0x00;
             self.io[0x77] = 0x00;
         }
+        self.bg_palette_index = self.io[0x68] & 0xBF;
+        self.obj_palette_index = self.io[0x6A] & 0xBF;
     }
 
     fn read_io(&self, addr: u16) -> Option<u8> {
@@ -762,13 +764,9 @@ impl MachineBus {
             0xFF51..=0xFF55 if self.model.is_cgb() => 0xFF,
             0xFF51..=0xFF67 => 0xFF,
             0xFF68 if self.model.is_cgb() => self.bg_palette_index | 0x40,
-            0xFF69 if self.model.is_cgb() => {
-                self.bg_palette_ram[(self.bg_palette_index & 0x3F) as usize]
-            }
+            0xFF69 if self.model.is_cgb() => 0xFF,
             0xFF6A if self.model.is_cgb() => self.obj_palette_index | 0x40,
-            0xFF6B if self.model.is_cgb() => {
-                self.obj_palette_ram[(self.obj_palette_index & 0x3F) as usize]
-            }
+            0xFF6B if self.model.is_cgb() => 0xFF,
             0xFF68..=0xFF7F if !self.model.is_cgb() => 0xFF,
             0xFF6C..=0xFF71 | 0xFF74 => 0xFF,
             0xFF72 | 0xFF73 if self.model.is_cgb() => self.io[(addr - 0xFF00) as usize],
