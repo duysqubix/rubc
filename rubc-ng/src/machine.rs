@@ -70,6 +70,51 @@ struct MachineBus {
     apu: Apu,
     key1_prepare: bool,
     double_speed: bool,
+    hdma: Hdma,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Hdma {
+    src_high: u8,
+    src_low: u8,
+    dst_high: u8,
+    dst_low: u8,
+    remaining_blocks: u8,
+    active: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OamBugAccess {
+    Read,
+    ReadIncDec,
+    Write,
+}
+
+fn read_oam_word(oam: &[u8; 0xA0], offset: usize) -> u16 {
+    u16::from(oam[offset]) | (u16::from(oam[offset + 1]) << 8)
+}
+
+fn write_oam_word(oam: &mut [u8; 0xA0], offset: usize, value: u16) {
+    oam[offset] = value as u8;
+    oam[offset + 1] = (value >> 8) as u8;
+}
+
+impl Hdma {
+    fn source(&self) -> u16 {
+        (u16::from(self.src_high) << 8) | u16::from(self.src_low & 0xF0)
+    }
+
+    fn destination(&self) -> u16 {
+        0x8000 | (u16::from(self.dst_high & 0x1F) << 8) | u16::from(self.dst_low & 0xF0)
+    }
+
+    fn status(&self) -> u8 {
+        if self.active {
+            0x80 | self.remaining_blocks.saturating_sub(1)
+        } else {
+            0xFF
+        }
+    }
 }
 
 impl MachineNg {
@@ -154,7 +199,11 @@ impl MachineNg {
         if let Some(status) = self.blargg_cart_ram_done() {
             return status == 0x00;
         }
-        self.bus.serial_output.contains("Passed")
+        if self.bus.serial_output.contains("Passed") || self.bus.serial_output.contains("Failed") {
+            return self.bus.serial_output.contains("Passed");
+        }
+        self.blargg_console_text()
+            .is_some_and(|text| text.contains("Passed"))
     }
 
     pub fn blargg_cart_text(&self) -> String {
@@ -169,6 +218,23 @@ impl MachineNg {
                 }
             })
             .collect()
+    }
+
+    pub fn blargg_console_text(&self) -> Option<String> {
+        let mut out = String::new();
+        for row in 0..18u16 {
+            let base = 0x9800u16 + row * 32;
+            for col in 0..20u16 {
+                let b = self.bus.read_visible(base + col);
+                out.push(if (0x20..0x7F).contains(&b) {
+                    b as char
+                } else {
+                    ' '
+                });
+            }
+            out.push('\n');
+        }
+        (!out.trim().is_empty()).then_some(out)
     }
 
     fn blargg_cart_ram_status(&self) -> Option<u8> {
@@ -240,8 +306,15 @@ impl MachineNg {
             if self.blargg_cart_ram_status() == Some(0x80) {
                 cart_ram_was_running = true;
             }
-            if i % 4096 == 0 && cart_ram_was_running && self.blargg_cart_ram_done().is_some() {
-                return RunStopNg::BlarggDone;
+            if i % 4096 == 0 {
+                if cart_ram_was_running && self.blargg_cart_ram_done().is_some() {
+                    return RunStopNg::BlarggDone;
+                }
+                if let Some(text) = self.blargg_console_text() {
+                    if text.contains("Passed") || text.contains("Failed") {
+                        return RunStopNg::BlarggDone;
+                    }
+                }
             }
         }
         RunStopNg::Timeout
@@ -298,6 +371,7 @@ impl MachineBus {
             apu: Apu::default(),
             key1_prepare: false,
             double_speed: false,
+            hdma: Hdma::default(),
             spine,
             table,
         };
@@ -329,6 +403,14 @@ impl MachineBus {
             }
             0xFF4D => 0xFF,
             0xFF4F => 0xFE | self.vram_bank,
+            0xFF51..=0xFF55 if self.model.is_cgb() => match addr {
+                0xFF51 => self.hdma.src_high,
+                0xFF52 => self.hdma.src_low & 0xF0,
+                0xFF53 => self.hdma.dst_high & 0x1F,
+                0xFF54 => self.hdma.dst_low & 0xF0,
+                0xFF55 => self.hdma.status(),
+                _ => unreachable!(),
+            },
             0xFF70 => 0xF8 | self.wram_bank,
             0xFFFF => self.ie,
             _ => self.io[(addr - 0xFF00) as usize],
@@ -388,6 +470,7 @@ impl MachineBus {
             }
             0xFF4D => {}
             0xFF4F => self.vram_bank = value & 1,
+            0xFF51..=0xFF55 if self.model.is_cgb() => self.write_hdma_register(addr, value),
             0xFF70 => self.wram_bank = (value & 0x07).max(1),
             0xFFFF => self.ie = value,
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize] = value,
@@ -397,13 +480,59 @@ impl MachineBus {
             self.serial_output.push(self.io[0x01] as char);
             self.io[0x02] = 0x01;
         } else if (0xFF00..=0xFF7F).contains(&addr)
-            && !matches!(addr, 0xFF04..=0xFF07 | 0xFF10..=0xFF3F | 0xFF40..=0xFF4F | 0xFF70)
+            && !matches!(addr, 0xFF04..=0xFF07 | 0xFF10..=0xFF3F | 0xFF40..=0xFF55 | 0xFF70)
         {
             self.io[(addr - 0xFF00) as usize] = value;
         }
     }
 
+    fn write_hdma_register(&mut self, addr: u16, value: u8) {
+        match addr {
+            0xFF51 => self.hdma.src_high = value,
+            0xFF52 => self.hdma.src_low = value & 0xF0,
+            0xFF53 => self.hdma.dst_high = value & 0x1F,
+            0xFF54 => self.hdma.dst_low = value & 0xF0,
+            0xFF55 => self.start_or_stop_hdma(value),
+            _ => unreachable!(),
+        }
+    }
+
+    fn start_or_stop_hdma(&mut self, value: u8) {
+        if self.hdma.active && value & 0x80 == 0 {
+            self.hdma.active = false;
+            return;
+        }
+        self.hdma.remaining_blocks = (value & 0x7F) + 1;
+        self.hdma.active = value & 0x80 != 0;
+        if !self.hdma.active {
+            while self.hdma.remaining_blocks != 0 {
+                self.copy_hdma_block();
+            }
+        }
+    }
+
+    fn copy_hdma_block(&mut self) {
+        let src = self.hdma.source();
+        let dst = self.hdma.destination();
+        for i in 0..0x10u16 {
+            let value = self.read_visible(src.wrapping_add(i));
+            let offset = (dst - 0x8000 + i) as usize & 0x1FFF;
+            self.vram[self.vram_bank as usize][offset] = value;
+        }
+        let next_src = src.wrapping_add(0x10);
+        let next_dst = 0x8000 | ((dst - 0x8000 + 0x10) & 0x1FFF);
+        self.hdma.src_high = (next_src >> 8) as u8;
+        self.hdma.src_low = (next_src & 0xF0) as u8;
+        self.hdma.dst_high = ((next_dst >> 8) as u8) & 0x1F;
+        self.hdma.dst_low = (next_dst & 0xF0) as u8;
+        self.hdma.remaining_blocks = self.hdma.remaining_blocks.saturating_sub(1);
+        if self.hdma.remaining_blocks == 0 {
+            self.hdma.active = false;
+        }
+    }
+
     fn write_ppu_register(&mut self, addr: u16, value: u8) {
+        let old_lcdc = self.io[0x40];
         self.io[(addr - 0xFF00) as usize] = value;
         self.ppu_public.write_register(PpuRegisterWrite {
             time: self.spine.now,
@@ -411,6 +540,16 @@ impl MachineBus {
             value,
         });
         match addr {
+            0xFF40 if old_lcdc & 0x80 == 0 && value & 0x80 != 0 => {
+                self.spine.ppu_dot = 4;
+                self.spine.line_dot = 4;
+                self.spine.frame_dot = 4;
+            }
+            0xFF40 if value & 0x80 == 0 => {
+                self.spine.ppu_dot = 0;
+                self.spine.line_dot = 0;
+                self.spine.frame_dot = 0;
+            }
             0xFF47 => self.output_latch.apply_write(PaletteWrite {
                 time: self.spine.now,
                 source: LcdPaletteSource::Bg,
@@ -462,10 +601,84 @@ impl MachineBus {
         }
     }
 
+    fn oam_bug_scan_row(&self) -> Option<usize> {
+        if self.model.is_cgb()
+            || self.io[0x40] & 0x80 == 0
+            || self.ppu_mode() != 2
+            || self.ly() >= 144
+        {
+            return None;
+        }
+        let dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE).clamp(1, 80);
+        Some(((dot - 1) / 4) as usize)
+    }
+
+    fn corrupt_oam_for_bug(&mut self, addr: u16, access: OamBugAccess) {
+        if !matches!(addr, 0xFE00..=0xFEFF) {
+            return;
+        }
+        let Some(row) = self.oam_bug_scan_row() else {
+            return;
+        };
+        self.apply_oam_bug_corruption(row, access);
+    }
+
+    fn apply_oam_bug_corruption(&mut self, row: usize, access: OamBugAccess) {
+        if row >= 20 {
+            return;
+        }
+        if access == OamBugAccess::ReadIncDec {
+            self.apply_oam_bug_read_inc_dec_corruption(row);
+            return;
+        }
+        if row == 0 {
+            return;
+        }
+        let base = row * 8;
+        let prev = base - 8;
+        let a = read_oam_word(&self.oam, base);
+        let b = read_oam_word(&self.oam, prev);
+        let c = read_oam_word(&self.oam, prev + 4);
+        let word0 = match access {
+            OamBugAccess::Read => b | (a & c),
+            OamBugAccess::ReadIncDec => unreachable!(),
+            OamBugAccess::Write => ((a ^ c) & (b ^ c)) ^ c,
+        };
+        write_oam_word(&mut self.oam, base, word0);
+        for word in 1..4 {
+            let copied = read_oam_word(&self.oam, prev + word * 2);
+            write_oam_word(&mut self.oam, base + word * 2, copied);
+        }
+    }
+
+    fn apply_oam_bug_read_inc_dec_corruption(&mut self, row: usize) {
+        if row == 0 {
+            return;
+        }
+        if (4..=18).contains(&row) {
+            let base = row * 8;
+            let prev = base - 8;
+            let prev_prev = base - 16;
+            let a = read_oam_word(&self.oam, prev_prev);
+            let b = read_oam_word(&self.oam, prev);
+            let c = read_oam_word(&self.oam, base);
+            let d = read_oam_word(&self.oam, prev + 4);
+            let word0 = (b & (a | c | d)) | (a & c & d);
+            write_oam_word(&mut self.oam, prev, word0);
+            let mut copied_row = [0; 8];
+            copied_row.copy_from_slice(&self.oam[prev..prev + 8]);
+            self.oam[base..base + 8].copy_from_slice(&copied_row);
+            self.oam[prev_prev..prev_prev + 8].copy_from_slice(&copied_row);
+        }
+        self.apply_oam_bug_corruption(row, OamBugAccess::Read);
+    }
+
     fn tick_one_subphase(&mut self) {
         let old_cpu_t = self.spine.cpu_t;
         let old_ppu_dot = self.spine.ppu_dot;
-        self.spine.step_subphase(&self.table);
+        let ppu_divisor = if self.double_speed { 2 } else { 1 };
+        self.spine
+            .step_subphase_with_ppu_divisor(&self.table, ppu_divisor);
         self.cpu_now.0 = self.spine.now.subphases();
         self.timer.observe_spine(&self.spine);
         self.if_ |= self.timer.take_interrupt_request();
@@ -507,6 +720,9 @@ impl MachineBus {
             self.last_ppu_dot = self.spine.ppu_dot;
             let _ = self.ppu_internal.fetch_next_tile_for_test(u16::from(ly));
         }
+        if ly < 144 && x == 252 && self.hdma.active {
+            self.copy_hdma_block();
+        }
     }
 
     fn drain_scheduled_writes(&mut self) {
@@ -527,6 +743,12 @@ impl CpuBus for MachineBus {
     fn read_m(&mut self, addr: u16) -> u8 {
         self.advance_to(CpuTime(self.cpu_now.0 + 16));
         self.read_latched(addr)
+    }
+    fn read_m_oam_bug_idu(&mut self, addr: u16) -> u8 {
+        self.advance_to(CpuTime(self.cpu_now.0 + 16));
+        let value = self.read_latched(addr);
+        self.corrupt_oam_for_bug(addr, OamBugAccess::ReadIncDec);
+        value
     }
     fn write_m(&mut self, addr: u16, value: u8) {
         self.schedule_cpu_write(
@@ -560,6 +782,13 @@ impl CpuBus for MachineBus {
     fn boundary(&mut self) {
         self.if_ |= 0xE0;
     }
+    fn oam_bug_idu_m(&mut self, addr: u16) {
+        self.idle_m();
+        self.corrupt_oam_for_bug(addr, OamBugAccess::ReadIncDec);
+    }
+    fn oam_bug_idu_glitch(&mut self, addr: u16) {
+        self.corrupt_oam_for_bug(addr, OamBugAccess::Write);
+    }
     fn begin_cpu_cycle(&mut self) {}
     fn tick_cpu_t(&mut self) {
         self.advance_to(CpuTime(self.cpu_now.0 + 4));
@@ -582,6 +811,9 @@ impl CpuBus for MachineBus {
     }
     fn read_latched(&mut self, addr: u16) -> u8 {
         self.drain_scheduled_writes();
+        if matches!(addr, 0xFE00..=0xFEFF) {
+            self.corrupt_oam_for_bug(addr, OamBugAccess::Read);
+        }
         self.read_visible(addr)
     }
     fn write_latched(&mut self, addr: u16, value: u8) {
@@ -594,4 +826,95 @@ impl CpuBus for MachineBus {
         CPU_ACCESS_END_OFFSET
     }
     fn sync_ppu_to_cpu(&mut self) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cgb_machine() -> MachineNg {
+        MachineNg::from_rom(GbModel::CgbE, &[0; 0x8000]).expect("valid CGB machine")
+    }
+
+    #[test]
+    fn gdma_copies_one_or_more_16_byte_blocks_into_cgb_vram() {
+        let mut machine = cgb_machine();
+
+        for i in 0..0x20u16 {
+            machine.bus.write_visible(0xC120 + i, 0x80 | i as u8);
+        }
+
+        machine.write_io(0xFF51, 0xC1);
+        machine.write_io(0xFF52, 0x23);
+        machine.write_io(0xFF53, 0x82);
+        machine.write_io(0xFF54, 0x05);
+        machine.write_io(0xFF55, 0x01);
+
+        for i in 0..0x20u16 {
+            assert_eq!(
+                machine.bus.vram[0][0x0200 + i as usize],
+                0x80 | i as u8,
+                "GDMA must copy byte {i:#04x} from masked source to masked VRAM destination"
+            );
+        }
+        assert_eq!(
+            machine.read_io(0xFF55),
+            Some(0xFF),
+            "GDMA completes immediately"
+        );
+    }
+
+    #[test]
+    fn hblank_hdma_copies_exactly_one_16_byte_block_per_hblank() {
+        let mut machine = cgb_machine();
+
+        for i in 0..0x20u16 {
+            machine.bus.write_visible(0xC200 + i, 0x40 | i as u8);
+        }
+
+        machine.write_io(0xFF51, 0xC2);
+        machine.write_io(0xFF52, 0x00);
+        machine.write_io(0xFF53, 0x80);
+        machine.write_io(0xFF54, 0x00);
+        machine.write_io(0xFF55, 0x81);
+
+        assert_eq!(
+            machine.read_io(0xFF55),
+            Some(0x81),
+            "HDMA remains active with two blocks queued"
+        );
+
+        while machine.bus.ppu_mode() != 0 {
+            machine.step();
+        }
+
+        for i in 0..0x10u16 {
+            assert_eq!(machine.bus.vram[0][i as usize], 0x40 | i as u8);
+        }
+        assert_eq!(
+            machine.bus.vram[0][0x10], 0,
+            "second HDMA block must wait for a later HBlank"
+        );
+        assert_eq!(
+            machine.read_io(0xFF55),
+            Some(0x80),
+            "one block remains active"
+        );
+
+        while machine.bus.ppu_mode() == 0 {
+            machine.step();
+        }
+        while machine.bus.ppu_mode() != 0 {
+            machine.step();
+        }
+
+        for i in 0x10..0x20u16 {
+            assert_eq!(machine.bus.vram[0][i as usize], 0x40 | i as u8);
+        }
+        assert_eq!(
+            machine.read_io(0xFF55),
+            Some(0xFF),
+            "HDMA completes after second HBlank block"
+        );
+    }
 }

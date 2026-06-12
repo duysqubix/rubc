@@ -88,12 +88,23 @@ impl ClockSpine {
     }
 
     pub fn step_subphase(&mut self, table: &TimingTable) {
+        self.step_subphase_with_ppu_divisor(table, 1);
+    }
+
+    pub fn step_subphase_with_ppu_divisor(&mut self, table: &TimingTable, ppu_divisor: u8) {
         let old_t = self.now.cpu_t();
         self.now.advance(1);
         self.cpu_t = self.now.cpu_t();
         self.phase = ClockPhase::from_subphase(self.now.subphase_in_t());
 
-        if self.cpu_t != old_t && Self::phase_fires(table.ppu_dot_phase(), self.cpu_t) {
+        let phase = match table.ppu_dot_phase() {
+            PhaseRule::EveryCpuT { divisor } => PhaseRule::EveryCpuT {
+                divisor: divisor.saturating_mul(ppu_divisor).max(1),
+            },
+            phase => phase,
+        };
+
+        if self.cpu_t != old_t && Self::phase_fires(phase, self.cpu_t) {
             self.ppu_dot += 1;
             self.line_dot = (self.ppu_dot % DMG_DOTS_PER_LINE) as u16;
             self.frame_dot = (self.ppu_dot % DMG_DOTS_PER_FRAME) as u32;
