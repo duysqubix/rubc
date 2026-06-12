@@ -384,6 +384,11 @@ check: fmt-check clippy build test
 ng-test:
     /usr/bin/env cargo test -p {{ng}}
 
+# Full rubc-ng 207-ROM conformance manifest report. This is honest scoring:
+# real ROM pass signatures count as PASS; slice-2 oracles are explicit SKIP.
+ng-conformance:
+    RUBC_NG_CONFORMANCE_FULL=1 /usr/bin/env cargo test -p {{ng}} conformance_matrix_pass_count_is_gated_by_honest_floor -- --nocapture
+
 # rubc-ng golden-gated harness subset; fresh clones skip cleanly without reference/goldens/v2.
 ng-goldens:
     #!/usr/bin/env bash
