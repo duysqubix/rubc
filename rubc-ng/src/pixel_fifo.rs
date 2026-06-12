@@ -60,7 +60,12 @@ impl PixelFifo {
         self.len == 0
     }
 
-    pub fn push_bg_pixels(&mut self, colors: [u8; FIFO_CAPACITY], cgb_palette: u8, bg_priority: bool) {
+    pub fn push_bg_pixels(
+        &mut self,
+        colors: [u8; FIFO_CAPACITY],
+        cgb_palette: u8,
+        bg_priority: bool,
+    ) {
         self.len = FIFO_CAPACITY;
         for (slot, color) in self.pixels.iter_mut().zip(colors) {
             *slot = FifoPixel {

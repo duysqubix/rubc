@@ -1,7 +1,5 @@
 use crate::golden::{GoldenInitialState, GoldenV2Reader, GoldenV2Row, GoldenVramState, Vram};
-use crate::pixel_fifo::{
-    decode_2bpp, BgFetcher, FetchStep, FifoPixel, LineRenderState, SpriteOverlay,
-};
+use crate::pixel_fifo::{decode_2bpp, FetchStep, FifoPixel, LineRenderState, SpriteOverlay};
 use crate::time::Time;
 use std::fmt;
 use std::path::Path;
@@ -547,7 +545,9 @@ impl PpuInternal {
                 let colors = decode_2bpp(self.fifo.fetcher.low, self.fifo.fetcher.high, x_flip);
                 let cgb_palette = self.fifo.fetcher.attr & 0x07;
                 let bg_priority = cgb && self.fifo.fetcher.attr & 0x80 != 0;
-                self.fifo.bg_fifo.push_bg_pixels(colors, cgb_palette, bg_priority);
+                self.fifo
+                    .bg_fifo
+                    .push_bg_pixels(colors, cgb_palette, bg_priority);
                 self.fifo.fetcher.fetcher_x = self.fifo.fetcher.fetcher_x.wrapping_add(1);
                 self.fifo.fetcher.step = FetchStep::TileNo;
                 self.fifo.fetcher.step_ticks = 0;
@@ -575,9 +575,7 @@ impl PpuInternal {
             FetchStep::TileDataLow => {
                 // DMG re-samples SCY between TileNo and the data fetches;
                 // CGB latches the TileNo row (rubc-core phase_bg_low_sample).
-                if !self.fifo.fetcher.window
-                    && !cgb
-                    && self.scy != self.fifo.fetcher.scy_at_tile_no
+                if !self.fifo.fetcher.window && !cgb && self.scy != self.fifo.fetcher.scy_at_tile_no
                 {
                     self.fifo.fetcher.y = ly.wrapping_add(self.scy);
                     let (tile, attr) = self.fifo_fetch_tile_no(cgb);
@@ -645,8 +643,7 @@ impl PpuInternal {
         if self.lcdc & 0x10 != 0 {
             u16::from(self.fifo.fetcher.tile) * 16 + row * 2
         } else {
-            (0x1000_i32 + i32::from(self.fifo.fetcher.tile as i8) * 16 + i32::from(row) * 2)
-                as u16
+            (0x1000_i32 + i32::from(self.fifo.fetcher.tile as i8) * 16 + i32::from(row) * 2) as u16
         }
     }
 
@@ -691,9 +688,8 @@ impl PpuInternal {
         } else {
             bg.color & 0x03
         };
-        let sprite_wins = sprite.occupied
-            && sprite.color != 0
-            && !(sprite.bg_priority && bg_color != 0);
+        let sprite_wins =
+            sprite.occupied && sprite.color != 0 && !(sprite.bg_priority && bg_color != 0);
         if sprite_wins {
             RenderedPpuPixel {
                 raw_color: sprite.color & 0x03,
