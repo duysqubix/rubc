@@ -21,10 +21,13 @@ pub struct ConformanceConfig {
 }
 
 impl ConformanceConfig {
-    // Combined floor reconciled after merging 2a (boot profiles) + 2c (OAM) —
-    // each measured its own delta from the 114 base in isolation; the real
-    // combined count is set below after a full ng-conformance run.
-    pub const FULL_MANIFEST_PASS_FLOOR: usize = 114;
+    // Conservative combined floor after merging 2a (boot profiles, solo +7=121)
+    // + 2c (OAM, solo +5=119) onto the 114 base. The two slices touch disjoint
+    // ROM categories so the combined count is >= max(119,121), but the exact
+    // figure is not pinned here without a measured full run: this >= floor is
+    // set to the lower independently-verified value and a CI `just ng-conformance`
+    // run ratchets it up. It can only rise; it never false-greens.
+    pub const FULL_MANIFEST_PASS_FLOOR: usize = 119;
     pub const DEFAULT_SUBSET_PASS_FLOOR: usize = 3;
 
     pub fn default_test_subset() -> Self {
