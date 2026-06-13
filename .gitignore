@@ -53,9 +53,10 @@ deploy/certs/*.pem
 deploy/certs/*.key
 deploy/certs/*.crt
 
-# Regenerable reference cruft (do NOT commit): assembler intermediates,
-# golden traces, and redundant source zips superseded by extracted ROMs.
-reference/goldens/
+# Regenerable reference cruft (do NOT commit): assembler intermediates and
+# redundant source zips superseded by extracted ROMs.
+# (golden traces under reference/goldens/ ARE committed — SameBoy-sourced
+# hardware-truth oracles, reproducible from reference/goldens/instrumentation.patch.)
 reference/test-suites/mooneye-test-suite/build/**/*.o
 reference/test-suites/mooneye-test-suite/build/**/*.sym
 reference/test-suites/mooneye-test-suite/build/**/*.map

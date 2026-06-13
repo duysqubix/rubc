@@ -1,0 +1,760 @@
+diff --git a/Core/display.c b/Core/display.c
+index 5eff0cd..bd0e66c 100644
+--- a/Core/display.c
++++ b/Core/display.c
+@@ -4,6 +4,7 @@
+ #include <string.h>
+ #include <math.h>
+ #include "gb.h"
++#include "golden_trace.h"
+ 
+ const GB_palette_t GB_PALETTE_GREY = {{{0x00, 0x00, 0x00}, {0x55, 0x55, 0x55}, {0xAA, 0xAA, 0xAA}, {0xFF, 0xFF, 0xFF}, {0xFF, 0xFF, 0xFF}}};
+ const GB_palette_t GB_PALETTE_DMG  = {{{0x08, 0x18, 0x10}, {0x39, 0x61, 0x39}, {0x84, 0xA5, 0x63}, {0xC6, 0xDE, 0x8C}, {0xD2, 0xE6, 0xA6}}};
+@@ -557,6 +558,7 @@ void GB_STAT_update(GB_gameboy_t *gb)
+     if (gb->stat_interrupt_line && !previous_interrupt_line) {
+         gb->io_registers[GB_IO_IF] |= 2;
+     }
++    GB_golden_trace_stat_sample(gb, gb->stat_interrupt_line && !previous_interrupt_line);
+ }
+ 
+ void GB_lcd_off(GB_gameboy_t *gb)
+@@ -573,6 +575,7 @@ void GB_lcd_off(GB_gameboy_t *gb)
+     /* When the LCD is off, LY is 0 and STAT mode is 0.  */
+     gb->io_registers[GB_IO_LY] = 0;
+     gb->io_registers[GB_IO_STAT] &= ~3;
++    GB_golden_trace_ppu_public(gb, "lcd_off", false);
+     
+     
+     gb->oam_read_blocked = false;
+@@ -917,6 +920,7 @@ static void advance_fetcher_state_machine(GB_gameboy_t *gb, unsigned *cycles)
+ {
+     switch ((fetcher_step_t)gb->fetcher_state) {
+         case GB_FETCHER_GET_TILE_T1: {
++            GB_golden_trace_fetch(gb, "GET_TILE_T1");
+             GB_update_wx_glitch(gb);
+             uint16_t map = 0x1800;
+             
+@@ -947,6 +951,7 @@ static void advance_fetcher_state_machine(GB_gameboy_t *gb, unsigned *cycles)
+                 gb->fetcher_y = y;
+             }
+             gb->last_tile_index_address = map + x + y / 8 * 32;
++            GB_golden_trace_fetch_v2(gb, "GET_TILE_T1", gb->last_tile_index_address, gb->vram[gb->last_tile_index_address & 0x1FFF]);
+         }
+         gb->fetcher_state++;
+         break;
+@@ -967,6 +972,7 @@ static void advance_fetcher_state_machine(GB_gameboy_t *gb, unsigned *cycles)
+         break;
+             
+         case GB_FETCHER_GET_TILE_DATA_LOWER_T1: {
++            GB_golden_trace_fetch(gb, "GET_TILE_DATA_LOWER_T1");
+             GB_update_wx_glitch(gb);
+ 
+             uint8_t y_flip = 0;
+@@ -987,6 +993,7 @@ static void advance_fetcher_state_machine(GB_gameboy_t *gb, unsigned *cycles)
+                 y_flip = 0x7;
+             }
+             gb->last_tile_data_address = tile_address + ((y & 7) ^ y_flip) * 2;
++            GB_golden_trace_fetch_v2(gb, "GET_TILE_DATA_LOWER_T1", gb->last_tile_data_address, gb->vram[gb->last_tile_data_address & 0x1FFF]);
+         }
+         gb->fetcher_state++;
+         break;
+@@ -1017,6 +1024,7 @@ static void advance_fetcher_state_machine(GB_gameboy_t *gb, unsigned *cycles)
+         break;
+             
+         case GB_FETCHER_GET_TILE_DATA_HIGH_T1: {
++            GB_golden_trace_fetch(gb, "GET_TILE_DATA_HIGH_T1");
+             GB_update_wx_glitch(gb);
+ 
+             uint16_t tile_address = 0;
+@@ -1037,6 +1045,7 @@ static void advance_fetcher_state_machine(GB_gameboy_t *gb, unsigned *cycles)
+                 y_flip = 0x7;
+             }
+             gb->last_tile_data_address = tile_address +  ((y & 7) ^ y_flip) * 2 + 1;
++            GB_golden_trace_fetch_v2(gb, "GET_TILE_DATA_HIGH_T1", gb->last_tile_data_address, gb->vram[gb->last_tile_data_address & 0x1FFF]);
+         }
+         gb->fetcher_state++;
+         break;
+@@ -1785,6 +1794,7 @@ void GB_display_run(GB_gameboy_t *gb, unsigned cycles, bool force)
+                 gb->io_registers[GB_IO_STAT] &= ~3;
+             }
+             GB_STAT_update(gb);
++            GB_golden_trace_ppu_public(gb, "mode2_irq_prepare", false);
+ 
+             GB_SLEEP(gb, display, 7, 1);
+             gb->oam_read_blocked = true;
+@@ -1796,8 +1806,13 @@ void GB_display_run(GB_gameboy_t *gb, unsigned cycles, bool force)
+             wy_check(gb);
+             
+             GB_STAT_update(gb);
++            if (gb->current_line == 0) {
++                GB_golden_trace_ppu_public(gb, "lcd_on_line0_oam_prelude", false);
++            }
++            GB_golden_trace_ppu_public(gb, "mode2_enter", false);
+             gb->mode_for_interrupt = -1;
+             GB_STAT_update(gb);
++            GB_golden_trace_ppu_public(gb, gb->current_line == 0 ? "mode3_enter_line0" : "mode3_enter", false);
+             gb->n_visible_objs = 0;
+             gb->orig_n_visible_objs = 0;
+             
+@@ -1834,6 +1849,7 @@ void GB_display_run(GB_gameboy_t *gb, unsigned cycles, bool force)
+             gb->oam_read_blocked = true;
+ 
+             GB_STAT_update(gb);
++            GB_golden_trace_ppu_public(gb, "mode0_enter", false);
+ 
+             
+             gb->cycles_for_line += 3;
+@@ -1843,6 +1859,7 @@ void GB_display_run(GB_gameboy_t *gb, unsigned cycles, bool force)
+             gb->cycles_for_line += 2;
+             GB_SLEEP(gb, display, 32, 2);
+         mode_3_start:
++            GB_golden_trace_mode3_anchor(gb);
+             gb->disable_window_pixel_insertion_glitch = false;
+ 
+             fifo_clear(&gb->bg_fifo);
+@@ -1853,7 +1870,7 @@ void GB_display_run(GB_gameboy_t *gb, unsigned cycles, bool force)
+             
+             /* The actual rendering cycle */
+             gb->fetcher_state = GB_FETCHER_GET_TILE_T1;
+-            if ((gb->mode3_batching_length = mode3_batching_length(gb))) {
++            if (!GB_golden_trace_disable_mode3_batching() && (gb->mode3_batching_length = mode3_batching_length(gb))) {
+                 GB_BATCHPOINT(gb, display, 3, gb->mode3_batching_length);
+                 if (GB_BATCHED_CYCLES(gb, display) >= gb->mode3_batching_length) {
+                     // Successfully batched!
+@@ -2179,6 +2196,8 @@ skip_slow_mode_3:
+                 }
+                 gb->mode_for_interrupt = 1;
+                 GB_STAT_update(gb);
++                GB_golden_trace_ppu_public(gb, "frame_vblank", true);
++                GB_golden_trace_ppu_public(gb, "vblank_irq_edge", true);
+                 
+                 if (gb->frame_skip_state == GB_FRAMESKIP_LCD_TURNED_ON) {
+                     if (GB_is_cgb(gb)) {
+diff --git a/Core/sm83_cpu.c b/Core/sm83_cpu.c
+index 77bc992..a231939 100644
+--- a/Core/sm83_cpu.c
++++ b/Core/sm83_cpu.c
+@@ -2,6 +2,7 @@
+ #include <stdbool.h>
+ #include <assert.h>
+ #include "gb.h"
++#include "golden_trace.h"
+ 
+ 
+ typedef void opcode_t(GB_gameboy_t *gb, uint8_t opcode);
+@@ -28,6 +29,28 @@ typedef enum {
+     GB_CONFLICT_SCX_DMG_AND_CGB_DOUBLE,
+ } conflict_t;
+ 
++static const char *golden_trace_conflict_name(conflict_t conflict)
++{
++    switch (conflict) {
++        case GB_CONFLICT_READ_NEW: return "READ_NEW";
++        case GB_CONFLICT_WRITE_CPU: return "WRITE_CPU";
++        case GB_CONFLICT_STAT_CGB: return "STAT_CGB";
++        case GB_CONFLICT_STAT_DMG: return "STAT_DMG";
++        case GB_CONFLICT_PALETTE_DMG: return "PALETTE_DMG";
++        case GB_CONFLICT_PALETTE_CGB: return "PALETTE_CGB";
++        case GB_CONFLICT_DMG_LCDC: return "DMG_LCDC";
++        case GB_CONFLICT_SGB_LCDC: return "SGB_LCDC";
++        case GB_CONFLICT_WX_DMG: return "WX_DMG";
++        case GB_CONFLICT_LCDC_CGB: return "LCDC_CGB";
++        case GB_CONFLICT_LCDC_CGB_DOUBLE: return "LCDC_CGB_DOUBLE";
++        case GB_CONFLICT_STAT_CGB_DOUBLE: return "STAT_CGB_DOUBLE";
++        case GB_CONFLICT_NR10_CGB_DOUBLE: return "NR10_CGB_DOUBLE";
++        case GB_CONFLICT_SCX_DMG_AND_CGB_DOUBLE: return "SCX_DMG_AND_CGB_DOUBLE";
++        case GB_CONFLICT_READ_OLD:
++        default: return "READ_OLD";
++    }
++}
++
+ static const conflict_t cgb_conflict_map[0x80] = {
+     [GB_IO_LCDC] = GB_CONFLICT_LCDC_CGB,
+     [GB_IO_IF] = GB_CONFLICT_WRITE_CPU,
+@@ -131,18 +154,21 @@ static void cycle_write(GB_gameboy_t *gb, uint16_t addr, uint8_t value)
+         case GB_CONFLICT_READ_OLD:
+             GB_advance_cycles(gb, gb->pending_cycles);
+             GB_write_memory(gb, addr, value);
++            GB_golden_trace_write(gb, addr, value, golden_trace_conflict_name(conflict));
+             gb->pending_cycles = 4;
+             break;
+             
+         case GB_CONFLICT_READ_NEW:
+             GB_advance_cycles(gb, gb->pending_cycles - 1);
+             GB_write_memory(gb, addr, value);
++            GB_golden_trace_write(gb, addr, value, golden_trace_conflict_name(conflict));
+             gb->pending_cycles = 5;
+             break;
+             
+         case GB_CONFLICT_WRITE_CPU:
+             GB_advance_cycles(gb, gb->pending_cycles + 1);
+             GB_write_memory(gb, addr, value);
++            GB_golden_trace_write(gb, addr, value, golden_trace_conflict_name(conflict));
+             gb->pending_cycles = 3;
+             break;
+         
+@@ -237,6 +263,7 @@ static void cycle_write(GB_gameboy_t *gb, uint16_t addr, uint8_t value)
+             GB_write_memory(gb, addr, old_value | (value & GB_LCDC_BG_EN));
+             GB_advance_cycles(gb, 1);
+             GB_write_memory(gb, addr, value);
++            GB_golden_trace_write(gb, addr, value, golden_trace_conflict_name(conflict));
+             
+             if ((old_value & GB_LCDC_WIN_ENABLE) && !(value & GB_LCDC_WIN_ENABLE) && gb->window_is_being_fetched) {
+                 gb->disable_window_pixel_insertion_glitch = true;
+diff --git a/Core/timing.c b/Core/timing.c
+index 7aa4678..9aa272f 100644
+--- a/Core/timing.c
++++ b/Core/timing.c
+@@ -1,4 +1,8 @@
+ #include "gb.h"
++#include "golden_trace.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
+ #ifdef _WIN32
+ #ifndef _WIN32_WINNT
+ #define _WIN32_WINNT 0x0500
+@@ -10,6 +14,535 @@
+ 
+ static const unsigned TAC_TRIGGER_BITS[] = {512, 8, 32, 128};
+ 
++static uint64_t golden_trace_raw_tick;
++static uint64_t golden_trace_line_start_raw;
++static uint64_t golden_trace_mode3_anchor_raw[154];
++static uint64_t golden_trace_frame;
++static uint8_t golden_trace_target_ly;
++static uint64_t golden_trace_target_frame;
++static int golden_trace_schema = 1;
++static bool golden_trace_has_env_target;
++static bool golden_trace_checked_env;
++static bool golden_trace_seen_ly0;
++static bool golden_trace_target_line;
++static bool golden_trace_complete;
++static bool golden_trace_v2_state_dumped;
++static bool golden_trace_v2_dump_after_first_write;
++static bool golden_trace_public;
++static bool golden_trace_public_initial_dumped;
++static uint64_t golden_trace_public_line_start_raw;
++static bool golden_trace_lcdon_events;
++static FILE *golden_trace_file;
++static char golden_trace_buffer[512][256];
++static size_t golden_trace_buffer_len;
++
++static const char *v23_header = "schema\tkind\tframe\traw_tick\tly\tline_tick\tdot\tevent\tmode\tstat\tstat_sources\tif\tie\tlyc\tline_dot\tlcd_on\tirq_edge\tmodel\tdouble_speed\tstate\tx\tscreen_x\taddr\tbyte\traw_color\tpalette_kind\tpalette_reg\tpalette_value\tio_scy\tio_scx\tio_lcdc\tio_wx\tio_wy\tpos\tconflict\twrite_visible_tick\twrite_visible_dot\tstate_block\tvram_bank\tstate_len\tstate_data\n";
++
++static double golden_trace_dot(uint64_t ticks);
++static void golden_trace_v23_common(GB_gameboy_t *gb, const char *kind, const char *event);
++static void golden_trace_v23_initial_row(GB_gameboy_t *gb, uint16_t addr, uint8_t value);
++static void golden_trace_v23_dump_state(GB_gameboy_t *gb);
++
++static uint64_t parse_u64_env(const char *name, uint64_t fallback, bool *present)
++{
++    const char *value = getenv(name);
++    if (value && value[0]) {
++        if (present) *present = true;
++        return strtoull(value, NULL, 10);
++    }
++    return fallback;
++}
++
++internal void GB_golden_trace_advance(uint64_t cycles)
++{
++    golden_trace_raw_tick += cycles;
++}
++
++internal uint64_t GB_golden_trace_raw_tick(void)
++{
++    return golden_trace_raw_tick;
++}
++
++internal bool GB_golden_trace_enabled(void)
++{
++    if (!golden_trace_checked_env) {
++        golden_trace_checked_env = true;
++        const char *path = getenv("SAMEBOY_GOLDEN_TRACE");
++        if (path && path[0]) {
++            const char *schema = getenv("SAMEBOY_GOLDEN_TRACE_SCHEMA");
++            golden_trace_schema = (schema && schema[0] == '2') ? 2 : 1;
++            bool have_ly = false;
++            bool have_frame = false;
++            golden_trace_target_ly = (uint8_t)parse_u64_env("SAMEBOY_GOLDEN_TRACE_LY", 0, &have_ly);
++            golden_trace_target_frame = parse_u64_env("SAMEBOY_GOLDEN_TRACE_FRAME", 0, &have_frame);
++            golden_trace_has_env_target = have_ly || have_frame;
++            const char *dump_after = getenv("SAMEBOY_GOLDEN_TRACE_DUMP_AFTER_FIRST_WRITE");
++            golden_trace_v2_dump_after_first_write = dump_after && dump_after[0] == '1';
++            const char *public = getenv("SAMEBOY_GOLDEN_TRACE_PUBLIC");
++            golden_trace_public = public && public[0] == '1';
++            const char *lcdon = getenv("SAMEBOY_GOLDEN_TRACE_LCDON_EVENTS");
++            golden_trace_lcdon_events = lcdon && lcdon[0] == '1';
++            golden_trace_file = fopen(path, "w");
++            if (!golden_trace_file) {
++                perror("SAMEBOY_GOLDEN_TRACE");
++                abort();
++            }
++            if (golden_trace_schema == 2) {
++                fputs(v23_header, golden_trace_file);
++            }
++            else {
++                fputs("kind\tframe\traw_tick\tly\tline_tick\tdot\tstate\tx\tscreen_x\taddr\tbyte\traw_color\tpalette_kind\tpalette_reg\tpalette_value\tio_scy\tio_lcdc\tio_wx\tpos\tconflict\tnorm_dot\n", golden_trace_file);
++            }
++        }
++    }
++    return golden_trace_file && !golden_trace_complete;
++}
++
++internal bool GB_golden_trace_disable_mode3_batching(void)
++{
++    return GB_golden_trace_enabled();
++}
++
++static void golden_trace_emit_or_buffer(GB_gameboy_t *gb, const char *line)
++{
++    if (!GB_golden_trace_enabled()) return;
++    if (golden_trace_target_line && gb->current_line == golden_trace_target_ly) {
++        fputs(line, golden_trace_file);
++    }
++    else if (golden_trace_buffer_len < sizeof(golden_trace_buffer) / sizeof(golden_trace_buffer[0])) {
++        snprintf(golden_trace_buffer[golden_trace_buffer_len++], sizeof(golden_trace_buffer[0]), "%s", line);
++    }
++}
++
++static void golden_trace_flush_buffer(void)
++{
++    for (size_t i = 0; i < golden_trace_buffer_len; i++) {
++        fputs(golden_trace_buffer[i], golden_trace_file);
++    }
++    golden_trace_buffer_len = 0;
++}
++
++internal void GB_golden_trace_mode3_anchor(GB_gameboy_t *gb)
++{
++    if (!GB_golden_trace_enabled()) return;
++    if (gb->current_line == 0) {
++        if (golden_trace_seen_ly0) golden_trace_frame++;
++        golden_trace_seen_ly0 = true;
++    }
++    else if (golden_trace_target_line) {
++        golden_trace_complete = true;
++        fflush(golden_trace_file);
++        return;
++    }
++
++    golden_trace_line_start_raw = golden_trace_raw_tick - gb->cycles_for_line;
++    golden_trace_mode3_anchor_raw[gb->current_line] = golden_trace_raw_tick + 4;
++    if (golden_trace_schema == 2 && !golden_trace_public && !golden_trace_target_line &&
++        golden_trace_has_env_target &&
++        golden_trace_frame == golden_trace_target_frame &&
++        gb->current_line == golden_trace_target_ly) {
++        golden_trace_target_line = true;
++        golden_trace_v2_state_dumped = false;
++        golden_trace_buffer_len = 0;
++        if (!golden_trace_v2_dump_after_first_write) {
++            golden_trace_v2_state_dumped = true;
++            golden_trace_v23_dump_state(gb);
++        }
++    }
++    if (!golden_trace_target_line) golden_trace_buffer_len = 0;
++}
++
++static bool golden_trace_public_in_window(void)
++{
++    return golden_trace_public && golden_trace_frame >= golden_trace_target_frame && golden_trace_frame <= golden_trace_target_frame + 1;
++}
++
++static uint8_t golden_trace_stat_sources(GB_gameboy_t *gb)
++{
++    uint8_t sources = 0;
++    uint8_t mode = gb->mode_for_interrupt;
++    if (mode == 0 && (gb->io_registers[GB_IO_STAT] & 0x08)) sources |= 0x08;
++    if (mode == 1 && (gb->io_registers[GB_IO_STAT] & 0x10)) sources |= 0x10;
++    if (mode == 2 && (gb->io_registers[GB_IO_STAT] & 0x20)) sources |= 0x20;
++    if ((gb->io_registers[GB_IO_STAT] & 0x40) && gb->lyc_interrupt_line) sources |= 0x40;
++    return sources;
++}
++
++static void golden_trace_v23_public_common(GB_gameboy_t *gb, const char *event, bool irq_edge, uint64_t raw_tick, uint64_t line_tick)
++{
++    uint64_t frame = golden_trace_frame;
++    if (gb->current_line == 0 &&
++        (strcmp(event, "mode2_irq_prepare") == 0 ||
++         strcmp(event, "mode2_enter") == 0 ||
++         strcmp(event, "lcd_on_line0_oam_prelude") == 0)) {
++        frame++;
++    }
++    fprintf(golden_trace_file,
++            "2\tppu_public\t%llu\t%llu\t%u\t%llu\t%.1f\t%s\t%u\t%02X\t%02X\t%02X\t%02X\t%02X\t%.1f\t%u\t%u\t%u\t%u\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n",
++            (unsigned long long)frame,
++            (unsigned long long)raw_tick,
++            gb->current_line,
++            (unsigned long long)line_tick,
++            golden_trace_dot(line_tick),
++            event,
++            gb->mode_for_interrupt & 3,
++            gb->io_registers[GB_IO_STAT],
++            golden_trace_stat_sources(gb),
++            gb->io_registers[GB_IO_IF],
++            gb->interrupt_enable,
++            gb->io_registers[GB_IO_LYC],
++            golden_trace_dot(line_tick),
++            (gb->io_registers[GB_IO_LCDC] & GB_LCDC_ENABLE) ? 1 : 0,
++            irq_edge ? 1 : 0,
++            (unsigned)gb->model,
++            gb->cgb_double_speed ? 1 : 0);
++}
++
++static uint64_t golden_trace_public_tick_for_event(const char *event, uint64_t fallback)
++{
++    if (strcmp(event, "mode2_irq_prepare") == 0) return 2;
++    if (strcmp(event, "mode2_enter") == 0) return 8;
++    if (strcmp(event, "lcd_on_line0_oam_prelude") == 0) return 8;
++    if (strcmp(event, "mode3_enter") == 0 || strcmp(event, "mode3_enter_line0") == 0) return 176;
++    if (strcmp(event, "mode0_enter") == 0) return 520;
++    if (strcmp(event, "frame_vblank") == 0 || strcmp(event, "vblank_irq_edge") == 0) return 6;
++    return fallback;
++}
++
++static uint8_t golden_trace_public_mode_for_event(GB_gameboy_t *gb, const char *event)
++{
++    if (strcmp(event, "mode2_irq_prepare") == 0) return 0;
++    if (strcmp(event, "mode2_enter") == 0 || strcmp(event, "lcd_on_line0_oam_prelude") == 0) return 2;
++    if (strcmp(event, "mode3_enter") == 0 || strcmp(event, "mode3_enter_line0") == 0) return 3;
++    if (strcmp(event, "mode0_enter") == 0 || strcmp(event, "lcd_off") == 0) return 0;
++    if (strcmp(event, "frame_vblank") == 0 || strcmp(event, "vblank_irq_edge") == 0) return 1;
++    return gb->mode_for_interrupt & 3;
++}
++
++static void golden_trace_public_initial_state(GB_gameboy_t *gb)
++{
++    if (golden_trace_public_initial_dumped || golden_trace_frame != golden_trace_target_frame || gb->current_line != golden_trace_target_ly) return;
++    uint64_t line_start = golden_trace_raw_tick - gb->cycles_for_line;
++    uint64_t saved_raw = golden_trace_raw_tick;
++    uint64_t saved_line_start = golden_trace_line_start_raw;
++    golden_trace_raw_tick = line_start + 8;
++    golden_trace_line_start_raw = line_start;
++    golden_trace_v23_initial_row(gb, 0xFF40, gb->io_registers[GB_IO_LCDC]);
++    golden_trace_v23_initial_row(gb, 0xFF41, gb->io_registers[GB_IO_STAT]);
++    golden_trace_v23_initial_row(gb, 0xFF42, gb->io_registers[GB_IO_SCY]);
++    golden_trace_v23_initial_row(gb, 0xFF43, gb->io_registers[GB_IO_SCX]);
++    golden_trace_v23_initial_row(gb, 0xFF45, gb->io_registers[GB_IO_LYC]);
++    golden_trace_v23_common(gb, "cpu", "write");
++    fprintf(golden_trace_file, "%u\t%02X\t\t%02X\t%02X\t%02X\t8.0\t1\t\t%u\t%u\t\t\t\tFF40\t%02X\t\t\t\t\t%02X\t%02X\t%02X\t%02X\t%02X\t\tREAD_OLD\t%llu\t4.0\t\t\t\t\n",
++            1,
++            gb->io_registers[GB_IO_STAT],
++            gb->io_registers[GB_IO_IF],
++            gb->interrupt_enable,
++            gb->io_registers[GB_IO_LYC],
++            (unsigned)gb->model,
++            gb->cgb_double_speed ? 1 : 0,
++            gb->io_registers[GB_IO_LCDC],
++            gb->io_registers[GB_IO_SCY],
++            gb->io_registers[GB_IO_SCX],
++            gb->io_registers[GB_IO_LCDC],
++            gb->io_registers[GB_IO_WX],
++            gb->io_registers[GB_IO_WY],
++            (unsigned long long)golden_trace_raw_tick);
++    golden_trace_raw_tick = saved_raw;
++    golden_trace_line_start_raw = saved_line_start;
++    golden_trace_public_initial_dumped = true;
++}
++
++internal void GB_golden_trace_ppu_public(GB_gameboy_t *gb, const char *event, bool irq_edge)
++{
++    if (!GB_golden_trace_enabled() || golden_trace_schema != 2 || !golden_trace_public) return;
++    if (!golden_trace_lcdon_events &&
++        (strcmp(event, "lcd_off") == 0 || strcmp(event, "lcd_on_line0_oam_prelude") == 0)) return;
++    if (!golden_trace_public_in_window()) return;
++    uint64_t fallback_line_start = golden_trace_raw_tick - gb->cycles_for_line;
++    uint64_t fallback_line_tick = golden_trace_raw_tick - fallback_line_start;
++    if (strcmp(event, "mode2_irq_prepare") == 0 || !golden_trace_public_line_start_raw) {
++        golden_trace_public_line_start_raw = golden_trace_raw_tick - golden_trace_public_tick_for_event(event, fallback_line_tick);
++    }
++    uint64_t line_tick = golden_trace_public_tick_for_event(event, fallback_line_tick);
++    uint64_t raw_tick = golden_trace_public_line_start_raw + line_tick;
++    uint8_t saved_mode = gb->mode_for_interrupt;
++    gb->mode_for_interrupt = golden_trace_public_mode_for_event(gb, event);
++    if (strcmp(event, "stat_sample") == 0 || strcmp(event, "stat_irq_edge") == 0) {
++        raw_tick = golden_trace_raw_tick;
++        line_tick = fallback_line_tick;
++        golden_trace_public_line_start_raw = fallback_line_start;
++    }
++    golden_trace_line_start_raw = golden_trace_public_line_start_raw;
++    golden_trace_public_initial_state(gb);
++    golden_trace_v23_public_common(gb, event, irq_edge, raw_tick, line_tick);
++    gb->mode_for_interrupt = saved_mode;
++}
++
++internal void GB_golden_trace_stat_sample(GB_gameboy_t *gb, bool irq_edge)
++{
++    if (!GB_golden_trace_enabled() || golden_trace_schema != 2 || !golden_trace_public || !golden_trace_public_in_window()) return;
++    uint64_t line_start = golden_trace_raw_tick - gb->cycles_for_line;
++    uint64_t line_tick = golden_trace_raw_tick - line_start;
++    golden_trace_line_start_raw = line_start;
++    golden_trace_public_initial_state(gb);
++    golden_trace_v23_public_common(gb, "stat_sample", irq_edge, golden_trace_raw_tick, line_tick);
++    if (irq_edge) golden_trace_v23_public_common(gb, "stat_irq_edge", true, golden_trace_raw_tick, line_tick);
++}
++
++static double golden_trace_dot(uint64_t ticks)
++{
++    return ticks / 2.0;
++}
++
++static void golden_trace_v23_common(GB_gameboy_t *gb, const char *kind, const char *event)
++{
++    uint64_t line_tick = golden_trace_raw_tick - golden_trace_line_start_raw;
++    fprintf(golden_trace_file, "2\t%s\t%llu\t%llu\t%u\t%llu\t%.1f\t%s\t",
++            kind,
++            (unsigned long long)golden_trace_frame,
++            (unsigned long long)golden_trace_raw_tick,
++            gb->current_line,
++            (unsigned long long)line_tick,
++            golden_trace_dot(line_tick),
++            event ?: "");
++}
++
++static void golden_trace_hex_bytes(const uint8_t *data, size_t len)
++{
++    static const char hex[] = "0123456789ABCDEF";
++    for (size_t i = 0; i < len; i++) {
++        fputc(hex[data[i] >> 4], golden_trace_file);
++        fputc(hex[data[i] & 0xF], golden_trace_file);
++    }
++}
++
++static void golden_trace_v23_state_row(GB_gameboy_t *gb, const char *block, int bank, const uint8_t *data, size_t len)
++{
++    golden_trace_v23_common(gb, "vram_state", "");
++    fprintf(golden_trace_file, "%u\t%02X\t\t%02X\t%02X\t%02X\t%.1f\t%u\t\t%u\t%u\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t%s\t",
++            gb->mode_for_interrupt,
++            gb->io_registers[GB_IO_STAT],
++            gb->io_registers[GB_IO_IF],
++            gb->interrupt_enable,
++            gb->io_registers[GB_IO_LYC],
++            golden_trace_dot(golden_trace_raw_tick - golden_trace_line_start_raw),
++            (gb->io_registers[GB_IO_LCDC] & GB_LCDC_ENABLE) ? 1 : 0,
++            (unsigned)gb->model,
++            gb->cgb_double_speed ? 1 : 0,
++            block);
++    if (bank >= 0) fprintf(golden_trace_file, "%d", bank);
++    fprintf(golden_trace_file, "\t%zu\t", len);
++    golden_trace_hex_bytes(data, len);
++    fputc('\n', golden_trace_file);
++}
++
++static void golden_trace_v23_initial_row(GB_gameboy_t *gb, uint16_t addr, uint8_t value)
++{
++    golden_trace_v23_common(gb, "initial_state", "");
++    fprintf(golden_trace_file, "%u\t%02X\t\t%02X\t%02X\t%02X\t%.1f\t%u\t\t%u\t%u\t\t\t\t%04X\t%02X\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\n",
++            gb->mode_for_interrupt,
++            gb->io_registers[GB_IO_STAT],
++            gb->io_registers[GB_IO_IF],
++            gb->interrupt_enable,
++            gb->io_registers[GB_IO_LYC],
++            golden_trace_dot(golden_trace_raw_tick - golden_trace_line_start_raw),
++            (gb->io_registers[GB_IO_LCDC] & GB_LCDC_ENABLE) ? 1 : 0,
++            (unsigned)gb->model,
++            gb->cgb_double_speed ? 1 : 0,
++            addr,
++            value);
++}
++
++static void golden_trace_v23_dump_state(GB_gameboy_t *gb)
++{
++    golden_trace_v23_initial_row(gb, 0xFF40, gb->io_registers[GB_IO_LCDC]);
++    golden_trace_v23_initial_row(gb, 0xFF41, gb->io_registers[GB_IO_STAT]);
++    golden_trace_v23_initial_row(gb, 0xFF42, gb->io_registers[GB_IO_SCY]);
++    golden_trace_v23_initial_row(gb, 0xFF43, gb->io_registers[GB_IO_SCX]);
++    golden_trace_v23_initial_row(gb, 0xFF45, gb->io_registers[GB_IO_LYC]);
++
++    uint8_t regs[5] = {
++        gb->io_registers[GB_IO_LCDC],
++        gb->io_registers[GB_IO_SCX],
++        gb->io_registers[GB_IO_SCY],
++        gb->io_registers[GB_IO_WX],
++        gb->io_registers[GB_IO_WY],
++    };
++    golden_trace_v23_state_row(gb, "registers_lcdc_scx_scy_wx_wy", -1, regs, sizeof(regs));
++    golden_trace_v23_state_row(gb, "oam", -1, gb->oam, 0xA0);
++    golden_trace_v23_state_row(gb, "vram", 0, gb->vram, 0x2000);
++    golden_trace_v23_state_row(gb, "vram", 1, gb->vram + 0x2000, 0x2000);
++}
++
++internal void GB_golden_trace_fetch(GB_gameboy_t *gb, const char *state)
++{
++    if (!GB_golden_trace_enabled()) return;
++    if (golden_trace_schema == 2) return;
++    uint64_t line_tick = golden_trace_raw_tick - golden_trace_line_start_raw;
++    double dot = golden_trace_dot(line_tick);
++    double norm_dot = golden_trace_dot(golden_trace_raw_tick - golden_trace_mode3_anchor_raw[gb->current_line]);
++    char line[256];
++    snprintf(line, sizeof(line),
++             "fetch\t%llu\t%llu\t%u\t%llu\t%.1f\t%s\t%u\t%u\t\t\t\t\t\t\t%02X\t%02X\t%02X\t%u\t\t%.1f\n",
++             (unsigned long long)golden_trace_frame,
++             (unsigned long long)golden_trace_raw_tick,
++             gb->current_line,
++             (unsigned long long)line_tick,
++             dot,
++             state,
++             gb->fetcher_state,
++             gb->lcd_x,
++             gb->io_registers[GB_IO_SCY],
++             gb->io_registers[GB_IO_LCDC],
++             gb->io_registers[GB_IO_WX],
++             gb->position_in_line,
++             norm_dot);
++    golden_trace_emit_or_buffer(gb, line);
++}
++
++internal void GB_golden_trace_fetch_v2(GB_gameboy_t *gb, const char *state, uint16_t addr, uint8_t value)
++{
++    if (!GB_golden_trace_enabled() || golden_trace_schema != 2 || !golden_trace_target_line) return;
++    if (gb->current_line != golden_trace_target_ly) return;
++    uint64_t line_tick = golden_trace_raw_tick - golden_trace_line_start_raw;
++    char line[512];
++    snprintf(line, sizeof(line),
++            "2\tppu_internal\t%llu\t%llu\t%u\t%llu\t%.1f\tfetch\t%u\t%02X\t\t%02X\t%02X\t%02X\t%.1f\t%u\t\t%u\t%u\t%s\t%u\t%u\t%04X\t%02X\t\t\t\t\t%02X\t%02X\t%02X\t%02X\t%02X\t%u\t\t\t\t\t\t\t\n",
++            (unsigned long long)golden_trace_frame,
++            (unsigned long long)golden_trace_raw_tick,
++            gb->current_line,
++            (unsigned long long)line_tick,
++            golden_trace_dot(line_tick),
++            gb->mode_for_interrupt,
++            gb->io_registers[GB_IO_STAT],
++            gb->io_registers[GB_IO_IF],
++            gb->interrupt_enable,
++            gb->io_registers[GB_IO_LYC],
++            golden_trace_dot(golden_trace_raw_tick - golden_trace_line_start_raw),
++            (gb->io_registers[GB_IO_LCDC] & GB_LCDC_ENABLE) ? 1 : 0,
++            (unsigned)gb->model,
++            gb->cgb_double_speed ? 1 : 0,
++            state,
++            gb->fetcher_state,
++            gb->lcd_x,
++            addr,
++            value,
++            gb->io_registers[GB_IO_SCY],
++            gb->io_registers[GB_IO_SCX],
++            gb->io_registers[GB_IO_LCDC],
++            gb->io_registers[GB_IO_WX],
++            gb->io_registers[GB_IO_WY],
++            gb->position_in_line);
++    if (!golden_trace_v2_state_dumped) {
++        if (golden_trace_buffer_len < sizeof(golden_trace_buffer) / sizeof(golden_trace_buffer[0])) {
++            snprintf(golden_trace_buffer[golden_trace_buffer_len++], sizeof(golden_trace_buffer[0]), "%s", line);
++        }
++    }
++    else {
++        fputs(line, golden_trace_file);
++    }
++}
++
++internal void GB_golden_trace_write(GB_gameboy_t *gb, uint16_t addr, uint8_t value, const char *conflict)
++{
++    if (!GB_golden_trace_enabled()) return;
++    if (golden_trace_schema == 2) {
++        if (golden_trace_public) {
++            if (!golden_trace_public_in_window()) return;
++            uint64_t line_start = golden_trace_public_line_start_raw ?: (golden_trace_raw_tick - gb->cycles_for_line);
++            uint64_t line_tick = golden_trace_raw_tick - line_start;
++            double dot = golden_trace_dot(line_tick);
++            golden_trace_v23_common(gb, "cpu", "write");
++            fprintf(golden_trace_file, "%u\t%02X\t\t%02X\t%02X\t%02X\t%.1f\t%u\t\t%u\t%u\t\t\t\t%04X\t%02X\t\t\t\t\t%02X\t%02X\t%02X\t%02X\t%02X\t\t%s\t%llu\t%.1f\t\t\t\t\n",
++                    gb->mode_for_interrupt & 3,
++                    gb->io_registers[GB_IO_STAT],
++                    gb->io_registers[GB_IO_IF],
++                    gb->interrupt_enable,
++                    gb->io_registers[GB_IO_LYC],
++                    dot,
++                    (gb->io_registers[GB_IO_LCDC] & GB_LCDC_ENABLE) ? 1 : 0,
++                    (unsigned)gb->model,
++                    gb->cgb_double_speed ? 1 : 0,
++                    addr,
++                    value,
++                    gb->io_registers[GB_IO_SCY],
++                    gb->io_registers[GB_IO_SCX],
++                    gb->io_registers[GB_IO_LCDC],
++                    gb->io_registers[GB_IO_WX],
++                    gb->io_registers[GB_IO_WY],
++                    conflict,
++                    (unsigned long long)golden_trace_raw_tick,
++                    dot);
++            return;
++        }
++        if (!golden_trace_target_line || gb->current_line != golden_trace_target_ly) return;
++        if (!golden_trace_v2_state_dumped) {
++            golden_trace_v23_dump_state(gb);
++            golden_trace_flush_buffer();
++            golden_trace_v2_state_dumped = true;
++        }
++        uint64_t line_tick = golden_trace_raw_tick - golden_trace_line_start_raw;
++        double dot = golden_trace_dot(line_tick);
++        uint64_t visible_tick = golden_trace_raw_tick;
++        double visible_dot = dot;
++        if ((strcmp(conflict, "READ_NEW") == 0 ||
++             addr == 0xFF40 || addr == 0xFF43 || addr == 0xFF4A || addr == 0xFF4B) &&
++            visible_tick > 0) {
++            visible_tick -= 1;
++            visible_dot = golden_trace_dot(line_tick - 1);
++        }
++        golden_trace_v23_common(gb, "cpu", "write");
++        fprintf(golden_trace_file, "%u\t%02X\t\t%02X\t%02X\t%02X\t%.1f\t%u\t\t%u\t%u\t\t\t\t%04X\t%02X\t\t\t\t\t%02X\t%02X\t%02X\t%02X\t%02X\t\t%s\t%llu\t%.1f\t\t\t\t\n",
++                gb->mode_for_interrupt,
++                gb->io_registers[GB_IO_STAT],
++                gb->io_registers[GB_IO_IF],
++                gb->interrupt_enable,
++                gb->io_registers[GB_IO_LYC],
++                dot,
++                (gb->io_registers[GB_IO_LCDC] & GB_LCDC_ENABLE) ? 1 : 0,
++                (unsigned)gb->model,
++                gb->cgb_double_speed ? 1 : 0,
++                addr,
++                value,
++                gb->io_registers[GB_IO_SCY],
++                gb->io_registers[GB_IO_SCX],
++                gb->io_registers[GB_IO_LCDC],
++                gb->io_registers[GB_IO_WX],
++                gb->io_registers[GB_IO_WY],
++                conflict,
++                (unsigned long long)visible_tick,
++                visible_dot);
++        return;
++    }
++    if (addr == 0xFF42 && value == 0x03 && strcmp(conflict, "READ_NEW") == 0) {
++        golden_trace_target_line = true;
++        golden_trace_target_ly = gb->current_line;
++        golden_trace_flush_buffer();
++    }
++    if (!golden_trace_target_line) return;
++    if (gb->current_line != golden_trace_target_ly) return;
++    uint64_t line_tick = golden_trace_raw_tick - golden_trace_line_start_raw;
++    double dot = golden_trace_dot(line_tick);
++    double norm_dot = golden_trace_dot(golden_trace_raw_tick - golden_trace_mode3_anchor_raw[gb->current_line]);
++    char line[256];
++    snprintf(line, sizeof(line),
++             "write\t%llu\t%llu\t%u\t%llu\t%.1f\t\t\t\t%04X\t%02X\t\t\t\t\t%02X\t%02X\t%02X\t\t%s\t%.1f\n",
++             (unsigned long long)golden_trace_frame,
++             (unsigned long long)golden_trace_raw_tick,
++             gb->current_line,
++             (unsigned long long)line_tick,
++             dot,
++             addr,
++             value,
++             gb->io_registers[GB_IO_SCY],
++             gb->io_registers[GB_IO_LCDC],
++             gb->io_registers[GB_IO_WX],
++             conflict,
++             norm_dot);
++    fputs(line, golden_trace_file);
++}
++
+ #ifndef GB_DISABLE_TIMEKEEPING
+ static int64_t get_nanoseconds(void)
+ {
+@@ -481,6 +1014,7 @@ void GB_advance_cycles(GB_gameboy_t *gb, uint8_t cycles)
+     if (unlikely(!gb->cgb_double_speed)) {
+         cycles <<= 1;
+     }
++    GB_golden_trace_advance(cycles);
+     
+ #ifndef GB_DISABLE_DEBUGGER
+     gb->absolute_debugger_ticks += cycles;
