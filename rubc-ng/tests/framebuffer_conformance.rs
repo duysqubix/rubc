@@ -178,4 +178,8 @@ fn cgb_acid_framebuffer_diffs_are_reported_against_independent_references() {
     }
     let hell_diff = rgb555_diff(hell.framebuffer(), &hell_ref);
     eprintln!("rubc-ng cgb-acid-hell diff: {hell_diff}/{FRAMEBUFFER_PIXELS}");
+    assert_eq!(
+        hell_diff, MAX_CGB_ACID2_DIFF,
+        "cgb-acid-hell framebuffer diff changed; update only with an honest measured floor"
+    );
 }

@@ -13,6 +13,7 @@ use crate::timing::TimingTable;
 
 const VBLANK_IRQ: u8 = 0x01;
 const STAT_IRQ: u8 = 0x02;
+const TAC_TIMER_EDGE_WRITE_DRIVE_OFFSET: u8 = 8;
 
 #[derive(Clone, Copy, Debug)]
 struct BootCpuProfile {
@@ -1061,15 +1062,6 @@ impl MachineBus {
 
     fn oam_dma(&mut self, source_hi: u8) {
         self.io[0x46] = source_hi;
-        if self.model.is_cgb() {
-            let base = u16::from(source_hi) << 8;
-            for i in 0..0xA0u16 {
-                let value = self.read_visible(base.wrapping_add(i));
-                self.oam[i as usize] = value;
-                self.ppu_internal.write_oam(i as usize, value);
-            }
-            return;
-        }
         self.oam_dma.pending_source_hi = Some(source_hi);
         self.oam_dma.start_delay_m = 1;
     }
@@ -1421,8 +1413,12 @@ impl CpuBus for MachineBus {
     fn end_cpu_cycle(&mut self) {
         self.drain_scheduled_writes();
     }
-    fn write_drive_ticks(&self, _addr: u16) -> u8 {
-        CPU_ACCESS_END_OFFSET
+    fn write_drive_ticks(&self, addr: u16) -> u8 {
+        if addr == 0xFF07 {
+            TAC_TIMER_EDGE_WRITE_DRIVE_OFFSET
+        } else {
+            CPU_ACCESS_END_OFFSET
+        }
     }
     fn sync_ppu_to_cpu(&mut self) {}
 }
