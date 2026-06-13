@@ -22,11 +22,14 @@ pub struct ConformanceConfig {
 
 impl ConformanceConfig {
     // Ratcheted to the measured full-run count. `just ng-conformance`
-    // (RUBC_NG_CONFORMANCE_FULL=1) scored 126/207 PASS on 2026-06-12 against
+    // (RUBC_NG_CONFORMANCE_FULL=1) scored 131/207 PASS on 2026-06-12 against
     // real oracles (serial/cart pass-strings, mooneye fibonacci, pixel-exact
-    // acid2 pair 0-diff). It can only rise; it never false-greens — raise it
-    // only after a fresh measured run shows a higher honest count.
-    pub const FULL_MANIFEST_PASS_FLOOR: usize = 126;
+    // acid2 pair 0-diff), using priority score-model selection (Oracle
+    // ses_13d1b6f0e: universal ROMs are scored on their highest-priority intended
+    // model, so a CGB-E timing fail is real CGB debt, not laundered behind DMG-B).
+    // It can only rise; it never false-greens — raise it only after a fresh
+    // measured run shows a higher honest count.
+    pub const FULL_MANIFEST_PASS_FLOOR: usize = 131;
     pub const DEFAULT_SUBSET_PASS_FLOOR: usize = 3;
 
     pub fn default_test_subset() -> Self {
