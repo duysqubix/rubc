@@ -282,11 +282,7 @@ impl Apu {
     /// `$FF04 = internal_div >> 8`, that is bit 12 (`0x1000`) of the 16-bit divider,
     /// or bit 13 (`0x2000`) in CGB double-speed.
     pub fn tick_spine(&mut self, div_counter: u16, double_speed: bool) {
-        let div_apu_high = Self::div_apu_bit_high(div_counter, double_speed);
-        if self.prev_div_apu_high && !div_apu_high {
-            self.tick_div_apu();
-        }
-        self.prev_div_apu_high = div_apu_high;
+        self.observe_div_apu_counter_change_from_previous(div_counter, double_speed);
 
         if double_speed {
             self.double_speed_apu_gate = !self.double_speed_apu_gate;
@@ -295,6 +291,27 @@ impl Apu {
             }
         }
         self.tick_t();
+    }
+
+    pub fn observe_div_apu_counter_change(&mut self, before: u16, after: u16, double_speed: bool) {
+        let before_high = Self::div_apu_bit_high(before, double_speed);
+        let after_high = Self::div_apu_bit_high(after, double_speed);
+        if before_high && !after_high {
+            self.tick_div_apu();
+        }
+        self.prev_div_apu_high = after_high;
+    }
+
+    fn observe_div_apu_counter_change_from_previous(
+        &mut self,
+        div_counter: u16,
+        double_speed: bool,
+    ) {
+        let div_apu_high = Self::div_apu_bit_high(div_counter, double_speed);
+        if self.prev_div_apu_high && !div_apu_high {
+            self.tick_div_apu();
+        }
+        self.prev_div_apu_high = div_apu_high;
     }
 
     fn div_apu_bit_high(div_counter: u16, double_speed: bool) -> bool {

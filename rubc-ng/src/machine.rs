@@ -110,6 +110,7 @@ struct MachineBus {
     key1_prepare: bool,
     double_speed: bool,
     hdma: Hdma,
+    oam_dma: OamDma,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -120,6 +121,17 @@ struct Hdma {
     dst_low: u8,
     remaining_blocks: u8,
     active: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct OamDma {
+    source_hi: u8,
+    pending_source_hi: Option<u8>,
+    start_delay_m: u8,
+    index: u8,
+    active: bool,
+    active_for_cpu_this_m: bool,
+    conflict_byte_this_m: Option<u8>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -644,6 +656,7 @@ impl MachineBus {
             key1_prepare: false,
             double_speed: false,
             hdma: Hdma::default(),
+            oam_dma: OamDma::default(),
             spine,
             table,
         };
@@ -698,6 +711,7 @@ impl MachineBus {
             remaining_blocks: 0,
             active: false,
         };
+        self.oam_dma = OamDma::default();
         self.apu = Apu::default();
         let cgb = self.model.is_cgb();
         self.apu.write(0xFF10, 0x00, cgb);
@@ -748,7 +762,7 @@ impl MachineBus {
             0xFF00 => self.io[0x00] | 0xC0,
             0xFF02 => self.io[0x02] | 0x7E,
             0xFF40 => self.io[0x40],
-            0xFF41 => self.io[0x41] | 0x80,
+            0xFF41 => self.ppu_stat(),
             0xFF42 | 0xFF43 | 0xFF45 | 0xFF47..=0xFF4B => self.io[(addr - 0xFF00) as usize],
             0xFF44 => self.ly(),
             0xFF4D if matches!(self.model, GbModel::Cgb0) => 0xFF,
@@ -828,7 +842,15 @@ impl MachineBus {
             }
             0xFEA0..=0xFEFF => {}
             0xFF04..=0xFF07 => {
+                let div_before = self.timer.div_counter();
                 self.timer.write(addr, value);
+                if addr == 0xFF04 {
+                    self.apu.observe_div_apu_counter_change(
+                        div_before,
+                        self.timer.div_counter(),
+                        self.double_speed,
+                    );
+                }
             }
             0xFF0F => self.if_ = 0xE0 | (value & 0x1F),
             0xFF10..=0xFF3F => self.apu.write(addr, value, self.model.is_cgb()),
@@ -947,7 +969,8 @@ impl MachineBus {
             _ => {}
         }
         if matches!(addr, 0xFF40 | 0xFF42 | 0xFF43 | 0xFF4A | 0xFF4B) {
-            self.ppu_internal.write_register_at(addr, value);
+            self.ppu_internal
+                .write_register_at_for_model(addr, value, self.model.is_cgb());
         }
         if matches!(addr, 0xFF41 | 0xFF45) {
             self.update_stat_irq_line();
@@ -996,17 +1019,82 @@ impl MachineBus {
     #[allow(dead_code)]
     fn ppu_stat(&self) -> u8 {
         let lyc = u8::from(self.ly() == self.io[0x45]);
-        0x80 | (self.io[0x41] & 0x78) | (lyc << 2) | self.ppu_mode()
+        let mode_bit_1 = if self.frame_counter == 0 {
+            self.io[0x41] & 0x02
+        } else {
+            self.ppu_mode() & 0x02
+        };
+        0x80 | (self.io[0x41] & 0x79) | (lyc << 2) | mode_bit_1
     }
 
     fn oam_dma(&mut self, source_hi: u8) {
         self.io[0x46] = source_hi;
-        let base = u16::from(source_hi) << 8;
-        for i in 0..0xA0u16 {
-            let value = self.read_visible(base.wrapping_add(i));
-            self.oam[i as usize] = value;
-            self.ppu_internal.write_oam(i as usize, value);
+        if self.model.is_cgb() {
+            let base = u16::from(source_hi) << 8;
+            for i in 0..0xA0u16 {
+                let value = self.read_visible(base.wrapping_add(i));
+                self.oam[i as usize] = value;
+                self.ppu_internal.write_oam(i as usize, value);
+            }
+            return;
         }
+        self.oam_dma.pending_source_hi = Some(source_hi);
+        self.oam_dma.start_delay_m = 1;
+    }
+
+    fn oam_dma_beat(&mut self) {
+        self.oam_dma.conflict_byte_this_m = None;
+        self.oam_dma.active_for_cpu_this_m = false;
+
+        if self.oam_dma.pending_source_hi.is_some() {
+            if self.oam_dma.start_delay_m > 0 {
+                self.oam_dma.start_delay_m -= 1;
+            } else {
+                self.oam_dma.source_hi = self.oam_dma.pending_source_hi.take().unwrap();
+                self.oam_dma.active = true;
+                self.oam_dma.index = 0;
+            }
+        }
+
+        if !self.oam_dma.active {
+            return;
+        }
+
+        let src = (u16::from(self.oam_dma.source_hi) << 8) | u16::from(self.oam_dma.index);
+        let byte = self.read_oam_dma_source(src);
+        self.oam_dma.conflict_byte_this_m = Some(byte);
+        self.oam_dma.active_for_cpu_this_m = true;
+
+        let oam_index = self.oam_dma.index as usize;
+        if oam_index < self.oam.len() {
+            self.oam[oam_index] = byte;
+            self.ppu_internal.write_oam(oam_index, byte);
+        }
+        self.oam_dma.index = self.oam_dma.index.wrapping_add(1);
+        if self.oam_dma.index as usize >= self.oam.len() {
+            self.oam_dma.active = false;
+        }
+    }
+
+    fn read_oam_dma_source(&self, addr: u16) -> u8 {
+        if addr >= 0xE000 {
+            let echoed = addr - 0x2000;
+            return match echoed {
+                0xC000..=0xCFFF => self.wram[0][(echoed - 0xC000) as usize],
+                0xD000..=0xDFFF => self.wram[self.selected_wram_bank()][(echoed - 0xD000) as usize],
+                _ => self.read_visible(echoed),
+            };
+        }
+        self.read_visible(addr)
+    }
+
+    fn oam_dma_conflicts_with(&self, addr: u16) -> bool {
+        if matches!(addr, 0xFF00..=0xFFFF) {
+            return false;
+        }
+        let dma_on_video_bus = matches!(self.oam_dma.source_hi, 0x80..=0x9F);
+        let addr_on_video_bus = matches!(addr, 0x8000..=0x9FFF);
+        dma_on_video_bus == addr_on_video_bus
     }
 
     fn oam_bug_scan_row(&self) -> Option<usize> {
@@ -1185,6 +1273,14 @@ impl MachineBus {
             if self.scheduled_writes[i].at <= now {
                 let write = self.scheduled_writes.remove(i);
                 self.corrupt_oam_for_bug(write.addr, OamBugAccess::Write);
+                if self.oam_dma.active_for_cpu_this_m {
+                    let blocked = matches!(write.addr, 0xFE00..=0xFE9F)
+                        || (!matches!(write.addr, 0xFF80..=0xFFFE)
+                            && self.oam_dma_conflicts_with(write.addr));
+                    if blocked {
+                        continue;
+                    }
+                }
                 self.write_visible(write.addr, write.value);
             } else {
                 i += 1;
@@ -1195,14 +1291,21 @@ impl MachineBus {
 
 impl CpuBus for MachineBus {
     fn read_m(&mut self, addr: u16) -> u8 {
+        self.begin_cpu_cycle();
         self.advance_to(CpuTime(self.cpu_now.0 + 16));
-        self.read_latched_for_oam_bug(addr, OamBugAccess::Read)
+        let value = self.read_latched_for_oam_bug(addr, OamBugAccess::Read);
+        self.end_cpu_cycle();
+        value
     }
     fn read_m_oam_bug_idu(&mut self, addr: u16) -> u8 {
+        self.begin_cpu_cycle();
         self.advance_to(CpuTime(self.cpu_now.0 + 16));
-        self.read_latched_for_oam_bug(addr, OamBugAccess::ReadIncDec)
+        let value = self.read_latched_for_oam_bug(addr, OamBugAccess::ReadIncDec);
+        self.end_cpu_cycle();
+        value
     }
     fn write_m(&mut self, addr: u16, value: u8) {
+        self.begin_cpu_cycle();
         self.schedule_cpu_write(
             CpuTime(self.cpu_now.0 + u64::from(self.write_drive_ticks(addr))),
             addr,
@@ -1212,7 +1315,9 @@ impl CpuBus for MachineBus {
         self.end_cpu_cycle();
     }
     fn idle_m(&mut self) {
+        self.begin_cpu_cycle();
         self.advance_to(CpuTime(self.cpu_now.0 + 16));
+        self.end_cpu_cycle();
     }
     fn irq_pending_mask(&self) -> u8 {
         self.ie & self.if_ & 0x1F
@@ -1241,7 +1346,9 @@ impl CpuBus for MachineBus {
     fn oam_bug_idu_glitch(&mut self, addr: u16) {
         self.corrupt_oam_for_bug(addr, OamBugAccess::Write);
     }
-    fn begin_cpu_cycle(&mut self) {}
+    fn begin_cpu_cycle(&mut self) {
+        self.oam_dma_beat();
+    }
     fn tick_cpu_t(&mut self) {
         self.advance_to(CpuTime(self.cpu_now.0 + 4));
     }
@@ -1282,6 +1389,16 @@ impl MachineBus {
         if matches!(addr, 0xFE00..=0xFEFF) {
             self.corrupt_oam_for_bug(addr, access);
         }
+        if self.oam_dma.active_for_cpu_this_m {
+            if matches!(addr, 0xFE00..=0xFE9F) {
+                return 0xFF;
+            }
+            if !matches!(addr, 0xFF80..=0xFFFE) && self.oam_dma_conflicts_with(addr) {
+                if let Some(byte) = self.oam_dma.conflict_byte_this_m {
+                    return byte;
+                }
+            }
+        }
         self.read_visible(addr)
     }
 }
@@ -1292,6 +1409,17 @@ mod tests {
 
     fn cgb_machine() -> MachineNg {
         MachineNg::from_rom(GbModel::CgbE, &[0; 0x8000]).expect("valid CGB machine")
+    }
+
+    #[test]
+    fn stat_read_exposes_live_mode_bit_one_not_stale_io_latch() {
+        let mut machine = cgb_machine();
+        machine.bus.frame_counter = 1;
+        machine.bus.spine.ppu_dot = 252;
+        machine.bus.spine.line_dot = 252;
+        machine.bus.io[0x41] = 0x82;
+
+        assert_eq!(machine.read_io(0xFF41).unwrap() & 0x02, 0x00);
     }
 
     #[test]

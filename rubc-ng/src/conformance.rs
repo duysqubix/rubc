@@ -246,33 +246,60 @@ fn read_rom(workspace_root: &Path, manifest_path: &str) -> Result<Vec<u8>, Strin
     std::fs::read(&path).map_err(|err| format!("{}: {err}", path.display()))
 }
 
+// Global, predeclared model-selection priority (Oracle ses_13da116eb, ADR 0002).
+// Model choice for a multi-model ROM is a PURE function of its declared
+// intended_models intersected with this static list -- never the ROM path,
+// suite, test id, or previous result. Legit: intended x priority -> model.
+// Dodge: rom_path/result -> model. CGB-E and DMG-B are the campaign priority
+// models, so they sort first within their families.
+const SCORE_MODEL_PRIORITY: &[GbModel] = &[
+    GbModel::CgbE,
+    GbModel::CgbD,
+    GbModel::CgbC,
+    GbModel::CgbB,
+    GbModel::CgbA,
+    GbModel::Cgb0,
+    GbModel::DmgB,
+    GbModel::Mgb,
+    GbModel::DmgA,
+    GbModel::Dmg0,
+    GbModel::Sgb2,
+    GbModel::Sgb,
+    GbModel::Agb,
+];
+
 fn effective_model(intended: &[String]) -> (GbModel, &'static str) {
-    intended
+    let parsed: Vec<GbModel> = intended
         .iter()
-        .find_map(|model| parse_model(model))
-        .map(|model| (model, ""))
-        .unwrap_or((GbModel::DmgB, " (fallback)"))
+        .filter_map(|model| parse_model(model))
+        .collect();
+    SCORE_MODEL_PRIORITY
+        .iter()
+        .copied()
+        .find(|model| parsed.contains(model))
+        .map(|model| (model, " (score-priority intended model)"))
+        .unwrap_or((GbModel::DmgB, " (fallback: no parseable intended model)"))
 }
 
 fn parse_model(model: &str) -> Option<GbModel> {
-    Some(match model {
-        "dmg0" => GbModel::Dmg0,
-        "dmg-a" => GbModel::DmgA,
-        "dmg-b" | "dmg-c" => GbModel::DmgB,
-        "mgb" => GbModel::Mgb,
-        "sgb" => GbModel::Sgb,
-        "sgb2" => GbModel::Sgb2,
-        "cgb0" => GbModel::Cgb0,
-        "cgb-a" => GbModel::CgbA,
-        "cgb-b" => GbModel::CgbB,
-        "cgb-c" => GbModel::CgbC,
-        "cgb-d" => GbModel::CgbD,
-        "cgb-e" => GbModel::CgbE,
-        "agb" => GbModel::Agb,
-        _ => return None,
-    })
+    match model {
+        "dmg0" => Some(GbModel::Dmg0),
+        "dmg-a" => Some(GbModel::DmgA),
+        "dmg-b" => Some(GbModel::DmgB),
+        "dmg-c" => Some(GbModel::DmgB),
+        "mgb" => Some(GbModel::Mgb),
+        "sgb" => Some(GbModel::Sgb),
+        "sgb2" => Some(GbModel::Sgb2),
+        "cgb0" => Some(GbModel::Cgb0),
+        "cgb-a" => Some(GbModel::CgbA),
+        "cgb-b" => Some(GbModel::CgbB),
+        "cgb-c" => Some(GbModel::CgbC),
+        "cgb-d" => Some(GbModel::CgbD),
+        "cgb-e" => Some(GbModel::CgbE),
+        "agb" => Some(GbModel::Agb),
+        _ => None,
+    }
 }
-
 fn real_oracle_detail(machine: &MachineNg) -> String {
     if machine.serial_output().contains("Passed") {
         format!("serial pass string: {:?}", machine.serial_output())

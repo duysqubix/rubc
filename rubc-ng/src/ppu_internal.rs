@@ -9,6 +9,7 @@ struct PpuRegisterWrite {
     time: Time,
     addr: u16,
     value: u8,
+    cgb_mode: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -26,6 +27,8 @@ pub struct PpuInternal {
     window_line: u8,
     /// W8b·2b-fifo: per-line FIFO render state (rubc-d85o).
     fifo: LineRenderState,
+    tile_sel_glitch: bool,
+    tile_sel_high_staged: bool,
     /// Latched once LY==WY matched on any line this frame (SameBoy
     /// display.c wy_triggered; cleared at frame start).
     fifo_window_y_condition: bool,
@@ -156,6 +159,8 @@ impl PpuInternal {
             window_active: false,
             window_line: 0,
             fifo: LineRenderState::default(),
+            tile_sel_glitch: false,
+            tile_sel_high_staged: false,
             fifo_window_y_condition: false,
             fifo_window_line: 0,
         }
@@ -183,6 +188,8 @@ impl PpuInternal {
             window_active: false,
             window_line: 0,
             fifo: LineRenderState::default(),
+            tile_sel_glitch: false,
+            tile_sel_high_staged: false,
             fifo_window_y_condition: false,
             fifo_window_line: 0,
         }
@@ -289,10 +296,15 @@ impl PpuInternal {
     }
 
     pub fn write_register_at(&mut self, addr: u16, value: u8) {
+        self.write_register_at_for_model(addr, value, false);
+    }
+
+    pub fn write_register_at_for_model(&mut self, addr: u16, value: u8, cgb_mode: bool) {
         self.write_register(PpuRegisterWrite {
             time: Time::ZERO,
             addr,
             value,
+            cgb_mode,
         });
     }
 
@@ -528,6 +540,7 @@ impl PpuInternal {
     /// step retries until the BG FIFO is empty; the first data-high completion
     /// of a line restarts the fetcher — the discarded dummy fetch).
     fn fifo_clock_bg_fetcher(&mut self, cgb: bool, ly: u8) {
+        self.tile_sel_high_staged = false;
         if self.fifo.window_disable_pending && self.fifo.bg_fifo.is_empty() {
             if self.lcdc & 0x20 == 0 {
                 let bg_x = (self.fifo.lcd_x as u8).wrapping_add(self.scx);
@@ -589,6 +602,7 @@ impl PpuInternal {
             FetchStep::TileDataHigh => {
                 let addr = self.fifo_tile_data_addr(cgb, ly).wrapping_add(1);
                 self.fifo.fetcher.high = self.fifo_tile_data_byte(cgb, addr);
+                self.tile_sel_high_staged = true;
                 if self.fifo.fetcher.dummy_fetch_done {
                     self.fifo.fetcher.step = FetchStep::Push;
                 } else {
@@ -647,7 +661,17 @@ impl PpuInternal {
         }
     }
 
-    fn fifo_tile_data_byte(&self, cgb: bool, addr: u16) -> u8 {
+    fn fifo_tile_data_byte(&mut self, cgb: bool, addr: u16) -> u8 {
+        let glitched = cgb
+            && self.tile_sel_glitch
+            && self.fifo.fetcher.step == FetchStep::TileDataHigh
+            && self.fifo.fetcher.tile & 0x80 == 0;
+        if self.tile_sel_glitch && self.fifo.fetcher.step == FetchStep::TileDataHigh {
+            self.tile_sel_glitch = false;
+        }
+        if glitched {
+            return self.fifo.fetcher.tile;
+        }
         let bank = if cgb && self.fifo.fetcher.attr & 0x08 != 0 {
             1
         } else {
@@ -734,10 +758,23 @@ impl PpuInternal {
             0xFF40 => {
                 let old = self.lcdc;
                 self.lcdc = write.value;
+                if write.cgb_mode && old & 0x10 != 0 && write.value & 0x10 == 0 {
+                    if self.fifo.active
+                        && self.tile_sel_high_staged
+                        && self.fifo.fetcher.tile & 0x80 == 0
+                    {
+                        self.fifo.fetcher.high = self.fifo.fetcher.tile;
+                        self.tile_sel_glitch = false;
+                    } else {
+                        self.tile_sel_glitch = true;
+                    }
+                }
                 if write.value & 0x80 == 0 {
                     // LCD off: the line render state and frame window state
                     // reset (rubc-core write_lcdc LCD-off path).
                     self.fifo = LineRenderState::default();
+                    self.tile_sel_glitch = false;
+                    self.tile_sel_high_staged = false;
                     self.fifo_window_y_condition = false;
                     self.fifo_window_line = 0;
                 } else if self.fifo.active && (old ^ write.value) & 0x20 != 0 {
@@ -1176,6 +1213,7 @@ fn extract_register_writes(path: &Path) -> Result<Vec<PpuRegisterWrite>, String>
                         time: Time::from_subphases(row.write_visible_tick.unwrap_or(row.raw_tick)),
                         addr,
                         value,
+                        cgb_mode: false,
                     }))
                 }
                 _ => None,
@@ -1186,4 +1224,55 @@ fn extract_register_writes(path: &Path) -> Result<Vec<PpuRegisterWrite>, String>
         .collect::<Result<Vec<_>, _>>()?;
     writes.sort_by_key(|write| write.time);
     Ok(writes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn blank_vram() -> Vram {
+        Vram {
+            bank0: [0; 0x2000],
+            bank1: [0; 0x2000],
+        }
+    }
+
+    #[test]
+    fn cgb_tile_sel_reset_glitches_next_high_bitplane_fetch_to_tile_id() {
+        let mut ppu = PpuInternal::for_test(0x91, 0, 0, 7, 0, blank_vram(), [0; 0xA0]);
+        ppu.write_vram(0x1800, 0, 0x12);
+        ppu.write_vram(0x0120, 0, 0x34);
+        ppu.write_vram(0x0121, 0, 0x56);
+        ppu.begin_drawing(0);
+
+        while ppu.fifo.fetcher.step != FetchStep::TileDataHigh {
+            ppu.fifo_clock_bg_fetcher(true, 0);
+        }
+        ppu.write_register_at_for_model(0xFF40, 0x81, true);
+        ppu.fifo_clock_bg_fetcher(true, 0);
+        ppu.fifo_clock_bg_fetcher(true, 0);
+
+        assert_eq!(ppu.fifo.fetcher.low, 0x34);
+        assert_eq!(ppu.fifo.fetcher.high, 0x12);
+    }
+
+    #[test]
+    fn cgb_tile_sel_reset_glitches_same_dot_high_bitplane_already_staged() {
+        let mut ppu = PpuInternal::for_test(0x91, 0, 0, 7, 0, blank_vram(), [0; 0xA0]);
+        ppu.write_vram(0x1800, 0, 0x12);
+        ppu.write_vram(0x0120, 0, 0x34);
+        ppu.write_vram(0x0121, 0, 0x56);
+        ppu.begin_drawing(0);
+
+        while ppu.fifo.fetcher.step != FetchStep::TileDataHigh {
+            ppu.fifo_clock_bg_fetcher(true, 0);
+        }
+        ppu.fifo_clock_bg_fetcher(true, 0);
+        ppu.fifo_clock_bg_fetcher(true, 0);
+        assert_eq!(ppu.fifo.fetcher.high, 0x56);
+
+        ppu.write_register_at_for_model(0xFF40, 0x81, true);
+
+        assert_eq!(ppu.fifo.fetcher.high, 0x12);
+    }
 }
