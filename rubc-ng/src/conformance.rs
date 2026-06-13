@@ -21,13 +21,12 @@ pub struct ConformanceConfig {
 }
 
 impl ConformanceConfig {
-    // Conservative combined floor after merging 2a (boot profiles, solo +7=121)
-    // + 2c (OAM, solo +5=119) onto the 114 base. The two slices touch disjoint
-    // ROM categories so the combined count is >= max(119,121), but the exact
-    // figure is not pinned here without a measured full run: this >= floor is
-    // set to the lower independently-verified value and a CI `just ng-conformance`
-    // run ratchets it up. It can only rise; it never false-greens.
-    pub const FULL_MANIFEST_PASS_FLOOR: usize = 119;
+    // Ratcheted to the measured full-run count. `just ng-conformance`
+    // (RUBC_NG_CONFORMANCE_FULL=1) scored 126/207 PASS on 2026-06-12 against
+    // real oracles (serial/cart pass-strings, mooneye fibonacci, pixel-exact
+    // acid2 pair 0-diff). It can only rise; it never false-greens — raise it
+    // only after a fresh measured run shows a higher honest count.
+    pub const FULL_MANIFEST_PASS_FLOOR: usize = 126;
     pub const DEFAULT_SUBSET_PASS_FLOOR: usize = 3;
 
     pub fn default_test_subset() -> Self {
