@@ -105,6 +105,8 @@ struct MachineBus {
     scheduled_writes: Vec<ScheduledWrite>,
     last_ppu_dot: u64,
     frame_counter: u64,
+    first_line_after_lcd_enable: bool,
+    stat_lyc_equal: bool,
     stat_irq_line: bool,
     apu: Apu,
     key1_prepare: bool,
@@ -651,6 +653,8 @@ impl MachineBus {
             scheduled_writes: Vec::new(),
             last_ppu_dot: 0,
             frame_counter: 0,
+            first_line_after_lcd_enable: false,
+            stat_lyc_equal: false,
             stat_irq_line: false,
             apu: Apu::default(),
             key1_prepare: false,
@@ -701,6 +705,7 @@ impl MachineBus {
         self.spine.ppu_dot = u64::from(profile.ly) * DMG_DOTS_PER_LINE + boot_line_dot;
         self.spine.line_dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE) as u16;
         self.spine.frame_dot = self.spine.ppu_dot as u32;
+        self.stat_lyc_equal = profile.ly == profile.lyc;
         self.vram_bank = 0;
         self.wram_bank = 1;
         self.hdma = Hdma {
@@ -803,12 +808,14 @@ impl MachineBus {
     fn read_visible(&self, addr: u16) -> u8 {
         match addr {
             0x0000..=0x7FFF => self.cart.read(addr),
+            0x8000..=0x9FFF if self.vram_blocked() => 0xFF,
             0x8000..=0x9FFF => self.vram[self.vram_bank as usize][(addr - 0x8000) as usize],
             0xA000..=0xBFFF => self.cart.read_ram(addr),
             0xC000..=0xCFFF => self.wram[0][(addr - 0xC000) as usize],
             0xD000..=0xDFFF => self.wram[self.selected_wram_bank()][(addr - 0xD000) as usize],
             0xE000..=0xEFFF => self.wram[0][(addr - 0xE000) as usize],
             0xF000..=0xFDFF => self.wram[self.selected_wram_bank()][(addr - 0xF000) as usize],
+            0xFE00..=0xFE9F if self.oam_blocked() => 0xFF,
             0xFE00..=0xFE9F => self.oam[(addr - 0xFE00) as usize],
             0xFEA0..=0xFEFF => 0xFF,
             0xFF80..=0xFFFE => self.hram[(addr - 0xFF80) as usize],
@@ -820,6 +827,7 @@ impl MachineBus {
     fn write_visible(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x7FFF => self.cart.write_reg(addr, value),
+            0x8000..=0x9FFF if self.vram_blocked() => {}
             0x8000..=0x9FFF => {
                 let offset = (addr - 0x8000) as usize;
                 self.vram[self.vram_bank as usize][offset] = value;
@@ -835,6 +843,7 @@ impl MachineBus {
             0xF000..=0xFDFF => {
                 self.wram[self.selected_wram_bank()][(addr - 0xF000) as usize] = value
             }
+            0xFE00..=0xFE9F if self.oam_blocked() => {}
             0xFE00..=0xFE9F => {
                 let offset = (addr - 0xFE00) as usize;
                 self.oam[offset] = value;
@@ -945,11 +954,14 @@ impl MachineBus {
                 self.spine.ppu_dot = 4;
                 self.spine.line_dot = 4;
                 self.spine.frame_dot = 4;
+                self.first_line_after_lcd_enable = true;
+                self.refresh_lyc_compare_if_lcd_on();
             }
             0xFF40 if value & 0x80 == 0 => {
                 self.spine.ppu_dot = 0;
                 self.spine.line_dot = 0;
                 self.spine.frame_dot = 0;
+                self.first_line_after_lcd_enable = false;
             }
             0xFF47 => self.output_latch.apply_write(PaletteWrite {
                 time: self.spine.now,
@@ -972,7 +984,8 @@ impl MachineBus {
             self.ppu_internal
                 .write_register_at_for_model(addr, value, self.model.is_cgb());
         }
-        if matches!(addr, 0xFF41 | 0xFF45) {
+        if matches!(addr, 0xFF40 | 0xFF41 | 0xFF45) {
+            self.refresh_lyc_compare_if_lcd_on();
             self.update_stat_irq_line();
         }
     }
@@ -1004,27 +1017,46 @@ impl MachineBus {
         ((self.spine.ppu_dot / DMG_DOTS_PER_LINE) % 154) as u8
     }
     fn ppu_mode(&self) -> u8 {
+        if self.io[0x40] & 0x80 == 0 {
+            return 0;
+        }
         let ly = self.ly();
         let dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
         if ly >= 144 {
             1
+        } else if self.first_line_after_lcd_enable && ly == 0 && dot < 82 {
+            0
         } else if dot < 80 {
             2
+        } else if self.first_line_after_lcd_enable && ly == 0 && dot < 336 {
+            3
         } else if dot < 252 {
             3
         } else {
             0
         }
     }
-    #[allow(dead_code)]
     fn ppu_stat(&self) -> u8 {
-        let lyc = u8::from(self.ly() == self.io[0x45]);
+        // Mode bit1 is live from the PPU once past the boot frame; in the boot
+        // frame it reflects the latched post-boot seed (DMG0 STAT=0x83). Bit0 is
+        // the latched writable bit preserved via mask 0x79 (keeps bits 6-3 AND
+        // bit0); only bit1 is overwritten by the mode source. This matches the
+        // pre-PPU-timing baseline that passes boot_hwio-* while the live mode bit1
+        // serves the intr_2_*/STAT-edge tests.
         let mode_bit_1 = if self.frame_counter == 0 {
             self.io[0x41] & 0x02
         } else {
             self.ppu_mode() & 0x02
         };
-        0x80 | (self.io[0x41] & 0x79) | (lyc << 2) | mode_bit_1
+        0x80 | (self.io[0x41] & 0x79) | (u8::from(self.stat_lyc_equal) << 2) | mode_bit_1
+    }
+
+    fn vram_blocked(&self) -> bool {
+        self.io[0x40] & 0x80 != 0 && self.ppu_mode() == 3
+    }
+
+    fn oam_blocked(&self) -> bool {
+        self.io[0x40] & 0x80 != 0 && matches!(self.ppu_mode(), 2 | 3)
     }
 
     fn oam_dma(&mut self, source_hi: u8) {
@@ -1193,6 +1225,10 @@ impl MachineBus {
         }
         let ly = self.ly();
         let line_dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE) as usize;
+        if ly != 0 {
+            self.first_line_after_lcd_enable = false;
+        }
+        self.refresh_lyc_compare_if_lcd_on();
         if ly == 144 && line_dot == 0 {
             self.if_ |= VBLANK_IRQ;
             self.ppu_internal.begin_frame_window_state();
@@ -1255,15 +1291,23 @@ impl MachineBus {
     fn update_stat_irq_line(&mut self) {
         let stat = self.io[0x41];
         let mode = self.ppu_mode();
-        let lyc = self.ly() == self.io[0x45];
-        let line = (lyc && stat & 0x40 != 0)
-            || (mode == 2 && stat & 0x20 != 0)
+        let ly = self.ly();
+        let line_dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
+        let mode2_source = mode == 2 || (ly == 144 && line_dot == 0);
+        let line = (self.stat_lyc_equal && stat & 0x40 != 0)
+            || (mode2_source && stat & 0x20 != 0)
             || (mode == 1 && stat & 0x10 != 0)
             || (mode == 0 && stat & 0x08 != 0);
         if line && !self.stat_irq_line {
             self.if_ |= STAT_IRQ;
         }
         self.stat_irq_line = line;
+    }
+
+    fn refresh_lyc_compare_if_lcd_on(&mut self) {
+        if self.io[0x40] & 0x80 != 0 {
+            self.stat_lyc_equal = self.ly() == self.io[0x45];
+        }
     }
 
     fn drain_scheduled_writes(&mut self) {

@@ -296,7 +296,7 @@ mod tests {
             eprintln!("skip: {path:?} absent");
             return;
         }
-let trace = GoldenTrace::read_tsv(path).expect("golden TSV parses");
+        let trace = GoldenTrace::read_tsv(path).expect("golden TSV parses");
 
         assert_eq!(trace.rows.len(), 86);
         let write = trace
