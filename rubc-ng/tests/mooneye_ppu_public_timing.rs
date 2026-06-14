@@ -15,12 +15,18 @@ const PPU_PUBLIC_TIMING_ROMS: &[&str] = &[
     "hblank_ly_scx_timing-GS.gb",
 ];
 
-// Net-positive PPU-public timing fixes that pass without regressing the boot
-// HWIO profiles. intr_2_* remain in the diagnostic list above: making bit0 of
-// STAT live (needed by intr_2_0) conflicts with the latched boot-frame STAT the
-// boot_hwio-dmg0/dmgABCmgb tests read back -- a sub-dot tension deferred to the
-// W8b STAT-edge ceiling rather than traded for a boot-profile regression.
-const FIXED_PPU_PUBLIC_TIMING_ROMS: &[&str] = &["stat_lyc_onoff.gb", "vblank_stat_intr-GS.gb"];
+const FIXED_PPU_PUBLIC_TIMING_ROMS: &[&str] = &[
+    "intr_2_0_timing.gb",
+    "intr_2_mode0_timing.gb",
+    "intr_2_mode0_timing_sprites.gb",
+    "intr_2_mode3_timing.gb",
+    "intr_2_oam_ok_timing.gb",
+    "stat_lyc_onoff.gb",
+    "vblank_stat_intr-GS.gb",
+    "lcdon_timing-GS.gb",
+    "lcdon_write_timing-GS.gb",
+    "hblank_ly_scx_timing-GS.gb",
+];
 
 fn workspace_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -14,6 +14,14 @@ use crate::timing::TimingTable;
 const VBLANK_IRQ: u8 = 0x01;
 const STAT_IRQ: u8 = 0x02;
 const TAC_TIMER_EDGE_WRITE_DRIVE_OFFSET: u8 = 8;
+const MODE2_DOTS: u64 = 80;
+const BASE_MODE3_DOTS: u64 = 172;
+const MODE3_FETCH_START_DELAY_DOTS: u64 = 3;
+const LCD_ON_FIRST_LINE_DOT_OFFSET: u64 = 4;
+const LCD_ON_FIRST_MODE3_PUBLIC_END: u64 = MODE2_DOTS + BASE_MODE3_DOTS - 1;
+const LAST_VISIBLE_LINE: u8 = 143;
+const VBLANK_LINE: u8 = LAST_VISIBLE_LINE + 1;
+const MAX_SPRITES_PER_LINE: usize = 10;
 
 #[derive(Clone, Copy, Debug)]
 struct BootCpuProfile {
@@ -107,8 +115,11 @@ struct MachineBus {
     last_ppu_dot: u64,
     frame_counter: u64,
     first_line_after_lcd_enable: bool,
+    lcd_on_line1_coincidence_delay: bool,
+    lcd_on_line1_delayed_mode2: bool,
     stat_lyc_equal: bool,
     stat_irq_line: bool,
+    stat_boot_mode_latched: bool,
     apu: Apu,
     key1_prepare: bool,
     double_speed: bool,
@@ -655,8 +666,11 @@ impl MachineBus {
             last_ppu_dot: 0,
             frame_counter: 0,
             first_line_after_lcd_enable: false,
+            lcd_on_line1_coincidence_delay: false,
+            lcd_on_line1_delayed_mode2: false,
             stat_lyc_equal: false,
             stat_irq_line: false,
+            stat_boot_mode_latched: false,
             apu: Apu::default(),
             key1_prepare: false,
             double_speed: false,
@@ -707,6 +721,11 @@ impl MachineBus {
         self.spine.line_dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE) as u16;
         self.spine.frame_dot = self.spine.ppu_dot as u32;
         self.stat_lyc_equal = profile.ly == profile.lyc;
+        self.first_line_after_lcd_enable = false;
+        self.lcd_on_line1_coincidence_delay = false;
+        self.lcd_on_line1_delayed_mode2 = false;
+        self.stat_irq_line = false;
+        self.stat_boot_mode_latched = true;
         self.vram_bank = 0;
         self.wram_bank = 1;
         self.hdma = Hdma {
@@ -828,7 +847,7 @@ impl MachineBus {
     fn write_visible(&mut self, addr: u16, value: u8) {
         match addr {
             0x0000..=0x7FFF => self.cart.write_reg(addr, value),
-            0x8000..=0x9FFF if self.vram_blocked() => {}
+            0x8000..=0x9FFF if self.vram_write_blocked() => {}
             0x8000..=0x9FFF => {
                 let offset = (addr - 0x8000) as usize;
                 self.vram[self.vram_bank as usize][offset] = value;
@@ -844,7 +863,7 @@ impl MachineBus {
             0xF000..=0xFDFF => {
                 self.wram[self.selected_wram_bank()][(addr - 0xF000) as usize] = value
             }
-            0xFE00..=0xFE9F if self.oam_blocked() => {}
+            0xFE00..=0xFE9F if self.oam_write_blocked() => {}
             0xFE00..=0xFE9F => {
                 let offset = (addr - 0xFE00) as usize;
                 self.oam[offset] = value;
@@ -944,7 +963,12 @@ impl MachineBus {
 
     fn write_ppu_register(&mut self, addr: u16, value: u8) {
         let old_lcdc = self.io[0x40];
-        self.io[(addr - 0xFF00) as usize] = value;
+        let index = (addr - 0xFF00) as usize;
+        self.io[index] = if addr == 0xFF41 {
+            0x80 | (value & 0x78)
+        } else {
+            value
+        };
         self.ppu_public.write_register(PpuRegisterWrite {
             time: self.spine.now,
             addr,
@@ -956,6 +980,9 @@ impl MachineBus {
                 self.spine.line_dot = 4;
                 self.spine.frame_dot = 4;
                 self.first_line_after_lcd_enable = true;
+                self.lcd_on_line1_coincidence_delay = false;
+                self.lcd_on_line1_delayed_mode2 = true;
+                self.stat_boot_mode_latched = false;
                 self.refresh_lyc_compare_if_lcd_on();
             }
             0xFF40 if value & 0x80 == 0 => {
@@ -963,6 +990,12 @@ impl MachineBus {
                 self.spine.line_dot = 0;
                 self.spine.frame_dot = 0;
                 self.first_line_after_lcd_enable = false;
+                self.lcd_on_line1_coincidence_delay = false;
+                self.lcd_on_line1_delayed_mode2 = false;
+                self.stat_boot_mode_latched = false;
+            }
+            0xFF41 => {
+                self.stat_boot_mode_latched = false;
             }
             0xFF47 => self.output_latch.apply_write(PaletteWrite {
                 time: self.spine.now,
@@ -1023,41 +1056,136 @@ impl MachineBus {
         }
         let ly = self.ly();
         let dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
-        if ly >= 144 {
+        if ly >= VBLANK_LINE {
             1
-        } else if self.first_line_after_lcd_enable && ly == 0 && dot < 82 {
-            0
-        } else if dot < 80 {
+        } else if self.first_line_after_lcd_enable && ly == 0 {
+            let first_line_dot = dot.saturating_sub(LCD_ON_FIRST_LINE_DOT_OFFSET);
+            if first_line_dot < MODE2_DOTS {
+                0
+            } else if first_line_dot <= LCD_ON_FIRST_MODE3_PUBLIC_END {
+                3
+            } else {
+                0
+            }
+        } else if dot < MODE2_DOTS {
             2
-        } else if self.first_line_after_lcd_enable && ly == 0 && dot < 336 {
-            3
-        } else if dot < 252 {
+        } else if dot < self.internal_mode0_start_dot() {
             3
         } else {
             0
         }
     }
     fn ppu_stat(&self) -> u8 {
-        // Mode bit1 is live from the PPU once past the boot frame; in the boot
-        // frame it reflects the latched post-boot seed (DMG0 STAT=0x83). Bit0 is
-        // the latched writable bit preserved via mask 0x79 (keeps bits 6-3 AND
-        // bit0); only bit1 is overwritten by the mode source. This matches the
-        // pre-PPU-timing baseline that passes boot_hwio-* while the live mode bit1
-        // serves the intr_2_*/STAT-edge tests.
-        let mode_bit_1 = if self.frame_counter == 0 {
-            self.io[0x41] & 0x02
+        let mode = if self.stat_boot_mode_latched
+            && (self.frame_counter == 0 || matches!(self.model, GbModel::Dmg0))
+        {
+            self.io[0x41] & 0x03
         } else {
-            self.ppu_mode() & 0x02
+            self.stat_read_mode()
         };
-        0x80 | (self.io[0x41] & 0x79) | (u8::from(self.stat_lyc_equal) << 2) | mode_bit_1
+        0x80 | (self.io[0x41] & 0x78) | (u8::from(self.stat_lyc_equal) << 2) | mode
+    }
+
+    fn stat_read_mode(&self) -> u8 {
+        if self.io[0x40] & 0x80 == 0 {
+            return 0;
+        }
+        let ly = self.ly();
+        let dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
+        if ly >= VBLANK_LINE {
+            return 1;
+        }
+        if self.first_line_after_lcd_enable && ly == 0 {
+            let first_line_dot = dot.saturating_sub(LCD_ON_FIRST_LINE_DOT_OFFSET);
+            return if first_line_dot < MODE2_DOTS {
+                0
+            } else if first_line_dot <= LCD_ON_FIRST_MODE3_PUBLIC_END {
+                3
+            } else {
+                0
+            };
+        }
+        if dot < 4 {
+            0
+        } else if dot < MODE2_DOTS + 4 {
+            2
+        } else if dot <= self.public_mode3_end_dot() {
+            3
+        } else {
+            0
+        }
+    }
+
+    fn public_mode3_end_dot(&self) -> u64 {
+        MODE2_DOTS + MODE3_FETCH_START_DELAY_DOTS + self.mode3_length_dots()
+    }
+
+    fn internal_mode0_start_dot(&self) -> u64 {
+        MODE2_DOTS + self.mode3_length_dots()
+    }
+
+    fn mode3_length_dots(&self) -> u64 {
+        let len = BASE_MODE3_DOTS + u64::from(self.io[0x43] & 0x07);
+        let mut seen_tiles = [false; 32];
+        let mut sprite_penalty = 0u64;
+        let mut selected = 0usize;
+        let sprite_height = if self.io[0x40] & 0x04 != 0 { 16 } else { 8 };
+        let ly = i16::from(self.ly()) + 16;
+
+        for sprite in self.oam.chunks_exact(4) {
+            let y = i16::from(sprite[0]);
+            if ly < y || ly >= y + sprite_height {
+                continue;
+            }
+            selected += 1;
+            if selected > MAX_SPRITES_PER_LINE {
+                break;
+            }
+            if self.io[0x40] & 0x02 == 0 || sprite[1] >= 168 {
+                continue;
+            }
+            sprite_penalty += 6;
+            let left = sprite[1].wrapping_sub(8).wrapping_add(self.io[0x43]);
+            let tile = usize::from((left / 8) & 0x1F);
+            if !seen_tiles[tile] {
+                seen_tiles[tile] = true;
+                sprite_penalty += u64::from(5u8.saturating_sub(left & 0x07));
+            }
+        }
+
+        len + sprite_penalty / 4 * 4
     }
 
     fn vram_blocked(&self) -> bool {
-        self.io[0x40] & 0x80 != 0 && self.ppu_mode() == 3
+        self.io[0x40] & 0x80 != 0 && self.drawing_access_blocked()
+    }
+
+    fn vram_write_blocked(&self) -> bool {
+        self.vram_blocked() && !self.drawing_write_grace()
     }
 
     fn oam_blocked(&self) -> bool {
-        self.io[0x40] & 0x80 != 0 && matches!(self.ppu_mode(), 2 | 3)
+        self.io[0x40] & 0x80 != 0 && (self.ppu_mode() == 2 || self.drawing_access_blocked())
+    }
+
+    fn oam_write_blocked(&self) -> bool {
+        self.oam_blocked() && !self.oam_scan_write_grace() && !self.drawing_write_grace()
+    }
+
+    fn drawing_access_blocked(&self) -> bool {
+        self.ppu_mode() == 3 || self.stat_read_mode() == 3
+    }
+
+    fn oam_scan_write_grace(&self) -> bool {
+        self.ppu_mode() == 2 && self.spine.ppu_dot % DMG_DOTS_PER_LINE < 4
+    }
+
+    fn drawing_write_grace(&self) -> bool {
+        if self.first_line_after_lcd_enable && self.ly() == 0 {
+            return false;
+        }
+        let dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
+        self.ppu_mode() == 3 && (MODE2_DOTS..MODE2_DOTS + 4).contains(&dot)
     }
 
     fn oam_dma(&mut self, source_hi: u8) {
@@ -1217,8 +1345,17 @@ impl MachineBus {
         }
         let ly = self.ly();
         let line_dot = (self.spine.ppu_dot % DMG_DOTS_PER_LINE) as usize;
+        let entered_line_after_lcd_enable =
+            self.first_line_after_lcd_enable && ly == 1 && line_dot == 0;
+        if entered_line_after_lcd_enable {
+            self.stat_lyc_equal = false;
+            self.lcd_on_line1_coincidence_delay = true;
+        }
         if ly != 0 {
             self.first_line_after_lcd_enable = false;
+        }
+        if self.lcd_on_line1_coincidence_delay && line_dot >= 4 {
+            self.lcd_on_line1_coincidence_delay = false;
         }
         self.refresh_lyc_compare_if_lcd_on();
         if ly == 144 && line_dot == 0 {
@@ -1226,6 +1363,9 @@ impl MachineBus {
             self.ppu_internal.begin_frame_window_state();
         }
         self.update_stat_irq_line();
+        if self.lcd_on_line1_delayed_mode2 && (ly > 1 || (ly == 1 && line_dot > 4)) {
+            self.lcd_on_line1_delayed_mode2 = false;
+        }
         // W8b·2b-fifo (rubc-d85o): the framebuffer is fed by the real pixel
         // FIFO. Pixel columns ship when the FIFO shifts them out (12-dot
         // fetch warm-up, SCX&7 discard, window restart, sprite stalls), not
@@ -1282,22 +1422,52 @@ impl MachineBus {
 
     fn update_stat_irq_line(&mut self) {
         let stat = self.io[0x41];
-        let mode = self.ppu_mode();
-        let ly = self.ly();
-        let line_dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
-        let mode2_source = mode == 2 || (ly == 144 && line_dot == 0);
         let line = (self.stat_lyc_equal && stat & 0x40 != 0)
-            || (mode2_source && stat & 0x20 != 0)
-            || (mode == 1 && stat & 0x10 != 0)
-            || (mode == 0 && stat & 0x08 != 0);
+            || (self.stat_mode2_pulse() && stat & 0x20 != 0)
+            || (self.stat_mode1_level() && stat & 0x10 != 0)
+            || (self.stat_mode0_level() && stat & 0x08 != 0);
         if line && !self.stat_irq_line {
             self.if_ |= STAT_IRQ;
         }
         self.stat_irq_line = line;
     }
 
+    fn stat_mode2_pulse(&self) -> bool {
+        if self.io[0x40] & 0x80 == 0 {
+            return false;
+        }
+        let ly = self.ly();
+        let dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
+        if self.lcd_on_line1_delayed_mode2 && ly == 1 && dot == 4 {
+            return true;
+        }
+        if self.model.is_cgb() && ly == LAST_VISIBLE_LINE && dot == DMG_DOTS_PER_LINE - 4 {
+            return true;
+        }
+        if !self.model.is_cgb() && ly == VBLANK_LINE && dot == 0 {
+            return true;
+        }
+        ly < VBLANK_LINE && !(self.first_line_after_lcd_enable && ly == 0) && dot == 0
+    }
+
+    fn stat_mode1_level(&self) -> bool {
+        self.io[0x40] & 0x80 != 0 && self.ly() >= VBLANK_LINE
+    }
+
+    fn stat_mode0_level(&self) -> bool {
+        if self.io[0x40] & 0x80 == 0 || self.ly() >= VBLANK_LINE {
+            return false;
+        }
+        let dot = self.spine.ppu_dot % DMG_DOTS_PER_LINE;
+        if self.first_line_after_lcd_enable && self.ly() == 0 {
+            let first_line_dot = dot.saturating_sub(LCD_ON_FIRST_LINE_DOT_OFFSET);
+            return first_line_dot >= MODE2_DOTS + BASE_MODE3_DOTS;
+        }
+        dot >= self.internal_mode0_start_dot()
+    }
+
     fn refresh_lyc_compare_if_lcd_on(&mut self) {
-        if self.io[0x40] & 0x80 != 0 {
+        if self.io[0x40] & 0x80 != 0 && !self.lcd_on_line1_coincidence_delay {
             self.stat_lyc_equal = self.ly() == self.io[0x45];
         }
     }
@@ -1455,8 +1625,8 @@ mod tests {
     fn stat_read_exposes_live_mode_bit_one_not_stale_io_latch() {
         let mut machine = cgb_machine();
         machine.bus.frame_counter = 1;
-        machine.bus.spine.ppu_dot = 252;
-        machine.bus.spine.line_dot = 252;
+        machine.bus.spine.ppu_dot = 256;
+        machine.bus.spine.line_dot = 256;
         machine.bus.io[0x41] = 0x82;
 
         assert_eq!(machine.read_io(0xFF41).unwrap() & 0x02, 0x00);
