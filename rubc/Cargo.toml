@@ -19,5 +19,6 @@ gif = "0.13"
 png = "0.17"
 log = "0.4"
 rubc-core = { path = "../rubc-core" }
+rubc-ng = { path = "../rubc-ng" }
 rfd = "0.17.2"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

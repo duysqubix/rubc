@@ -70,6 +70,19 @@ pub enum FramePixel {
     CgbRgb555(u16),
 }
 
+/// One of the eight Game Boy buttons, for the public input API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Button {
+    A,
+    B,
+    Select,
+    Start,
+    Right,
+    Left,
+    Up,
+    Down,
+}
+
 pub const MOONEYE_PASS: [u8; 6] = [3, 5, 8, 13, 21, 34];
 
 pub struct MachineNg {
@@ -96,6 +109,7 @@ struct MachineBus {
     io: [u8; 0x80],
     ie: u8,
     if_: u8,
+    joypad: Joypad,
     vram_bank: u8,
     wram_bank: u8,
     serial_output: String,
@@ -125,6 +139,35 @@ struct MachineBus {
     double_speed: bool,
     hdma: Hdma,
     oam_dma: OamDma,
+}
+
+#[derive(Clone, Debug)]
+struct Joypad {
+    select_bits: u8,
+    a: bool,
+    b: bool,
+    select: bool,
+    start: bool,
+    right: bool,
+    left: bool,
+    up: bool,
+    down: bool,
+}
+
+impl Default for Joypad {
+    fn default() -> Self {
+        Self {
+            select_bits: 0x30,
+            a: false,
+            b: false,
+            select: false,
+            start: false,
+            right: false,
+            left: false,
+            up: false,
+            down: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -451,6 +494,40 @@ impl MachineNg {
         &self.bus.serial_output
     }
 
+    pub fn serial_text(&self) -> Option<String> {
+        (!self.bus.serial_output.is_empty()).then(|| self.bus.serial_output.clone())
+    }
+
+    pub fn set_button(&mut self, button: Button, pressed: bool) {
+        if self.bus.set_button(button, pressed) {
+            self.bus.if_ = 0xE0 | ((self.bus.if_ | 0x10) & 0x1F);
+        }
+    }
+
+    pub fn set_sample_rate(&mut self, rate: u32) {
+        self.bus.apu.set_sample_rate(rate);
+    }
+
+    pub fn drain_samples(&mut self, out: &mut Vec<f32>) {
+        self.bus.apu.drain_samples(out);
+    }
+
+    pub fn has_battery(&self) -> bool {
+        self.bus.cart.has_battery()
+    }
+
+    pub fn save_ram(&self) -> &[u8] {
+        self.bus.cart.ram()
+    }
+
+    pub fn load_ram(&mut self, data: &[u8]) {
+        self.bus.cart.load_ram(data);
+    }
+
+    pub fn cart_read(&self, addr: u16) -> u8 {
+        self.bus.cart.read(addr)
+    }
+
     pub fn debug_pc(&self) -> u16 {
         self.cpu.r.pc
     }
@@ -622,9 +699,78 @@ impl MachineNg {
             self.step_instruction();
         }
     }
+
+    pub fn step_frame(&mut self) {
+        self.run_frames(1, 2_000_000);
+    }
+}
+
+impl Joypad {
+    fn set_button(&mut self, button: Button, pressed: bool) -> bool {
+        let was = self.line_value();
+        match button {
+            Button::A => self.a = pressed,
+            Button::B => self.b = pressed,
+            Button::Select => self.select = pressed,
+            Button::Start => self.start = pressed,
+            Button::Right => self.right = pressed,
+            Button::Left => self.left = pressed,
+            Button::Up => self.up = pressed,
+            Button::Down => self.down = pressed,
+        }
+        let now = self.line_value();
+        (was & !now) != 0
+    }
+
+    fn line_value(&self) -> u8 {
+        let action_selected = self.select_bits & 0x20 == 0;
+        let dpad_selected = self.select_bits & 0x10 == 0;
+        let mut v = 0x0F;
+        if action_selected {
+            if self.a {
+                v &= !0x01;
+            }
+            if self.b {
+                v &= !0x02;
+            }
+            if self.select {
+                v &= !0x04;
+            }
+            if self.start {
+                v &= !0x08;
+            }
+        }
+        if dpad_selected {
+            if self.right {
+                v &= !0x01;
+            }
+            if self.left {
+                v &= !0x02;
+            }
+            if self.up {
+                v &= !0x04;
+            }
+            if self.down {
+                v &= !0x08;
+            }
+        }
+        v
+    }
+
+    fn read_p1(&self) -> u8 {
+        0xC0 | (self.select_bits & 0x30) | self.line_value()
+    }
+
+    fn write_p1(&mut self, value: u8) {
+        self.select_bits = value & 0x30;
+    }
 }
 
 impl MachineBus {
+    fn set_button(&mut self, button: Button, pressed: bool) -> bool {
+        self.joypad.set_button(button, pressed)
+    }
+
     fn new(model: GbModel, rom: &[u8]) -> Self {
         let spine = ClockSpine::new();
         let table = TimingTable::for_model(model);
@@ -638,6 +784,7 @@ impl MachineBus {
             io: [0xFF; 0x80],
             ie: 0,
             if_: 0xE1,
+            joypad: Joypad::default(),
             vram_bank: 0,
             wram_bank: 1,
             serial_output: String::new(),
@@ -694,6 +841,7 @@ impl MachineBus {
         self.timer = Timer::post_boot(&self.spine, profile.div, 0x00, 0x00, 0x00);
         self.io.fill(0xFF);
         self.io[0x00] = profile.p1;
+        self.joypad.write_p1(profile.p1);
         self.io[0x01] = 0x00;
         self.io[0x02] = profile.sc;
         self.io[0x0F] = 0xE1;
@@ -784,7 +932,7 @@ impl MachineBus {
             0xFF04..=0xFF07 => self.timer.read(addr)?,
             0xFF0F => self.if_ | 0xE0,
             0xFF10..=0xFF3F => self.apu.read_for_model(addr, self.model.is_cgb()),
-            0xFF00 => self.io[0x00] | 0xC0,
+            0xFF00 => self.joypad.read_p1(),
             0xFF02 => self.io[0x02] | 0x7E,
             0xFF40 => self.io[0x40],
             0xFF41 => self.ppu_stat(),
@@ -881,6 +1029,10 @@ impl MachineBus {
                     );
                 }
             }
+            0xFF00 => {
+                self.joypad.write_p1(value);
+                self.io[0x00] = value & 0x30;
+            }
             0xFF0F => self.if_ = 0xE0 | (value & 0x1F),
             0xFF10..=0xFF3F => self.apu.write(addr, value, self.model.is_cgb()),
             0xFF46 => self.oam_dma(value),
@@ -908,7 +1060,10 @@ impl MachineBus {
             self.serial_output.push(self.io[0x01] as char);
             self.io[0x02] = 0x01;
         } else if (0xFF00..=0xFF7F).contains(&addr)
-            && !matches!(addr, 0xFF04..=0xFF07 | 0xFF10..=0xFF3F | 0xFF40..=0xFF55 | 0xFF70)
+            && !matches!(
+                addr,
+                0xFF00 | 0xFF04..=0xFF07 | 0xFF10..=0xFF3F | 0xFF40..=0xFF55 | 0xFF70
+            )
         {
             self.io[(addr - 0xFF00) as usize] = value;
         }

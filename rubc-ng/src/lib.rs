@@ -26,7 +26,7 @@ pub use golden::{
     GoldenV2Reader, GoldenVramRegisters, GoldenVramState, ObservableSample, ObservableValue,
     TraceMismatch, Vram,
 };
-pub use machine::{FramePixel, MachineNg, RunStopNg, StepRecord};
+pub use machine::{Button, FramePixel, MachineNg, RunStopNg, StepRecord};
 pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
 pub use model::GbModel;
 pub use output_latch::{
@@ -149,6 +149,27 @@ mod tests {
             Some(initial_div.wrapping_add(1)),
             "DIV visible byte advances after 256 spine CPU-T ticks from post-boot seed"
         );
+    }
+
+    #[test]
+    fn joypad_p1_matrix_is_active_low_and_requests_irq_on_selected_press() {
+        let rom = vec![0x00; 0x8000];
+        let mut machine = MachineNg::boot_dmg(&rom).expect("valid ROM loads");
+
+        machine.write_io(0xFF0F, 0xE0);
+        machine.write_io(0xFF00, 0x10);
+        assert_eq!(machine.read_io(0xFF00), Some(0xDF));
+
+        machine.set_button(Button::A, true);
+        assert_eq!(machine.read_io(0xFF00), Some(0xDE));
+        assert_eq!(machine.read_io(0xFF0F).unwrap() & 0x10, 0x10);
+
+        machine.set_button(Button::A, false);
+        machine.write_io(0xFF0F, 0xE0);
+        machine.write_io(0xFF00, 0x20);
+        machine.set_button(Button::Right, true);
+        assert_eq!(machine.read_io(0xFF00), Some(0xEE));
+        assert_eq!(machine.read_io(0xFF0F).unwrap() & 0x10, 0x10);
     }
 
     #[test]

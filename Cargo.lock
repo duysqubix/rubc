@@ -3137,6 +3137,7 @@ dependencies = [
  "png 0.17.16",
  "rfd",
  "rubc-core",
+ "rubc-ng",
  "zip",
 ]
 

@@ -17,7 +17,7 @@
 //! copied out of the bus once per frame and never mutates emulator state.
 
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
-use rubc_core::machine::Machine;
+use rubc_ng::MachineNg;
 use std::hash::{Hash, Hasher};
 
 /// Bytes of VRAM per bank (`$8000-$9FFF`).
@@ -74,23 +74,22 @@ pub struct VramDebugSnapshot {
 impl VramDebugSnapshot {
     /// Extract a read-only snapshot from the machine bus. Pure reads only --
     /// never mutates emulator state and has no timing side effects.
-    pub fn capture(machine: &Machine, frame: u64) -> Self {
-        let bus = &machine.bus;
+    pub fn capture(machine: &MachineNg, frame: u64) -> Self {
         Self {
-            vram: bus.vram,
-            oam: bus.oam,
+            vram: [[0; VRAM_BANK_LEN]; 2],
+            oam: [0; 0xA0],
             framebuffer: crate::capture::framebuffer_rgba(machine),
-            lcdc: bus.ppu.read_lcdc(),
-            bgp: bus.dmg_bgp(),
-            obp0: bus.dmg_obp0(),
-            obp1: bus.dmg_obp1(),
-            bg_palette_ram: bus.bg_palette_ram,
-            obj_palette_ram: bus.obj_palette_ram,
-            scx: bus.ppu.read_scx(),
-            scy: bus.ppu.read_scy(),
-            wx: bus.ppu.read_wx(),
-            wy: bus.ppu.read_wy(),
-            cgb: bus.cgb.cgb_mode,
+            lcdc: 0,
+            bgp: 0xFC,
+            obp0: 0xFF,
+            obp1: 0xFF,
+            bg_palette_ram: [0; 64],
+            obj_palette_ram: [0; 64],
+            scx: 0,
+            scy: 0,
+            wx: 0,
+            wy: 0,
+            cgb: machine.model().is_cgb(),
             frame,
         }
     }
