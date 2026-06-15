@@ -146,7 +146,7 @@ roms-bundle:
       [ -f "$src" ] || { echo "roms-bundle: missing ROM $src" >&2; exit 1; }
       cp -f "$src" "$dst/$file"
       brotli -k -f -q 11 "$dst/$file"   # -> $file.br
-      gzip   -9 -k -f    "$dst/$file"   # -> $file.gz
+      gzip   -9 -n -k -f    "$dst/$file"   # -> $file.gz  (-n: no mtime/name -> reproducible)
     done
     # Real byte sizes (the acid2 ROMs are 32768 each; computed via wc -c, not hard-coded).
     s_dmg=$(wc -c < "$dst/dmg-acid2.gb" | tr -d ' ')
@@ -161,7 +161,7 @@ roms-bundle:
       printf ']\n'
     } > "$dst/manifest.json"
     brotli -k -f -q 11 "$dst/manifest.json"
-    gzip   -9 -k -f    "$dst/manifest.json"
+    gzip   -9 -n -k -f    "$dst/manifest.json"   # -n: reproducible (no mtime/name header)
     # MIT requires shipping the copyright + permission notice as attribution.
     cp -f "{{ref}}/mealybug/LICENSE" "$dst/LICENSE.txt"
     printf '\nBundled test ROMs (dmg-acid2, cgb-acid2, cgb-acid-hell) (c) 2018 Matt Currie, MIT -- github.com/mattcurrie\n' >> "$dst/LICENSE.txt"

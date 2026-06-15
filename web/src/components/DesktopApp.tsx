@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useEmulator } from "@/lib/store";
 import { emulator, BTN } from "@/lib/emulator";
-import type { EmulatorRom, EmulatorContextValue } from "@/lib/store";
+import type { BuiltinRom, EmulatorRom, EmulatorContextValue } from "@/lib/store";
 import { Button, Badge, StatusPill, Kbd, Switch } from "@/components/ui";
 import { Viewport, CartIcon } from "@/components/Viewport";
 import { Settings } from "@/components/Settings";
@@ -34,6 +34,18 @@ function Logo({ h = 30 }: { h?: number }) {
       />
     </a>
   );
+}
+
+function builtinToRom(b: BuiltinRom): EmulatorRom {
+  return {
+    id: b.id,
+    title: b.title,
+    name: b.file,
+    size: b.sizeBytes,
+    mode: b.mode,
+    thumb: `/${b.id}.png`,
+    live: null,
+  };
 }
 
 function DeskRomItem({ rom, active, onPlay }: { rom: EmulatorRom; active: boolean; onPlay: (id: string) => void }) {
@@ -157,8 +169,23 @@ function CollapsedStrip({ side, label, onExpand }: { side: "left" | "right"; lab
 
 function LibraryRail({ emu, onCollapse }: { emu: EmulatorContextValue; onCollapse: () => void }) {
   const games = emu.ROMS.filter((r) => !r.id.includes("test"));
-  const tests = emu.ROMS.filter((r) => r.id.includes("test"));
   const inputRef = useRef<HTMLInputElement>(null);
+  const [builtins, setBuiltins] = useState<BuiltinRom[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/roms/manifest.json")
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((data: unknown) => {
+        if (!cancelled && Array.isArray(data)) setBuiltins(data as BuiltinRom[]);
+      })
+      // No manifest (e.g. `just roms-bundle` not run yet) -> hide the section.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const builtinIds = new Set(builtins.map((b) => b.id));
+  const tests = emu.ROMS.filter((r) => r.id.includes("test") && !builtinIds.has(r.id));
   return (
     <aside
       style={{
@@ -219,6 +246,28 @@ function LibraryRail({ emu, onCollapse }: { emu: EmulatorContextValue; onCollaps
         </button>
       </div>
       <div style={{ flex: 1, overflowY: "auto", padding: "10px 10px 16px", minHeight: 0 }}>
+        {builtins.length > 0 && (
+          <RailGroup label={`Built-in · ${builtins.length}`}>
+            {builtins.map((b) => (
+              <DeskRomItem
+                key={b.id}
+                rom={builtinToRom(b)}
+                active={b.id === emu.romId}
+                onPlay={() => emu.openBuiltinRom(b)}
+              />
+            ))}
+            <div
+              style={{
+                fontFamily: "var(--font-mono)",
+                fontSize: 10.5,
+                color: "var(--text-muted)",
+                padding: "6px 2px 2px",
+              }}
+            >
+              Built-in ROMs: MIT © Matt Currie
+            </div>
+          </RailGroup>
+        )}
         <RailGroup label={`Games · ${games.length}`}>
           {games.map((r) => (
             <DeskRomItem key={r.id} rom={r} active={r.id === emu.romId} onPlay={emu.boot} />
