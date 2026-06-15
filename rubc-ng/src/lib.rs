@@ -1,0 +1,896 @@
+#![forbid(unsafe_code)]
+
+pub mod apu;
+pub mod bus_intent;
+pub mod cartridge;
+pub mod conformance;
+pub mod cpu;
+pub mod golden;
+pub mod machine;
+pub mod manifest;
+pub mod model;
+pub mod output_latch;
+mod pixel_fifo;
+pub mod ppu_internal;
+pub mod ppu_public;
+mod serde_arrays;
+pub mod time;
+pub mod timer;
+pub mod timing;
+
+pub use apu::Apu;
+pub use bus_intent::{CpuBusIntent, CpuIntentSource, IntentOutcome};
+pub use cartridge::Cartridge;
+pub use conformance::{ConformanceConfig, ConformanceOutcome, ConformanceReport, ConformanceRow};
+pub use golden::{
+    assert_golden_edges, GoldenInitialState, GoldenRow, GoldenSelection, GoldenTrace,
+    GoldenV2Reader, GoldenVramRegisters, GoldenVramState, ObservableSample, ObservableValue,
+    TraceMismatch, Vram,
+};
+pub use machine::{Button, FramePixel, MachineNg, RunStopNg, StepRecord};
+pub use manifest::{Expectation, Manifest, RomManifestEntry, VectorSuiteEntry};
+pub use model::GbModel;
+pub use output_latch::{
+    assert_lcd_output_palette_golden, assert_lcd_output_palette_golden_with_perturbation,
+    assert_lcd_output_palette_golden_with_wrong_register, LatchedPixel, LcdOutputLatch,
+    LcdOutputPaletteDivergence, LcdPaletteSource, OutputRawPixel, PaletteWrite,
+};
+pub use ppu_internal::{
+    assert_bg_fetch_golden, assert_bg_fetch_golden_with_perturbation, BgFetchDivergence,
+    BgFetchSample, FifoOutput, LcdPixelSource, PpuInternal, RenderedPpuPixel, ResolvedDmgPixel,
+    SelectedSprite, SpritePalette, SpritePriorityMode, SpriteSize, WindowRestart,
+};
+pub use ppu_public::{
+    replay_ppu_public_observable, replay_ppu_public_observable_with_table_perturbation, PpuPublic,
+    PpuPublicEvent, PpuRegisterWrite,
+};
+pub use time::{ClockPhase, ClockSpine, Time};
+pub use timer::{Timer, TimerRegister};
+pub use timing::{
+    Anchor, Observable, PhaseRule, TimingDomain, TimingEntry, TimingProfile, TimingTable,
+};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn read_reference_rom(relative: &str) -> Vec<u8> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/test-suites/gb-test-roms")
+            .join(relative);
+        std::fs::read(&path).unwrap_or_else(|err| panic!("{} is present: {err}", path.display()))
+    }
+
+    #[test]
+    fn gb_model_exposes_full_hardware_set_and_predicates() {
+        assert_eq!(GbModel::ALL.len(), 13);
+        assert!(GbModel::DmgB.is_dmg_family());
+        assert!(GbModel::Mgb.is_dmg_family());
+        assert!(GbModel::Sgb2.is_dmg_family());
+        assert!(GbModel::CgbE.is_cgb());
+        assert!(GbModel::Agb.is_cgb());
+        assert!(!GbModel::Dmg0.is_cgb());
+    }
+
+    #[test]
+    fn timing_table_lookup_is_declarative_and_model_selected() {
+        let dmg = TimingTable::for_model(GbModel::DmgB);
+        let cgb = TimingTable::for_model(GbModel::CgbE);
+
+        let dmg_entry = dmg
+            .lookup(TimingDomain::PpuInternal, "bg_fetch_tile_high_t1")
+            .expect("DMG table must expose named BG fetch high T1 entry");
+        assert_eq!(dmg_entry.anchor, Anchor::PpuMode3Start);
+        assert_eq!(dmg_entry.observable, Observable::PpuFetchSample);
+        assert_eq!(dmg_entry.offset.subphases(), 22 * 4);
+        let mode3 = dmg
+            .lookup(TimingDomain::PpuPublic, "mode3_public_start")
+            .expect("DMG table must expose golden-derived public mode3 start");
+        assert_eq!(mode3.offset.subphases(), 176);
+
+        let cgb_dot = cgb
+            .lookup(TimingDomain::PpuPublic, "ppu_dot")
+            .expect("CGB table must expose PPU public dot cadence");
+        assert_eq!(cgb_dot.phase, PhaseRule::EveryCpuT { divisor: 1 });
+    }
+
+    #[test]
+    fn machine_ng_nop_rom_is_deterministic() {
+        let rom = vec![0x00; 0x8000];
+        let mut a = MachineNg::from_rom(GbModel::DmgB, &rom).expect("valid ROM loads");
+        let mut b = MachineNg::from_rom(GbModel::DmgB, &rom).expect("valid ROM loads");
+
+        let trace_a = a.run_steps(32);
+        let trace_b = b.run_steps(32);
+
+        assert_eq!(
+            trace_a, trace_b,
+            "same ROM/model must produce identical Time sequence"
+        );
+        assert_eq!(trace_a.first().map(|r| r.time), Some(Time::ZERO));
+        assert!(
+            trace_a.last().map(|r| r.time.subphases()).unwrap_or(0) > 31,
+            "real CPU execution advances the spine by CPU bus cycles, not fake one-subphase records"
+        );
+    }
+
+    #[test]
+    fn machine_ng_maps_timer_registers_and_ticks_div_from_spine() {
+        let rom = vec![0x00; 0x8000];
+        let mut machine = MachineNg::from_rom(GbModel::DmgB, &rom).expect("valid ROM loads");
+
+        assert!(machine.write_io(0xFF05, 0x34));
+        assert!(machine.write_io(0xFF06, 0xA5));
+        assert!(machine.write_io(0xFF07, 0xFF));
+        assert_eq!(
+            machine.read_io(0xFF05),
+            Some(0x34),
+            "TIMA is memory-mapped at FF05"
+        );
+        assert_eq!(
+            machine.read_io(0xFF06),
+            Some(0xA5),
+            "TMA is memory-mapped at FF06"
+        );
+        assert_eq!(
+            machine.read_io(0xFF07),
+            Some(0xFF),
+            "TAC exposes upper bits as set"
+        );
+
+        let initial_div = machine.read_io(0xFF04).expect("DIV is mapped");
+        while machine.spine().cpu_t < 256 {
+            machine.step();
+        }
+        assert_eq!(
+            machine.read_io(0xFF04),
+            Some(initial_div.wrapping_add(1)),
+            "DIV visible byte advances after 256 spine CPU-T ticks from post-boot seed"
+        );
+    }
+
+    #[test]
+    fn joypad_p1_matrix_is_active_low_and_requests_irq_on_selected_press() {
+        let rom = vec![0x00; 0x8000];
+        let mut machine = MachineNg::boot_dmg(&rom).expect("valid ROM loads");
+
+        machine.write_io(0xFF0F, 0xE0);
+        machine.write_io(0xFF00, 0x10);
+        assert_eq!(machine.read_io(0xFF00), Some(0xDF));
+
+        machine.set_button(Button::A, true);
+        assert_eq!(machine.read_io(0xFF00), Some(0xDE));
+        assert_eq!(machine.read_io(0xFF0F).unwrap() & 0x10, 0x10);
+
+        machine.set_button(Button::A, false);
+        machine.write_io(0xFF0F, 0xE0);
+        machine.write_io(0xFF00, 0x20);
+        machine.set_button(Button::Right, true);
+        assert_eq!(machine.read_io(0xFF00), Some(0xEE));
+        assert_eq!(machine.read_io(0xFF0F).unwrap() & 0x10, 0x10);
+    }
+
+    #[test]
+    fn savestate_rejects_unsupported_version() {
+        let rom = vec![0x00; 0x8000];
+        let mut machine = MachineNg::from_rom(GbModel::DmgB, &rom).expect("valid ROM loads");
+
+        let err = machine
+            .load_state(&[2, b'{', b'}'])
+            .expect_err("v2 payload must be rejected by v3 loader");
+
+        assert_eq!(err, "unsupported savestate version: 2");
+    }
+
+    #[test]
+    fn savestate_roundtrip_real_rom_lockstep() {
+        let rom = read_reference_rom("cpu_instrs/cpu_instrs.gb");
+        let mut saved = MachineNg::boot_dmg(&rom).expect("cpu_instrs ROM boots");
+        saved.set_button(Button::A, true);
+        saved.set_button(Button::Down, true);
+        for _ in 0..100_000 {
+            saved.step_instruction();
+        }
+
+        let state = saved.save_state();
+        assert_eq!(state.first().copied(), Some(3), "savestate uses v3 header");
+        let saved_framebuffer = saved.framebuffer().to_vec();
+        let saved_serial = saved.serial_output().to_owned();
+        let saved_p1 = saved.read_io(0xFF00);
+
+        let mut restored = MachineNg::boot_dmg(&rom).expect("fresh cpu_instrs ROM boots");
+        restored
+            .load_state(&state)
+            .expect("v3 savestate loads into fresh machine");
+
+        assert_eq!(restored.framebuffer(), saved_framebuffer.as_slice());
+        assert_eq!(restored.serial_output(), saved_serial);
+        assert_eq!(restored.read_io(0xFF00), saved_p1);
+
+        for _ in 0..3 {
+            saved.step_frame();
+            restored.step_frame();
+        }
+
+        assert_eq!(
+            restored.framebuffer(),
+            saved.framebuffer(),
+            "post-load machine must remain framebuffer-identical in lockstep"
+        );
+        assert_eq!(
+            restored.serial_output(),
+            saved.serial_output(),
+            "post-load machine must keep serial output identical in lockstep"
+        );
+        assert_eq!(
+            restored.read_io(0xFF00),
+            saved.read_io(0xFF00),
+            "post-load machine must preserve joypad key state in lockstep"
+        );
+    }
+
+    #[test]
+    fn machine_ng_executes_cpu_instrs_individual_rom_to_blargg_serial_passed() {
+        let rom = read_reference_rom("cpu_instrs/individual/01-special.gb");
+        let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
+
+        let stop = machine.run_blargg(8_000_000);
+
+        assert_eq!(
+            stop,
+            RunStopNg::BlarggDone,
+            "ROM must terminate through serial"
+        );
+        assert!(
+            machine.serial_output().contains("Passed"),
+            "blargg serial output must contain Passed, got {:?}",
+            machine.serial_output()
+        );
+    }
+
+    #[test]
+    fn machine_ng_executes_combined_cpu_instrs_rom_to_blargg_serial_passed() {
+        let rom = read_reference_rom("cpu_instrs/cpu_instrs.gb");
+        let mut machine = MachineNg::boot_cgb(&rom).expect("ROM boots");
+
+        let stop = machine.run_blargg(120_000_000);
+
+        assert_eq!(
+            stop,
+            RunStopNg::BlarggDone,
+            "combined cpu_instrs must terminate through serial; serial={:?}",
+            machine.serial_output()
+        );
+        assert!(
+            machine.serial_output().contains("Passed"),
+            "combined blargg serial output must contain Passed, got {:?}",
+            machine.serial_output()
+        );
+    }
+
+    fn assert_machine_ng_blargg_dmg_passes(relative: &str, max_instructions: u64) {
+        let rom = read_reference_rom(relative);
+        let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
+
+        let stop = machine.run_blargg(max_instructions);
+
+        assert_eq!(
+            stop,
+            RunStopNg::BlarggDone,
+            "{relative} must terminate through serial/cart oracle; serial={:?} cart={:?}",
+            machine.serial_output(),
+            machine.blargg_cart_text()
+        );
+        assert!(
+            machine.blargg_passed(),
+            "{relative} must report Passed, serial={:?} cart={:?}",
+            machine.serial_output(),
+            machine.blargg_cart_text()
+        );
+    }
+
+    #[test]
+    fn machine_ng_executes_mem_timing_to_blargg_serial_passed() {
+        assert_machine_ng_blargg_dmg_passes("mem_timing/mem_timing.gb", 120_000_000);
+    }
+
+    #[test]
+    fn machine_ng_executes_mem_timing_2_to_blargg_serial_passed() {
+        assert_machine_ng_blargg_dmg_passes("mem_timing-2/mem_timing.gb", 120_000_000);
+    }
+
+    #[test]
+    fn machine_ng_executes_halt_bug_to_blargg_passed() {
+        assert_machine_ng_blargg_dmg_passes("halt_bug.gb", 120_000_000);
+    }
+
+    #[test]
+    fn machine_ng_executes_interrupt_time_cgb_double_speed_to_blargg_passed() {
+        let rom = read_reference_rom("interrupt_time/interrupt_time.gb");
+        let mut machine = MachineNg::boot_cgb_native(&rom).expect("ROM boots as native CGB");
+
+        let stop = machine.run_blargg(120_000_000);
+
+        assert_eq!(
+            stop,
+            RunStopNg::BlarggDone,
+            "interrupt_time CGB double-speed gate must terminate; serial={:?} cart={:?}",
+            machine.serial_output(),
+            machine.blargg_cart_text()
+        );
+        assert!(
+            machine.blargg_passed(),
+            "interrupt_time CGB double-speed must report Passed; serial={:?} cart={:?}",
+            machine.serial_output(),
+            machine.blargg_cart_text()
+        );
+    }
+
+    #[test]
+    fn machine_ng_executes_oam_bug_passing_subtests_to_blargg_passed() {
+        // W8b·2c raises the OAM floor to the old-core honest 7/8: singles
+        // 1-6 and 8 pass via real blargg cart/serial signatures. Single #7
+        // (timing_effect) remains an exposed diagnostic for the later sub-dot
+        // timing-effect pattern, so it is not claimed here.
+        for relative in [
+            "oam_bug/oam_bug.gb",
+            "oam_bug/rom_singles/1-lcd_sync.gb",
+            "oam_bug/rom_singles/2-causes.gb",
+            "oam_bug/rom_singles/3-non_causes.gb",
+            "oam_bug/rom_singles/4-scanline_timing.gb",
+            "oam_bug/rom_singles/5-timing_bug.gb",
+            "oam_bug/rom_singles/6-timing_no_bug.gb",
+            "oam_bug/rom_singles/8-instr_effect.gb",
+        ] {
+            assert_machine_ng_blargg_dmg_passes(relative, 120_000_000);
+        }
+    }
+
+    #[test]
+    fn machine_ng_survives_frames_and_produces_framebuffer() {
+        let rom = vec![0x00; 0x8000];
+        let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
+
+        machine.run_frames(2, 100_000);
+
+        assert_eq!(
+            machine.framebuffer().len(),
+            160 * 144,
+            "DMG framebuffer size"
+        );
+        assert!(
+            machine.spine().ppu_dot >= 456 * 2,
+            "PPU dots advance through machine spine"
+        );
+    }
+
+    fn debug_introspection_rom() -> Vec<u8> {
+        let mut rom = vec![0x00; 0x8000];
+        rom[0x0143] = 0x80;
+        rom[0x0147] = 0x00;
+        let program = [
+            0x3E, 0x00, 0xE0, 0x40, 0x21, 0x00, 0x80, 0x36, 0x3C, 0x21, 0x10, 0x80, 0x36, 0x7E,
+            0x21, 0x00, 0xFE, 0x36, 0x22, 0x21, 0x01, 0xFE, 0x36, 0x33, 0x3E, 0xE4, 0xE0, 0x47,
+            0x3E, 0xD2, 0xE0, 0x48, 0x3E, 0x24, 0xE0, 0x49, 0x3E, 0x12, 0xE0, 0x42, 0x3E, 0x34,
+            0xE0, 0x43, 0x3E, 0x56, 0xE0, 0x4A, 0x3E, 0x78, 0xE0, 0x4B, 0x3E, 0x80, 0xE0, 0x68,
+            0x3E, 0x1F, 0xE0, 0x69, 0x3E, 0x03, 0xE0, 0x69, 0x3E, 0x80, 0xE0, 0x6A, 0x3E, 0xE0,
+            0xE0, 0x6B, 0x3E, 0x7C, 0xE0, 0x6B, 0x3E, 0x91, 0xE0, 0x40, 0x18, 0xFE,
+        ];
+        rom[0x0100..0x0100 + program.len()].copy_from_slice(&program);
+        rom
+    }
+
+    #[test]
+    fn debug_accessors_expose_live_state_and_are_pure_reads() {
+        let rom = debug_introspection_rom();
+        let mut probed = MachineNg::boot_cgb_native(&rom).expect("debug ROM boots as CGB");
+        let mut control = MachineNg::boot_cgb_native(&rom).expect("debug ROM boots as CGB");
+
+        for _ in 0..96 {
+            probed.step_instruction();
+            control.step_instruction();
+        }
+
+        assert_eq!(
+            probed.debug_vram()[0][0x0000],
+            0x3C,
+            "debug VRAM reads live bank 0 byte"
+        );
+        assert_eq!(
+            probed.debug_vram()[0][0x0010],
+            0x7E,
+            "debug VRAM reads live tile byte"
+        );
+        assert_eq!(
+            probed.debug_oam()[0],
+            0x22,
+            "debug OAM reads live sprite Y byte"
+        );
+        assert_eq!(
+            probed.debug_oam()[1],
+            0x33,
+            "debug OAM reads live sprite X byte"
+        );
+        assert_eq!(probed.debug_lcdc(), 0x91, "debug LCDC reads FF40");
+        assert_eq!(probed.debug_scy(), 0x12, "debug SCY reads FF42");
+        assert_eq!(probed.debug_scx(), 0x34, "debug SCX reads FF43");
+        assert_eq!(probed.debug_wy(), 0x56, "debug WY reads FF4A");
+        assert_eq!(probed.debug_wx(), 0x78, "debug WX reads FF4B");
+        assert_eq!(probed.debug_dmg_bgp(), 0xE4, "debug BGP reads FF47");
+        assert_eq!(probed.debug_dmg_obp0(), 0xD2, "debug OBP0 reads FF48");
+        assert_eq!(probed.debug_dmg_obp1(), 0x24, "debug OBP1 reads FF49");
+        assert_eq!(
+            &probed.debug_bg_palette_ram()[..2],
+            &[0x1F, 0x03],
+            "debug BG palette RAM reads live RGB555 LE bytes"
+        );
+        assert_eq!(
+            &probed.debug_obj_palette_ram()[..2],
+            &[0xE0, 0x7C],
+            "debug OBJ palette RAM reads live RGB555 LE bytes"
+        );
+
+        let _ = probed.debug_vram();
+        let _ = probed.debug_oam();
+        let _ = probed.debug_bg_palette_ram();
+        let _ = probed.debug_obj_palette_ram();
+        let _ = (
+            probed.debug_lcdc(),
+            probed.debug_scx(),
+            probed.debug_scy(),
+            probed.debug_wx(),
+            probed.debug_wy(),
+            probed.debug_dmg_bgp(),
+            probed.debug_dmg_obp0(),
+            probed.debug_dmg_obp1(),
+        );
+
+        for _ in 0..2 {
+            probed.step_frame();
+            control.step_frame();
+        }
+
+        assert_eq!(
+            probed.framebuffer(),
+            control.framebuffer(),
+            "debug accessors must not alter later framebuffer output"
+        );
+        assert_eq!(
+            probed.save_state(),
+            control.save_state(),
+            "debug accessors must not mutate serialized machine state"
+        );
+    }
+
+    #[test]
+    fn golden_reader_loads_sameboy_tsv_schema_as_typed_rows() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/m3_scy_change_ly000.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+        let trace = GoldenTrace::read_tsv(path).expect("golden TSV parses");
+
+        assert_eq!(trace.rows.len(), 86);
+        let write = trace
+            .rows
+            .iter()
+            .find(|row| row.kind == "write" && row.addr == Some(0xFF42) && row.byte == Some(0x03))
+            .expect("SCY=03 write row is typed");
+        assert_eq!(write.norm_dot, Some(14.0));
+        assert_eq!(write.conflict.as_deref(), Some("READ_NEW"));
+
+        let fetch = trace
+            .rows
+            .iter()
+            .find(|row| {
+                row.kind == "fetch"
+                    && row.state.as_deref() == Some("GET_TILE_DATA_HIGH_T1")
+                    && row.io_scy == Some(0x03)
+            })
+            .expect("HIGH_T1 fetch with new SCY is typed");
+        assert_eq!(fetch.norm_dot, Some(22.0));
+    }
+
+    #[test]
+    fn golden_v2_reader_streams_real_trace_rows_without_eager_trace_load() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let mut rows = GoldenV2Reader::open(&path)
+            .expect("v2 reader opens")
+            .filter_selection(
+                GoldenSelection::new()
+                    .kind("ppu_public")
+                    .event("stat_sample")
+                    .frames(60..=60)
+                    .lines(145..=145)
+                    .limit(1),
+            );
+        let row = rows
+            .next()
+            .expect("real trace has selected row")
+            .expect("selected row parses");
+
+        assert_eq!(row.schema, 2);
+        assert_eq!(row.kind, "ppu_public");
+        assert_eq!(row.frame, 60);
+        assert_eq!(row.ly, Some(145));
+        assert_eq!(row.mode, Some(1));
+        assert_eq!(row.stat_sources.as_deref(), Some("00"));
+    }
+
+    #[test]
+    fn golden_assertion_reports_first_divergence_and_accepts_matching_stub() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+        let selection = GoldenSelection::new()
+            .kind("ppu_public")
+            .event("stat_sample")
+            .frames(60..=60)
+            .lines(145..=145)
+            .limit(1);
+        let expected = GoldenV2Reader::open(&path)
+            .expect("v2 reader opens")
+            .filter_selection(selection.clone())
+            .next()
+            .expect("selected row exists")
+            .expect("selected row parses")
+            .to_observable_sample(Observable::PpuModeEdge)
+            .expect("row maps to PpuModeEdge sample");
+
+        let mismatching = [ObservableSample {
+            value: ObservableValue::U8(0),
+            ..expected.clone()
+        }];
+        let err = assert_golden_edges(
+            mismatching.iter().cloned(),
+            GoldenV2Reader::open(&path).expect("v2 reader opens"),
+            Observable::PpuModeEdge,
+            "hblank_ly_scx_timing-GS",
+            selection.clone(),
+        )
+        .expect_err("deliberate stub mismatch must report diagnostic");
+        let diagnostic = err.to_string();
+        assert!(diagnostic.contains("first divergence for hblank_ly_scx_timing-GS PpuModeEdge"));
+        assert!(diagnostic.contains("expected"));
+        assert!(diagnostic.contains("actual"));
+
+        assert_golden_edges!(
+            [expected].into_iter(),
+            GoldenV2Reader::open(&path).expect("v2 reader opens"),
+            Observable::PpuModeEdge,
+            "hblank_ly_scx_timing-GS",
+            selection
+        );
+    }
+
+    #[test]
+    fn ppu_public_replay_matches_hblank_golden_mode_edges() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        for (event, lines) in [
+            ("mode2_enter", 0..=143),
+            ("mode3_enter", 0..=143),
+            ("mode0_enter", 0..=143),
+            ("frame_vblank", 144..=144),
+        ] {
+            let selection = GoldenSelection::new()
+                .kind("ppu_public")
+                .event(event)
+                .frames(60..=61)
+                .lines(lines);
+            let actual = replay_ppu_public_observable(
+                &path,
+                GbModel::DmgB,
+                event,
+                Observable::PpuModeEdge,
+                selection.clone(),
+            )
+            .expect("PPU-public replay emits selected edges");
+
+            assert_golden_edges!(
+                actual,
+                GoldenV2Reader::open(&path).expect("v2 reader opens"),
+                Observable::PpuModeEdge,
+                "hblank_ly_scx_timing-GS",
+                selection,
+            );
+        }
+    }
+
+    #[test]
+    fn ppu_public_replay_matches_vblank_golden_ly_edges() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__vblank_stat_intr-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let selection = GoldenSelection::new()
+            .kind("ppu_public")
+            .event("frame_vblank")
+            .frames(60..=61)
+            .lines(144..=144);
+        let actual = replay_ppu_public_observable(
+            &path,
+            GbModel::DmgB,
+            "frame_vblank",
+            Observable::PpuLy,
+            selection.clone(),
+        )
+        .expect("PPU-public replay emits selected LY edges");
+
+        assert_golden_edges!(
+            actual,
+            GoldenV2Reader::open(&path).expect("v2 reader opens"),
+            Observable::PpuLy,
+            "vblank_stat_intr-GS",
+            selection,
+        );
+    }
+
+    #[test]
+    fn golden_v2_reader_accepts_additive_v21_write_visible_columns() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let write = GoldenV2Reader::open(&path)
+            .expect("v2.1 reader opens")
+            .filter_map(Result::ok)
+            .find(|row| row.kind == "cpu" && row.addr == Some(0xFF40))
+            .expect("trace carries real LCDC CPU writes");
+
+        assert_eq!(write.write_visible_tick, Some(write.raw_tick));
+        assert_eq!(write.write_visible_dot, write.dot);
+    }
+
+    #[test]
+    fn golden_v2_reader_extracts_capture_window_initial_state_block() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let initial =
+            GoldenV2Reader::read_initial_state(&path).expect("v2.2 initial-state block parses");
+
+        assert_eq!(initial.frame, 60);
+        assert_eq!(initial.ly, 145);
+        assert_eq!(initial.line_tick, 8);
+        assert_eq!(initial.mode, 1);
+        assert_eq!(initial.lcdc, 0x91);
+        assert_eq!(initial.stat, 0x01);
+        assert_eq!(initial.scy, 0x00);
+        assert_eq!(initial.scx, 0x00);
+        assert_eq!(initial.lyc, 0x00);
+    }
+
+    #[test]
+    fn ppu_public_wave_gate_matches_full_s3_captured_windows_from_replayed_writes() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent");
+        let traces = [
+            (
+                "hblank_ly_scx_timing-GS",
+                "acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv",
+            ),
+            (
+                "intr_2_0_timing",
+                "acceptance__ppu__intr_2_0_timing__dmg.tsv",
+            ),
+            (
+                "lcdon_timing-GS",
+                "acceptance__ppu__lcdon_timing-GS__dmg.tsv",
+            ),
+            (
+                "lcdon_write_timing-GS",
+                "acceptance__ppu__lcdon_write_timing-GS__dmg.tsv",
+            ),
+        ];
+        let events = [
+            "stat_sample",
+            "mode2_irq_prepare",
+            "mode2_enter",
+            "mode3_enter",
+            "mode0_enter",
+            "frame_vblank",
+            "vblank_irq_edge",
+            "stat_irq_edge",
+            "lcd_off",
+            "lcd_on_line0_oam_prelude",
+            "mode3_enter_line0",
+        ];
+        let observables = [
+            Observable::PpuModeEdge,
+            Observable::PpuStat,
+            Observable::PpuStatSources,
+            Observable::PpuIrqEdge,
+            Observable::PpuLcdOn,
+            Observable::PpuLyc,
+        ];
+
+        for (rom, file) in traces {
+            let path = workspace.join("reference/goldens/v2").join(file);
+            if !path.exists() {
+                eprintln!("skip: {path:?} absent");
+                continue;
+            }
+            for event in events {
+                let selection = GoldenSelection::new().kind("ppu_public").event(event);
+                if GoldenV2Reader::open(&path)
+                    .expect("v2 reader opens")
+                    .filter_selection(selection.clone())
+                    .next()
+                    .is_none()
+                {
+                    continue;
+                }
+                for observable in observables {
+                    if observable == Observable::PpuModeEdge && event == "stat_sample" {
+                        continue;
+                    }
+                    if observable == Observable::PpuModeEdge
+                        && matches!(event, "frame_vblank" | "vblank_irq_edge" | "stat_irq_edge")
+                    {
+                        continue;
+                    }
+                    if observable == Observable::PpuIrqEdge
+                        && !matches!(event, "frame_vblank" | "vblank_irq_edge" | "stat_irq_edge")
+                    {
+                        continue;
+                    }
+                    if observable == Observable::PpuLcdOn
+                        && !matches!(event, "lcd_off" | "lcd_on_line0_oam_prelude")
+                    {
+                        continue;
+                    }
+                    let actual = replay_ppu_public_observable(
+                        &path,
+                        GbModel::DmgB,
+                        event,
+                        observable,
+                        selection.clone(),
+                    )
+                    .expect("PPU-public replay emits selected observable from writes+table");
+
+                    assert_golden_edges!(
+                        actual,
+                        GoldenV2Reader::open(&path).expect("v2 reader opens"),
+                        observable,
+                        rom,
+                        selection.clone(),
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ppu_public_wave_gate_is_falsifiable_when_mode0_entry_moves_by_one_tick() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent")
+            .join("reference/goldens/v2/acceptance__ppu__hblank_ly_scx_timing-GS__dmg.tsv");
+        if !path.exists() {
+            eprintln!("skip: {path:?} absent");
+            return;
+        }
+
+        let selection = GoldenSelection::new()
+            .kind("ppu_public")
+            .event("mode0_enter")
+            .frames(60..=60)
+            .lines(0..=143);
+        let actual = replay_ppu_public_observable_with_table_perturbation(
+            &path,
+            GbModel::DmgB,
+            "mode0_enter",
+            Observable::PpuModeEdge,
+            selection.clone(),
+            "dmg_b_mode0_enter_tick",
+            1,
+        )
+        .expect("perturbed replay runs");
+
+        let err = assert_golden_edges(
+            actual,
+            GoldenV2Reader::open(&path).expect("v2 reader opens"),
+            Observable::PpuModeEdge,
+            "hblank_ly_scx_timing-GS perturbed mode0",
+            selection,
+        )
+        .expect_err("+1 tick mode0 table perturbation must fail wave gate");
+        assert!(err.to_string().contains("first divergence"));
+    }
+
+    #[test]
+    fn ppu_public_accepts_slice1_register_writes() {
+        let mut ppu = PpuPublic::new(GbModel::DmgB, Time::ZERO, 0);
+
+        ppu.write_register(PpuRegisterWrite {
+            time: Time::from_subphases(10),
+            addr: 0xFF40,
+            value: 0x80,
+        });
+        ppu.write_register(PpuRegisterWrite {
+            time: Time::from_subphases(11),
+            addr: 0xFF41,
+            value: 0x78,
+        });
+        ppu.write_register(PpuRegisterWrite {
+            time: Time::from_subphases(12),
+            addr: 0xFF45,
+            value: 0x42,
+        });
+
+        assert_eq!(ppu.lcdc(), 0x80);
+        assert_eq!(ppu.stat(), 0xF8);
+        assert_eq!(ppu.lyc(), 0x42);
+    }
+
+    #[test]
+    fn manifest_loader_parses_rom_entries_and_validates_reference_paths_when_present() {
+        let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("rubc-ng has workspace parent");
+        let manifest_path = workspace.join("rubc-ng-data/test-manifest.toml");
+        let manifest = Manifest::read(&manifest_path).expect("manifest parses");
+
+        assert_eq!(manifest.version, 1);
+        assert_eq!(manifest.rom_count, 207);
+        assert_eq!(manifest.roms.len(), 207);
+        assert!(manifest
+            .roms
+            .iter()
+            .any(|rom| rom.path == "reference/test-suites/acid2/dmg-acid2.gb"
+                && rom.expectation.kind == "pixel-exact"));
+
+        let reference_root = workspace.join("reference/test-suites");
+        if !reference_root.exists() {
+            eprintln!("skip: {reference_root:?} absent");
+            return;
+        }
+        let missing = manifest.missing_reference_paths(workspace);
+        assert!(missing.is_empty(), "missing manifest paths: {missing:?}");
+    }
+}

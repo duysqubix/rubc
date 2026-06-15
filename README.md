@@ -258,7 +258,7 @@ WLA-DX-built mooneye suite, the acid2/mealybug pixel diffs, and the Blargg ROMs 
 or cart-RAM result protocol).
 
 ```bash
-just test                        # cargo test -p rubc-core (the full core gate)
+just test                        # cargo test -p rubc-ng (the full core gate)
 just sm83                        # SM83 JSON opcode vectors
 just blargg cpu_instrs           # run a Blargg ROM headlessly by name
 just mooneye 'acceptance/timer'  # run a mooneye glob (needs `brew install wla-dx`)
@@ -273,12 +273,7 @@ is in the root [`AGENTS.md`](AGENTS.md).
 
 ```
 rubc/
-├── rubc-core/            # the emulator library — no rendering, no I/O
-│   └── src/
-│       ├── cpu/          # SM83 core: per-T-cycle engine, all 512 opcodes, ALU
-│       ├── bus/          # memory bus, PPU, APU, timer, cartridge / MBC banking
-│       ├── diag/         # feature-gated diagnostics (flight recorder, BGB trace, hashes)
-│       └── machine.rs    # bootable Machine{Cpu, Bus} + test-ROM harness
+├── rubc-ng/              # the emulator library — timing core, bus, PPU, APU, MBCs
 ├── rubc/                 # the native binary — winit/egui window, cpal audio, input
 ├── rubc-wasm/            # WebAssembly bindings + the original vanilla web demo
 ├── web/                  # the Next.js mobile PWA front-end
@@ -287,10 +282,9 @@ rubc/
 └── justfile              # task runner (run `just` to list recipes)
 ```
 
-The CPU and bus are joined by a single `CpuBus` trait: the CPU borrows the bus `&mut` for
-each M-cycle of work. No peripheral holds a back-reference, which keeps the whole design
-borrow-checker-clean and free of interior-mutability hacks. Each major directory has its own
-`AGENTS.md` with conventions and quirks — start with the root one before contributing.
+The ng core owns CPU, bus, PPU, APU, cartridge banking, savestates, and test-ROM
+harnesses. Each major directory has its own `AGENTS.md` with conventions and quirks —
+start with the root one before contributing.
 
 ## References
 

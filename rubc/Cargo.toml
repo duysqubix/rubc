@@ -8,6 +8,7 @@ license = "MIT"
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 cpal = "0.18"
+chrono = "0.4"
 # eframe drives a real native window (winit + wgpu under the hood) and turns
 # egui viewport output into OS windows; it re-exports the matching egui. Single
 # embedded window for now (Phase 2 adds detachable viewports).
@@ -18,6 +19,6 @@ egui = "0.34"
 gif = "0.13"
 png = "0.17"
 log = "0.4"
-rubc-core = { path = "../rubc-core" }
+rubc-ng = { path = "../rubc-ng" }
 rfd = "0.17.2"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

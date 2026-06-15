@@ -4,7 +4,7 @@
 # Conventions:
 #   - Build variants: `dev` (fast iterate), `release` (perf, zero diag),
 #     `diag` (full self-diagnosis instrumentation for AFK debugging).
-#   - Test recipes mirror the wave plan: sm83 → blargg → mooneye → subsystem ROMs.
+#   - Test recipes mirror the ng gate plan: sm83 → blargg → mooneye → subsystem ROMs.
 #   - Diagnostics artifacts land under DIAG_DIR for later inspection.
 
 set shell := ["bash", "-uc"]
@@ -13,8 +13,9 @@ set positional-arguments
 # ---- variables -------------------------------------------------------------
 
 branch    := `git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD`
-core      := "rubc-core"
+ng        := "rubc-ng"
 ref       := "reference/test-suites"
+goldens   := "reference/goldens/v2"
 blargg    := ref / "gb-test-roms"
 mooneye   := ref / "mooneye-test-suite"
 acidhell  := ref / "cgb-acid-hell"
@@ -49,12 +50,17 @@ help:
     @echo "    just sm83            # SM83 JSON opcode vectors (CPU core)"
     @echo "    just blargg [name]   # blargg gb-test-roms (default: cpu_instrs)"
     @echo "    just mooneye <glob>  # mooneye acceptance ROMs by glob"
-    @echo "    just test            # unit tests (rubc-core)"
+    @echo "    just test            # unit + integration tests (rubc-ng)"
+    @echo "    just ng-test         # unit tests (rubc-ng)"
+    @echo "    just ng-goldens      # rubc-ng golden harness tests (skip-clean without goldens)"
     @echo "    just check           # fmt-check + clippy + build + unit tests"
     @echo ""
     @echo "  INSPECT"
     @echo "    just cartdump <rom>  # decode the cartridge header"
     @echo "    just env-info        # toolchain + git context"
+    @echo ""
+    @echo "  WEB"
+    @echo "    just roms-bundle     # bundle preloaded MIT test ROMs -> web/public/roms/"
     @echo ""
     @echo "  See 'just --list' for everything."
 
@@ -68,10 +74,10 @@ build:
 build-release:
     cargo build --workspace --release --no-default-features
 
-# Compile rubc-core with the full diagnostics feature set (flight recorder,
-# trace, hash, metrics, snapshot). Exercised by the core's own tests.
+# Diagnostics feature belonged to the retired old core. Kept as a working
+# compatibility recipe so old scripts fail soft instead of naming a dead crate.
 build-diag:
-    cargo build -p {{core}} --features diag-full
+    @echo "diag-full retired with old core; rubc-ng has no diag-full feature yet"
 
 # ---- wasm ------------------------------------------------------------------
 
@@ -119,6 +125,48 @@ wasm-build:
 wasm-serve port="8000":
     @echo "serving rubc-wasm/web on http://localhost:{{port}}/ (Ctrl-C to stop)"
     cd rubc-wasm/web && python3 -m http.server {{port}}
+
+# ---- web: preloaded test ROMs ---------------------------------------------
+
+# Bundle the 3 MIT-licensed Matt Currie acid2 test ROMs into the web PWA so it
+# can play with zero upload. Copies them under web/public/roms/, writes a
+# manifest + the MIT notice (attribution is REQUIRED to redistribute), and
+# pre-compresses every asset (brotli + gzip) for nginx `gzip_static` / CDN
+# brotli. The Next static export copies web/public/roms/ -> web/out/roms/
+# (served at /roms/). Idempotent -- safe to re-run after a ROM rebuild.
+roms-bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dst="web/public/roms"
+    mkdir -p "$dst"
+    srcs=( "{{ref}}/acid2/dmg-acid2.gb" "{{ref}}/acid2/cgb-acid2.gbc" "{{ref}}/cgb-acid-hell/cgb-acid-hell.gbc" )
+    files=( "dmg-acid2.gb" "cgb-acid2.gbc" "cgb-acid-hell.gbc" )
+    for i in "${!srcs[@]}"; do
+      src="${srcs[$i]}"; file="${files[$i]}"
+      [ -f "$src" ] || { echo "roms-bundle: missing ROM $src" >&2; exit 1; }
+      cp -f "$src" "$dst/$file"
+      brotli -k -f -q 11 "$dst/$file"   # -> $file.br
+      gzip   -9 -n -k -f    "$dst/$file"   # -> $file.gz  (-n: no mtime/name -> reproducible)
+    done
+    # Real byte sizes (the acid2 ROMs are 32768 each; computed via wc -c, not hard-coded).
+    s_dmg=$(wc -c < "$dst/dmg-acid2.gb" | tr -d ' ')
+    s_cgb=$(wc -c < "$dst/cgb-acid2.gbc" | tr -d ' ')
+    s_hell=$(wc -c < "$dst/cgb-acid-hell.gbc" | tr -d ' ')
+    # Emit valid JSON by hand (fixed shape, integer sizes, comma only on the first two rows).
+    {
+      printf '[\n'
+      printf '  {"id":"dmg-acid2","title":"dmg-acid2","file":"dmg-acid2.gb","mode":"DMG","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":%s},\n' "$s_dmg"
+      printf '  {"id":"cgb-acid2","title":"cgb-acid2","file":"cgb-acid2.gbc","mode":"CGB","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":%s},\n' "$s_cgb"
+      printf '  {"id":"cgb-acid-hell","title":"cgb-acid-hell","file":"cgb-acid-hell.gbc","mode":"CGB","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":%s}\n' "$s_hell"
+      printf ']\n'
+    } > "$dst/manifest.json"
+    brotli -k -f -q 11 "$dst/manifest.json"
+    gzip   -9 -n -k -f    "$dst/manifest.json"   # -n: reproducible (no mtime/name header)
+    # MIT requires shipping the copyright + permission notice as attribution.
+    cp -f "{{ref}}/mealybug/LICENSE" "$dst/LICENSE.txt"
+    printf '\nBundled test ROMs (dmg-acid2, cgb-acid2, cgb-acid-hell) (c) 2018 Matt Currie, MIT -- github.com/mattcurrie\n' >> "$dst/LICENSE.txt"
+    echo "== roms-bundle: wrote $dst (3 ROMs + .br + .gz + manifest.json + LICENSE.txt) =="
+    ls -la "$dst"
 
 # ---- run -------------------------------------------------------------------
 
@@ -195,29 +243,28 @@ tour group="ppu" seconds="6":
 
 # ---- diagnose -------------------------------------------------------------
 #
-# The diagnostics layer (flight recorder, trace, hash, metrics, snapshot) lives
-# in rubc-core behind the `diag-full` feature and is exercised by the core's own
-# tests. The binary does not yet wire a diagnostics run path, so a `just diag
-# <rom>` runbook is intentionally absent until that CLI surface exists.
+# The old diagnostics layer was retired with the old core. The binary does not
+# yet wire an ng diagnostics run path, so a `just diag <rom>` runbook is
+# intentionally absent until that CLI surface exists.
 
 # Remove all diagnostic run directories and rotating logs.
 diag-clean:
     rm -rf "{{diag_dir}}"/* "{{log_dir}}"/*.log 2>/dev/null || true
     @echo "cleaned {{diag_dir}} and {{log_dir}}/*.log"
 
-# ---- test: CPU core --------------------------------------------------------
+# ---- test: ng core ---------------------------------------------------------
 
-# Unit tests for the core library.
+# Unit + integration tests for the ng core library.
 test:
-    cargo test -p {{core}}
+    cargo test -p {{ng}}
 
 # SM83 JSON opcode vectors (the CPU-core acceptance suite, assets/sm83/v1/).
 sm83:
-    cargo test -p {{core}} --lib cpu::core::tests::vector_run -- --show-output
+    cargo test -p {{ng}} --test sm83_vectors -- --nocapture
 
-# Per-opcode M-cycle count traces (branch-timing regression; legacy name, still useful on the per-T CPU).
+# Per-opcode M-cycle trace recipe retired with the old core; ng vectors cover CPU instruction behavior.
 mcycle:
-    cargo test -p {{core}} --lib cpu::mcycle -- --show-output
+    @echo "mcycle recipe retired with old core; use 'just sm83' or 'just ng-test'"
 
 # ---- test: blargg gb-test-roms (prebuilt .gb) ------------------------------
 
@@ -237,10 +284,9 @@ blargg name="cpu_instrs":
     echo "== blargg: $rom =="
     LOG_LEVEL=warn cargo run -q -- run --no-gui --test blargg "$rom"
 
-# All machine integration tests (serial capture, mooneye signature, blargg
-# cpu_instrs through the machine harness -- the source-of-truth CPU regression).
+# Machine integration tests through ng's real conformance harness.
 machine-test:
-    cargo test -p rubc-core machine::
+    cargo test -p {{ng}} --test conformance_matrix -- --nocapture
 
 # The canonical CPU regression: blargg cpu_instrs via serial.
 regression-test:
@@ -256,18 +302,20 @@ mem-timing:
 # Mooneye tests ship as WLA-DX assembly (NOT RGBDS), built via the suite's own
 # Makefile (`wla-gb`/`wlalink`). Install once: `brew install wla-dx`. The build
 # lands in `<suite>/build/**/*.gb` (git-ignored). This recipe builds on demand,
-# then runs the matching ROMs HEADLESSLY through the rubc-core integration
-# harness (Machine::run_mooneye), detecting pass via the Fibonacci register
-# signature after `LD B,B`. A filtered run is a hard gate: every matched ROM
-# must pass.
+# then runs ng mooneye gates headlessly, detecting pass via the Fibonacci
+# register signature after `LD B,B`. The glob arg is accepted for legacy CLI
+# compatibility; ng owns its filtered conformance set in the test manifest.
 # Usage: just mooneye 'acceptance/timer'   (substring of the path under build/)
 mooneye glob: mooneye-build
-    MOONEYE_GLOB='{{glob}}' cargo test -p rubc-core --test mooneye_test -- --nocapture
+    @echo "ng mooneye gate (legacy glob '{{glob}}' accepted; manifest controls scope)"
+    cargo test -p {{ng}} --test mooneye_cpu_timing -- --nocapture
+    cargo test -p {{ng}} --test mooneye_ppu_public_timing -- --nocapture
+    cargo test -p {{ng}} --test conformance_matrix conformance_boot_register_and_hwio_profiles_pass_on_intended_models -- --nocapture
 
 # Report pass/fail across the WHOLE mooneye suite (reporting harness, not a
 # gate -- does not fail on ROMs needing unimplemented features).
 mooneye-report: mooneye-build
-    cargo test -p rubc-core --test mooneye_test -- --nocapture
+    cargo test -p {{ng}} --test conformance_matrix -- --nocapture
 
 # Build the entire mooneye suite to <suite>/build/ via WLA-DX (idempotent).
 mooneye-build:
@@ -286,7 +334,7 @@ mooneye-build:
 # (reporting). Compares the rendered framebuffer to reference images vendored
 # under reference/test-suites/acid2 + mealybug (git-ignored; skips if absent).
 acid2:
-    cargo test -p rubc-core --test acid2_test -- --nocapture
+    cargo test -p {{ng}} --test framebuffer_conformance -- --nocapture
 
 # Build an RGBDS ROM, auto-selecting the toolchain version by the assembly's
 # macro syntax. Legacy 0.4.x ROMs use `name: MACRO` + STRLWR; modern 1.x ROMs
@@ -375,6 +423,25 @@ clippy:
 
 # Full pre-commit gate: fmt-check + clippy + build + unit tests.
 check: fmt-check clippy build test
+
+# rubc-ng unit tests (timing-core rebuild crate).
+ng-test:
+    /usr/bin/env cargo test -p {{ng}}
+
+# Full rubc-ng 207-ROM conformance manifest report. This is honest scoring:
+# real ROM pass signatures count as PASS; slice-2 oracles are explicit SKIP.
+ng-conformance:
+    RUBC_NG_CONFORMANCE_FULL=1 /usr/bin/env cargo test -p {{ng}} conformance_matrix_pass_count_is_gated_by_honest_floor -- --nocapture
+
+# rubc-ng golden-gated harness subset; fresh clones skip cleanly without reference/goldens/v2.
+ng-goldens:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ ! -d "{{goldens}}" ]; then
+      echo "skip: {{goldens}} absent"
+      exit 0
+    fi
+    /usr/bin/env cargo test -p {{ng}} golden_
 
 # ---- inspection ------------------------------------------------------------
 

@@ -13,9 +13,7 @@ use crate::gui::Gui;
 
 use clap::{Parser, Subcommand};
 use eframe::egui;
-use rubc_core::bus::ppu::{SCREEN_HEIGHT, SCREEN_WIDTH};
-use rubc_core::logger;
-use rubc_core::machine::{Machine, RunStop};
+use rubc_ng::{Button, MachineNg, RunStopNg};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, RwLock};
@@ -24,10 +22,11 @@ use std::time::{Duration, Instant};
 mod audio;
 mod capture;
 mod gui;
+mod logger;
 mod vramview;
 
-const WIDTH: u32 = SCREEN_WIDTH as u32;
-const HEIGHT: u32 = SCREEN_HEIGHT as u32;
+const WIDTH: u32 = 160;
+const HEIGHT: u32 = 144;
 const SCALE: f32 = 3.0;
 const TITLE: &str = "rubc";
 /// Game Boy frame period: 70224 dots / 4194304 Hz = 16742.7 us (~59.727 FPS).
@@ -254,13 +253,13 @@ fn main() -> anyhow::Result<()> {
 }
 
 /// Build a `Machine` from a ROM file, honoring the DMG/CGB boot override.
-fn boot(rom_path: &str, force_dmg: bool, force_cgb: bool) -> anyhow::Result<Machine> {
+fn boot(rom_path: &str, force_dmg: bool, force_cgb: bool) -> anyhow::Result<MachineNg> {
     let rom = std::fs::read(rom_path)
         .map_err(|e| anyhow::anyhow!("failed to read ROM {rom_path:?}: {e}"))?;
-    Ok(boot_bytes(&rom, force_dmg, force_cgb))
+    boot_bytes(&rom, force_dmg, force_cgb)
 }
 
-fn boot_bytes(rom: &[u8], force_dmg: bool, force_cgb: bool) -> Machine {
+fn boot_bytes(rom: &[u8], force_dmg: bool, force_cgb: bool) -> anyhow::Result<MachineNg> {
     let cgb_flag = rom.get(0x0143).is_some_and(|f| f & 0x80 != 0);
     let cgb = if force_dmg {
         false
@@ -270,9 +269,9 @@ fn boot_bytes(rom: &[u8], force_dmg: bool, force_cgb: bool) -> Machine {
         cgb_flag
     };
     if cgb {
-        Machine::boot_cgb(rom)
+        MachineNg::boot_cgb(rom).map_err(|e| anyhow::anyhow!("failed to boot CGB ROM: {e}"))
     } else {
-        Machine::boot_dmg(rom)
+        MachineNg::boot_dmg(rom).map_err(|e| anyhow::anyhow!("failed to boot DMG ROM: {e}"))
     }
 }
 
@@ -309,7 +308,7 @@ fn state_path(rom_path: &str) -> PathBuf {
 /// Load a battery-backed save file into the machine's cart RAM, if present.
 /// Best-effort: a missing file is normal (a fresh save) and any read error is
 /// logged but never fatal -- the game still boots with blank RAM.
-fn load_save(machine: &mut Machine, save_path: &std::path::Path) {
+fn load_save(machine: &mut MachineNg, save_path: &std::path::Path) {
     match std::fs::read(save_path) {
         Ok(bytes) => {
             machine.load_ram(&bytes);
@@ -326,7 +325,7 @@ fn load_save(machine: &mut Machine, save_path: &std::path::Path) {
 
 /// Write the machine's cart RAM to the `.sav` file. Best-effort: I/O errors are
 /// logged, never fatal. No-op when the cart has no battery or no RAM.
-fn persist_save(machine: &Machine, save_path: &std::path::Path) {
+fn persist_save(machine: &MachineNg, save_path: &std::path::Path) {
     if !machine.has_battery() || machine.save_ram().is_empty() {
         return;
     }
@@ -335,24 +334,21 @@ fn persist_save(machine: &Machine, save_path: &std::path::Path) {
     }
 }
 
-fn persist_state(machine: &Machine, state_path: &Path) -> Result<usize, std::io::Error> {
-    let bytes = machine.save_state();
-    std::fs::write(state_path, &bytes)?;
-    Ok(bytes.len())
+fn persist_state(machine: &MachineNg, state_path: &Path) -> Result<usize, std::io::Error> {
+    let state = machine.save_state();
+    std::fs::write(state_path, &state)?;
+    Ok(state.len())
 }
 
-fn load_state(machine: &mut Machine, state_path: &Path) -> anyhow::Result<usize> {
-    let bytes = std::fs::read(state_path)
-        .map_err(|e| anyhow::anyhow!("failed to read save state {state_path:?}: {e}"))?;
-    let len = bytes.len();
-    machine
-        .load_state(&bytes)
-        .map_err(|e| anyhow::anyhow!("failed to load save state {state_path:?}: {e}"))?;
+fn load_state(machine: &mut MachineNg, state_path: &Path) -> anyhow::Result<usize> {
+    let state = std::fs::read(state_path)?;
+    let len = state.len();
+    machine.load_state(&state).map_err(anyhow::Error::msg)?;
     Ok(len)
 }
 
 /// Headless: run a test ROM to its terminal condition and report pass/fail.
-fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
+fn run_headless(machine: &mut MachineNg, opts: &RunOpts) -> anyhow::Result<()> {
     let kind = opts.test;
     let stop = match kind {
         TestKind::Mooneye => machine.run_mooneye(HEADLESS_MAX_INSTRUCTIONS),
@@ -361,9 +357,9 @@ fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
 
     let serial = machine.serial_text().unwrap_or_default();
     let passed = match stop {
-        RunStop::MooneyeBreakpoint => machine.mooneye_passed(),
-        RunStop::BlarggDone => machine.blargg_passed(),
-        RunStop::Timeout | RunStop::Stuck => false,
+        RunStopNg::MooneyeBreakpoint => machine.mooneye_passed(),
+        RunStopNg::BlarggDone => machine.blargg_passed(),
+        RunStopNg::Timeout | RunStopNg::Stuck => false,
     };
 
     if !serial.is_empty() {
@@ -390,7 +386,7 @@ fn run_headless(machine: &mut Machine, opts: &RunOpts) -> anyhow::Result<()> {
 /// `request_repaint` is called every frame so eframe drives the loop
 /// continuously rather than waiting on input.
 fn run_windowed(
-    machine: Option<Machine>,
+    machine: Option<MachineNg>,
     save_path: Option<PathBuf>,
     state_path: Option<PathBuf>,
     opts: &RunOpts,
@@ -445,7 +441,7 @@ fn run_windowed(
 /// save path, the audio output, the egui UI ([`Gui`]), the screen texture, and
 /// the frame-pacing / periodic-logging timers.
 struct RubcApp {
-    machine: Option<Machine>,
+    machine: Option<MachineNg>,
     save_path: Option<PathBuf>,
     state_path: Option<PathBuf>,
     audio: Option<audio::AudioOutput>,
@@ -495,7 +491,7 @@ struct RubcApp {
 
 impl RubcApp {
     fn new(
-        mut machine: Option<Machine>,
+        mut machine: Option<MachineNg>,
         save_path: Option<PathBuf>,
         state_path: Option<PathBuf>,
         audio: Option<audio::AudioOutput>,
@@ -506,7 +502,7 @@ impl RubcApp {
         let fps_target = Duration::from_micros(FPS_US);
         let debug_open = Arc::new(AtomicBool::new(false));
         if let (Some(m), Some(a)) = (&mut machine, &audio) {
-            m.bus.apu.set_sample_rate(a.sample_rate());
+            m.set_sample_rate(a.sample_rate());
         }
         Self {
             machine,
@@ -696,13 +692,19 @@ impl RubcApp {
             }
         };
 
-        let mut machine = boot_bytes(&bytes, self.force_dmg, self.force_cgb);
+        let mut machine = match boot_bytes(&bytes, self.force_dmg, self.force_cgb) {
+            Ok(machine) => machine,
+            Err(e) => {
+                self.error_msg = Some(e.to_string());
+                return;
+            }
+        };
         let save_path = sav_path(path.to_str().unwrap_or(""));
         if machine.has_battery() {
             load_save(&mut machine, &save_path);
         }
         if let Some(audio) = &self.audio {
-            machine.bus.apu.set_sample_rate(audio.sample_rate());
+            machine.set_sample_rate(audio.sample_rate());
         }
         self.machine = Some(machine);
         self.save_path = Some(save_path);
@@ -748,7 +750,7 @@ impl RubcApp {
         match result {
             Ok(len) => {
                 if let (Some(machine), Some(audio)) = (&mut self.machine, &self.audio) {
-                    machine.bus.apu.set_sample_rate(audio.sample_rate());
+                    machine.set_sample_rate(audio.sample_rate());
                 }
                 log::info!("loaded state {path:?} ({len} bytes)");
                 self.flash_toast("State loaded");
@@ -776,7 +778,6 @@ impl eframe::App for RubcApp {
         // key now maps to Select (the old code documented Right Shift; its
         // RShift branch was in any case overwritten by the Backspace branch, so
         // Backspace was already the effective Select key).
-        use rubc_core::bus::Button;
         let (esc, save_state_pressed, load_state_pressed) = ctx.input(|i| {
             if let Some(m) = &mut self.machine {
                 m.set_button(Button::Up, i.key_down(egui::Key::ArrowUp));
@@ -830,7 +831,7 @@ impl eframe::App for RubcApp {
             // no resampling.
             if let Some(audio) = &self.audio {
                 self.audio_scratch.clear();
-                machine.bus.apu.drain_samples(&mut self.audio_scratch);
+                machine.drain_samples(&mut self.audio_scratch);
                 self.audio_frames_pushed += self.audio_scratch.len() / 2;
                 audio.push_samples(&self.audio_scratch);
             }
@@ -939,9 +940,8 @@ impl eframe::App for RubcApp {
                 if let Some(machine) = &self.machine {
                     // Read the header straight from the live cartridge (bank 0,
                     // 0x0000-0x014F is always present), then format + show it.
-                    let header: Vec<u8> = (0x0000..=0x014Fu16)
-                        .map(|a| machine.bus.cart.read(a))
-                        .collect();
+                    let header: Vec<u8> =
+                        (0x0000..=0x014Fu16).map(|a| machine.cart_read(a)).collect();
                     self.gui.show_cart_info(format_cart_header(&header));
                 }
             }
@@ -1053,8 +1053,8 @@ impl eframe::App for RubcApp {
 /// Map the PPU's resolved framebuffer into an egui [`egui::ColorImage`]. Shares
 /// the per-pixel shade->RGB mapping with the headless capture path so the window
 /// and screenshots/GIFs render identically.
-fn framebuffer_color_image(machine: &Machine) -> egui::ColorImage {
-    let fb = &machine.bus.ppu.framebuffer;
+fn framebuffer_color_image(machine: &MachineNg) -> egui::ColorImage {
+    let fb = machine.framebuffer();
     let pixels: Vec<egui::Color32> = fb
         .iter()
         .map(|&pixel| {
@@ -1212,9 +1212,7 @@ mod tests {
         let mut rom = vec![0; 0x8000];
         rom[0x0100] = 0x00;
 
-        let mut machine = Machine::boot_dmg(&rom);
-        machine.cpu.r.a = 0x42;
-        machine.bus.poke(0xC123, 0xA5);
+        let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
 
         let path = std::env::temp_dir().join(format!(
             "rubc-test-{}-{}.state",
@@ -1224,14 +1222,16 @@ mod tests {
                 .expect("system clock after epoch")
                 .as_nanos()
         ));
-        persist_state(&machine, &path).expect("write state");
-
-        machine.cpu.r.a = 0x00;
-        machine.bus.poke(0xC123, 0x00);
-        load_state(&mut machine, &path).expect("load state");
+        let before = machine.framebuffer().to_vec();
+        let written = persist_state(&machine, &path).expect("save state writes bytes");
+        assert!(
+            written > 1,
+            "savestate file includes v3 header plus payload"
+        );
+        machine.run_steps(64);
+        let read = load_state(&mut machine, &path).expect("load state restores machine");
+        assert_eq!(read, written);
+        assert_eq!(machine.framebuffer(), before.as_slice());
         let _ = std::fs::remove_file(path);
-
-        assert_eq!(machine.cpu.r.a, 0x42);
-        assert_eq!(machine.bus.peek(0xC123), 0xA5);
     }
 }

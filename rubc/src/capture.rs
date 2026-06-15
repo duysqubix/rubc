@@ -10,8 +10,7 @@
 //! framebuffer (see [`framebuffer_rgba`]) the same way the windowed frontend
 //! does, so captures match what a player sees.
 
-use rubc_core::bus::ppu::{FramePixel, SCREEN_HEIGHT, SCREEN_WIDTH};
-use rubc_core::machine::Machine;
+use rubc_ng::{FramePixel, MachineNg, RunStopNg};
 use std::collections::HashMap;
 use std::io::BufWriter;
 use std::path::Path;
@@ -25,6 +24,8 @@ pub const DMG_SHADES: [[u8; 4]; 4] = [
     [0x08, 0x18, 0x20, 0xFF], // 3: darkest
 ];
 
+pub const SCREEN_WIDTH: usize = 160;
+pub const SCREEN_HEIGHT: usize = 144;
 const W: usize = SCREEN_WIDTH;
 const H: usize = SCREEN_HEIGHT;
 
@@ -49,8 +50,8 @@ pub fn frame_pixel_rgba(pixel: FramePixel) -> [u8; 4] {
 /// `SCREEN_WIDTH * SCREEN_HEIGHT * 4` bytes. This is the single source of truth
 /// for turning the PPU framebuffer into pixels; the windowed renderer maps the
 /// same per-pixel function into its surface buffer.
-pub fn framebuffer_rgba(machine: &Machine) -> Vec<u8> {
-    let fb = &machine.bus.ppu.framebuffer;
+pub fn framebuffer_rgba(machine: &MachineNg) -> Vec<u8> {
+    let fb = machine.framebuffer();
     let mut out = vec![0u8; W * H * 4];
     for (px, &pixel) in out.chunks_exact_mut(4).zip(fb.iter()) {
         px.copy_from_slice(&frame_pixel_rgba(pixel));
@@ -116,7 +117,7 @@ fn write_png(path: &Path, rgba: &[u8], w: u32, h: u32) -> anyhow::Result<()> {
 /// Boot `machine` is the caller's job; here we step `frames` whole frames and
 /// capture the final framebuffer to a PNG, optionally upscaled by `scale`.
 pub fn capture_screenshot(
-    machine: &mut Machine,
+    machine: &mut MachineNg,
     out: &Path,
     frames: u32,
     scale: u32,
@@ -138,13 +139,13 @@ pub fn capture_screenshot(
 /// Falls back to capturing whatever is on screen if `max_instructions` elapses
 /// without a breakpoint.
 pub fn capture_screenshot_at_breakpoint(
-    machine: &mut Machine,
+    machine: &mut MachineNg,
     out: &Path,
     scale: u32,
     max_instructions: u64,
 ) -> anyhow::Result<bool> {
     let stop = machine.run_mooneye(max_instructions);
-    let hit = matches!(stop, rubc_core::machine::RunStop::MooneyeBreakpoint);
+    let hit = matches!(stop, RunStopNg::MooneyeBreakpoint);
     let rgba = framebuffer_rgba(machine);
     let k = scale.max(1) as usize;
     let scaled = scale_rgba(&rgba, W, H, k);
@@ -231,7 +232,7 @@ fn gif_delay_cs(every: u32) -> u16 {
 /// step the emulator, capturing one frame every `every` steps until `frames`
 /// frames are collected, then encode (looping forever), upscaled by `scale`.
 pub fn capture_gif(
-    machine: &mut Machine,
+    machine: &mut MachineNg,
     out: &Path,
     frames: u32,
     every: u32,
@@ -332,7 +333,7 @@ mod tests {
     #[test]
     fn framebuffer_rgba_is_exactly_screen_sized() {
         // A blank DMG machine still yields a full-size RGBA buffer.
-        let machine = Machine::boot_dmg(&[0u8; 0x8000]);
+        let machine = MachineNg::boot_dmg(&[0u8; 0x8000]).expect("ROM boots");
         let rgba = framebuffer_rgba(&machine);
         assert_eq!(rgba.len(), W * H * 4);
     }
@@ -348,7 +349,7 @@ mod tests {
             return;
         }
         let rom = std::fs::read(&rom_path).expect("read dmg-acid2.gb");
-        let mut machine = Machine::boot_dmg(&rom);
+        let mut machine = MachineNg::boot_dmg(&rom).expect("ROM boots");
         let out = std::env::temp_dir().join("rubc-test-dmg-acid2.png");
         capture_screenshot(&mut machine, &out, 120, 1).expect("capture screenshot");
 

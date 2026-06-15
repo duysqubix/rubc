@@ -2,7 +2,7 @@
 #
 # rubc WebAssembly PWA — multi-stage build.
 #
-# Stage 1 compiles the rubc-core emulator to WebAssembly (wasm-bindgen +
+# Stage 1 compiles the ng emulator to WebAssembly (wasm-bindgen +
 # wasm-opt). Stage 2 builds the Next.js mobile PWA (static export) against that
 # wasm. Stage 3 is a tiny nginx image serving the exported site with the correct
 # `application/wasm` MIME type and the headers ES modules need.
@@ -60,7 +60,18 @@ COPY web/ ./
 COPY --from=wasm-builder /build/rubc-wasm/web/pkg/rubc_wasm_bg.wasm ./src/lib/wasm/rubc_wasm_bg.wasm
 COPY --from=wasm-builder /build/rubc-wasm/web/pkg/rubc_wasm.js       ./src/lib/wasm/rubc_wasm.js
 
-# Produce the static export in /web/out.
+# Preloaded MIT test ROMs (web/public/roms/, produced by `just roms-bundle` and
+# committed) must be present so the PWA's "Built-in" library ships in the image.
+# reference/ (the ROM sources) is git- and .dockerignore-excluded, so we cannot
+# regenerate here -- instead fail loudly if the committed bundle is missing
+# rather than silently shipping an empty Built-in section.
+RUN test -f public/roms/manifest.json \
+      && test -f public/roms/dmg-acid2.gb \
+      && test -f public/roms/cgb-acid2.gbc \
+      && test -f public/roms/cgb-acid-hell.gbc \
+    || (echo 'ERROR: preloaded ROMs missing from web/public/roms/ -- run `just roms-bundle` and commit the output' >&2; exit 1)
+
+# Produce the static export in /web/out (public/roms/ -> out/roms/).
 RUN npm run build
 
 # ---- Stage 3: serve the static export --------------------------------------

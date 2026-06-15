@@ -1,8 +1,8 @@
 //! WebAssembly bindings for the rubc Game Boy / Game Boy Color emulator.
 //!
 //! This crate is a thin, `wasm-bindgen`-powered shim around the
-//! platform-agnostic [`rubc_core`] library. It owns no emulation logic: it
-//! boots a [`Machine`], steps frames, and exposes three things JavaScript needs
+//! platform-agnostic [`rubc_ng`] library. It owns no emulation logic: it
+//! boots a [`MachineNg`], steps frames, and exposes three things JavaScript needs
 //! to build a browser frontend:
 //!   - an RGBA framebuffer (read straight from wasm linear memory, zero-copy),
 //!   - drained stereo audio samples for the Web Audio API,
@@ -21,10 +21,11 @@
 //!     --target web --out-dir rubc-wasm/web/pkg
 //! ```
 
-use rubc_core::bus::ppu::{FramePixel, SCREEN_HEIGHT, SCREEN_WIDTH};
-use rubc_core::bus::Button;
-use rubc_core::machine::Machine;
+use rubc_ng::{Button, FramePixel, MachineNg};
 use wasm_bindgen::prelude::*;
+
+const SCREEN_WIDTH: usize = 160;
+const SCREEN_HEIGHT: usize = 144;
 
 /// Visible screen width in pixels (160).
 pub const WIDTH: usize = SCREEN_WIDTH;
@@ -65,7 +66,7 @@ fn frame_pixel_rgba(pixel: FramePixel) -> [u8; 4] {
 
 /// JavaScript-facing button codes for [`RubcWasm::set_button`].
 ///
-/// These match the declaration order of [`rubc_core::bus::Button`]:
+/// These match the declaration order of [`rubc_ng::Button`]:
 ///
 /// | code | button |
 /// |------|--------|
@@ -91,11 +92,11 @@ fn button_from_code(code: u8) -> Option<Button> {
     })
 }
 
-/// A browser-driveable Game Boy: wraps a [`Machine`] plus reusable scratch
+/// A browser-driveable Game Boy: wraps a [`MachineNg`] plus reusable scratch
 /// buffers for the RGBA frame and drained audio samples.
 #[wasm_bindgen]
 pub struct RubcWasm {
-    machine: Machine,
+    machine: MachineNg,
     rgba: Vec<u8>,
     samples: Vec<f32>,
 }
@@ -112,14 +113,14 @@ impl RubcWasm {
         console_error_panic_hook::set_once();
 
         let mut machine = match boot_mode.as_deref() {
-            Some("cgb") => Machine::boot_cgb(rom),
-            Some("dmg") => Machine::boot_dmg(rom),
+            Some("cgb") => MachineNg::boot_cgb(rom).expect("boot CGB machine"),
+            Some("dmg") => MachineNg::boot_dmg(rom).expect("boot DMG machine"),
             _ => {
                 let is_cgb = rom.get(0x0143).is_some_and(|f| f & 0x80 != 0);
                 if is_cgb {
-                    Machine::boot_cgb(rom)
+                    MachineNg::boot_cgb(rom).expect("boot CGB machine")
                 } else {
-                    Machine::boot_dmg(rom)
+                    MachineNg::boot_dmg(rom).expect("boot DMG machine")
                 }
             }
         };
@@ -129,7 +130,7 @@ impl RubcWasm {
         } else {
             sample_rate
         };
-        machine.bus.apu.set_sample_rate(rate);
+        machine.set_sample_rate(rate);
 
         RubcWasm {
             machine,
@@ -153,7 +154,7 @@ impl RubcWasm {
     /// True if the loaded cartridge runs in Game Boy Color mode.
     #[wasm_bindgen(getter)]
     pub fn is_cgb(&self) -> bool {
-        self.machine.bus.cgb.cgb_mode
+        self.machine.model().is_cgb()
     }
 
     /// Advance the emulator until the next VBlank (one full rendered frame).
@@ -173,7 +174,7 @@ impl RubcWasm {
     /// imageData.data.set(px);
     /// ```
     pub fn frame_rgba(&mut self) -> *const u8 {
-        let fb = &self.machine.bus.ppu.framebuffer;
+        let fb = self.machine.framebuffer();
         for (out, &pixel) in self.rgba.chunks_exact_mut(4).zip(fb.iter()) {
             out.copy_from_slice(&frame_pixel_rgba(pixel));
         }
@@ -207,7 +208,7 @@ impl RubcWasm {
     /// no samples are queued.
     pub fn drain_audio(&mut self) -> Vec<f32> {
         self.samples.clear();
-        self.machine.bus.apu.drain_samples(&mut self.samples);
+        self.machine.drain_samples(&mut self.samples);
         self.samples.clone()
     }
 

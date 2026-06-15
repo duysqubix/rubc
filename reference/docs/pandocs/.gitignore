@@ -1,0 +1,5 @@
+/docs/
+/target/
+/env/
+/generated/
+__pycache__/

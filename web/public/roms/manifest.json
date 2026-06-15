@@ -1,0 +1,5 @@
+[
+  {"id":"dmg-acid2","title":"dmg-acid2","file":"dmg-acid2.gb","mode":"DMG","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":32768},
+  {"id":"cgb-acid2","title":"cgb-acid2","file":"cgb-acid2.gbc","mode":"CGB","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":32768},
+  {"id":"cgb-acid-hell","title":"cgb-acid-hell","file":"cgb-acid-hell.gbc","mode":"CGB","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":32768}
+]

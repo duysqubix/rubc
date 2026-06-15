@@ -6,7 +6,7 @@
 # DEVELOPMENT (live hot-reload — watch the UI evolve as you edit web/):
 #   docker compose up web-dev             # then open http://localhost:3000/
 #
-# The prod image compiles rubc-core to WebAssembly + serves the static demo.
+# The prod image compiles rubc-ng to WebAssembly + serves the static demo.
 # The dev service bind-mounts ./web and runs `next dev` (Turbopack HMR); the
 # committed wasm bundle (web/src/lib/wasm/) means dev never recompiles Rust.
 

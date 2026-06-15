@@ -17,7 +17,7 @@
 //! copied out of the bus once per frame and never mutates emulator state.
 
 use egui::{Color32, ColorImage, Context, TextureHandle, TextureOptions};
-use rubc_core::machine::Machine;
+use rubc_ng::MachineNg;
 use std::hash::{Hash, Hasher};
 
 /// Bytes of VRAM per bank (`$8000-$9FFF`).
@@ -74,23 +74,31 @@ pub struct VramDebugSnapshot {
 impl VramDebugSnapshot {
     /// Extract a read-only snapshot from the machine bus. Pure reads only --
     /// never mutates emulator state and has no timing side effects.
-    pub fn capture(machine: &Machine, frame: u64) -> Self {
-        let bus = &machine.bus;
+    pub fn capture(machine: &MachineNg, frame: u64) -> Self {
+        let mut vram = [[0; VRAM_BANK_LEN]; 2];
+        vram.copy_from_slice(machine.debug_vram());
+        let mut oam = [0; 0xA0];
+        oam.copy_from_slice(machine.debug_oam());
+        let mut bg_palette_ram = [0; 64];
+        bg_palette_ram.copy_from_slice(machine.debug_bg_palette_ram());
+        let mut obj_palette_ram = [0; 64];
+        obj_palette_ram.copy_from_slice(machine.debug_obj_palette_ram());
+
         Self {
-            vram: bus.vram,
-            oam: bus.oam,
+            vram,
+            oam,
             framebuffer: crate::capture::framebuffer_rgba(machine),
-            lcdc: bus.ppu.read_lcdc(),
-            bgp: bus.dmg_bgp(),
-            obp0: bus.dmg_obp0(),
-            obp1: bus.dmg_obp1(),
-            bg_palette_ram: bus.bg_palette_ram,
-            obj_palette_ram: bus.obj_palette_ram,
-            scx: bus.ppu.read_scx(),
-            scy: bus.ppu.read_scy(),
-            wx: bus.ppu.read_wx(),
-            wy: bus.ppu.read_wy(),
-            cgb: bus.cgb.cgb_mode,
+            lcdc: machine.debug_lcdc(),
+            bgp: machine.debug_dmg_bgp(),
+            obp0: machine.debug_dmg_obp0(),
+            obp1: machine.debug_dmg_obp1(),
+            bg_palette_ram,
+            obj_palette_ram,
+            scx: machine.debug_scx(),
+            scy: machine.debug_scy(),
+            wx: machine.debug_wx(),
+            wy: machine.debug_wy(),
+            cgb: machine.model().is_cgb(),
             frame,
         }
     }
@@ -668,5 +676,69 @@ mod tests {
         assert_eq!(dmg_color(0xE4, 3), Color32::from_rgb(0x08, 0x18, 0x20));
         // BGP 0x00: every color maps to shade 0 (lightest).
         assert_eq!(dmg_color(0x00, 2), Color32::from_rgb(0xE0, 0xF8, 0xD0));
+    }
+
+    fn debug_introspection_rom() -> Vec<u8> {
+        let mut rom = vec![0x00; 0x8000];
+        rom[0x0143] = 0x80;
+        rom[0x0147] = 0x00;
+        let program = [
+            0x3E, 0x00, 0xE0, 0x40, 0x21, 0x00, 0x80, 0x36, 0x3C, 0x21, 0x10, 0x80, 0x36, 0x7E,
+            0x21, 0x00, 0xFE, 0x36, 0x22, 0x21, 0x01, 0xFE, 0x36, 0x33, 0x3E, 0xE4, 0xE0, 0x47,
+            0x3E, 0xD2, 0xE0, 0x48, 0x3E, 0x24, 0xE0, 0x49, 0x3E, 0x12, 0xE0, 0x42, 0x3E, 0x34,
+            0xE0, 0x43, 0x3E, 0x56, 0xE0, 0x4A, 0x3E, 0x78, 0xE0, 0x4B, 0x3E, 0x80, 0xE0, 0x68,
+            0x3E, 0x1F, 0xE0, 0x69, 0x3E, 0x03, 0xE0, 0x69, 0x3E, 0x80, 0xE0, 0x6A, 0x3E, 0xE0,
+            0xE0, 0x6B, 0x3E, 0x7C, 0xE0, 0x6B, 0x3E, 0x91, 0xE0, 0x40, 0x18, 0xFE,
+        ];
+        rom[0x0100..0x0100 + program.len()].copy_from_slice(&program);
+        rom
+    }
+
+    #[test]
+    fn vram_debug_snapshot_capture_exposes_live_ng_state() {
+        let rom = debug_introspection_rom();
+        let mut machine = MachineNg::boot_cgb_native(&rom).expect("debug ROM boots as CGB");
+
+        for _ in 0..96 {
+            machine.step_instruction();
+        }
+
+        let snap = VramDebugSnapshot::capture(&machine, 7);
+
+        assert_eq!(
+            snap.vram[0][0x0000], 0x3C,
+            "snapshot captures live VRAM bank 0 byte"
+        );
+        assert_eq!(
+            snap.vram[0][0x0010], 0x7E,
+            "snapshot captures live tile byte"
+        );
+        assert_eq!(snap.oam[0], 0x22, "snapshot captures live OAM Y byte");
+        assert_eq!(snap.oam[1], 0x33, "snapshot captures live OAM X byte");
+        assert_eq!(snap.lcdc, 0x91, "snapshot captures live LCDC");
+        assert_eq!(snap.scy, 0x12, "snapshot captures live SCY");
+        assert_eq!(snap.scx, 0x34, "snapshot captures live SCX");
+        assert_eq!(snap.wy, 0x56, "snapshot captures live WY");
+        assert_eq!(snap.wx, 0x78, "snapshot captures live WX");
+        assert_eq!(snap.bgp, 0xE4, "snapshot captures live BGP");
+        assert_eq!(snap.obp0, 0xD2, "snapshot captures live OBP0");
+        assert_eq!(snap.obp1, 0x24, "snapshot captures live OBP1");
+        assert_eq!(
+            &snap.bg_palette_ram[..2],
+            &[0x1F, 0x03],
+            "snapshot captures live BG palette RAM"
+        );
+        assert_eq!(
+            &snap.obj_palette_ram[..2],
+            &[0xE0, 0x7C],
+            "snapshot captures live OBJ palette RAM"
+        );
+        assert!(snap.cgb, "snapshot records CGB model");
+        assert_eq!(snap.frame, 7, "snapshot preserves frame marker");
+        assert_eq!(
+            snap.framebuffer.len(),
+            160 * 144 * 4,
+            "snapshot includes RGBA framebuffer"
+        );
     }
 }

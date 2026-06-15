@@ -1,0 +1,2334 @@
+# rubc-ng conformance manifest (W0.5b / bead rubc-4i6p)
+#
+# Schema:
+#   [manifest] documents provenance and the hardware-model universe. "100%" means every
+#   applicable entry passes on the listed intended_models, never that one emulator mode passes
+#   mutually-exclusive hardware-revision ROMs simultaneously (ADR 0002).
+#   [[rom]] entries cover every .gb/.gbc under reference/test-suites exactly once.
+#     path: repo-relative ROM path.
+#     suite: source suite bucket.
+#     intended_models: hardware model IDs targeted by the ROM or ROM+reference pair.
+#     current_old_core_status: pass | fail | gated.
+#     notes: model-exclusive or gate provenance notes.
+#     [rom.expectation]: machine-checkable oracle:
+#       kind = mooneye-fibonacci-pass | serial-pass-string | cart-ram-result | pixel-exact | gated-diff | placeholder-skip | model-expectations | vector-count.
+#       model-expectations stores per-model sub-expectations when one ROM has DMG-B and CGB-C references.
+#   [[vector_suite]] entries cover non-ROM SingleStepTests/sm83 vectors by count.
+#   [[known_unwinnable_by_single_model]] records mooneye cases W8 must resolve by model parameterization.
+
+[manifest]
+version = 1
+bead = "rubc-4i6p"
+adr = "docs/adr/0002-rubc-ng-timing-core-rebuild.md"
+definition_of_100_percent = "every applicable test ROM passes on the hardware model it targets"
+models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+rom_count = 207
+generated_from = ["reference/test-suites", "retired core acid2/mooneye harnesses", "bd memories rubc-mooneye-85-classification and rubc-cgbc-compat-rebaseline-2026-06-10"]
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div-S.gb"
+intended_models = ["sgb", "sgb2"]
+note = "SGB/SGB2 boot DIV differs from DMG/CGB default model."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div-dmg0.gb"
+intended_models = ["dmg0"]
+note = "DMG0 boot DIV exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div-dmgABCmgb.gb"
+intended_models = ["dmg-a", "dmg-b", "dmg-c", "mgb"]
+note = "DMG A/B/C + MGB boot DIV group exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div2-S.gb"
+intended_models = ["sgb", "sgb2"]
+note = "SGB/SGB2 second boot DIV variant exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_div-A.gb"
+intended_models = ["agb"]
+note = "AGB boot DIV exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_div-cgb0.gb"
+intended_models = ["cgb0"]
+note = "CGB0 boot DIV exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_div-cgbABCDE.gb"
+intended_models = ["cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+note = "CGB A/B/C/D/E boot DIV group exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_hwio-S.gb"
+intended_models = ["sgb", "sgb2"]
+note = "SGB/SGB2 boot HWIO exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_hwio-dmg0.gb"
+intended_models = ["dmg0"]
+note = "DMG0 boot HWIO exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_hwio-dmgABCmgb.gb"
+intended_models = ["dmg-a", "dmg-b", "dmg-c", "mgb"]
+note = "DMG A/B/C + MGB boot HWIO group exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_hwio-C.gb"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+note = "CGB boot HWIO group exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-dmg0.gb"
+intended_models = ["dmg0"]
+note = "DMG0 boot registers exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-mgb.gb"
+intended_models = ["mgb"]
+note = "MGB boot registers exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-sgb.gb"
+intended_models = ["sgb"]
+note = "SGB boot registers exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-sgb2.gb"
+intended_models = ["sgb2"]
+note = "SGB2 boot registers exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_regs-A.gb"
+intended_models = ["agb"]
+note = "AGB boot registers exclusive."
+
+[[known_unwinnable_by_single_model]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/bits/unused_hwio-C.gb"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+note = "CGB revision-specific unused-HWIO behavior; old core targets common CGB-D/E-like functional registers."
+
+[[vector_suite]]
+path = "assets/sm83/v1"
+suite = "SingleStepTests/sm83"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[vector_suite.expectation]
+kind = "vector-count"
+files = 499
+main_opcode_files = 243
+cb_opcode_files = 256
+cases = 499000
+notes = "rubc scorecard reports 436/436 opcode groups; JSON corpus has one file per implemented opcode and 1000 cases per file."
+
+[[rom]]
+path = "reference/test-suites/acid2/cgb-acid2.gbc"
+suite = "acid2"
+intended_models = ["cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB RGB555 hardware-native reference."
+[rom.expectation]
+kind = "pixel-exact"
+reference = "reference/test-suites/acid2/cgb-acid2-reference-rgb555.bin"
+pixels = 23040
+max_diff = 0
+
+[[rom]]
+path = "reference/test-suites/acid2/dmg-acid2.gb"
+suite = "acid2"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "DMG acid2 line/FIFO renderer reference."
+[rom.expectation]
+kind = "pixel-exact"
+reference = "reference/test-suites/acid2/dmg-acid2-reference.bin"
+pixels = 23040
+max_diff = 0
+
+[[rom]]
+path = "reference/test-suites/cgb-acid-hell/cgb-acid-hell.gbc"
+suite = "cgb-acid-hell"
+intended_models = ["cgb-c"]
+current_old_core_status = "pass"
+notes = "Matt Currie CGB PPU torture ROM; old core now pixel-exact."
+[rom.expectation]
+kind = "pixel-exact"
+reference = "reference/test-suites/cgb-acid-hell/cgb-acid-hell-reference-rgb555.bin"
+pixels = 23040
+max_diff = 0
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/cgb_sound.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/01-registers.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/02-len ctr.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/03-trigger.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/04-sweep.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/05-sweep details.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/06-overflow on trigger.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/07-len sweep period sync.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/08-len ctr during power.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/09-wave read while on.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/10-wave trigger while on.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/11-regs after power.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cgb_sound/rom_singles/12-wave.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/cpu_instrs.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/01-special.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/02-interrupts.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/03-op sp,hl.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/04-op r,imm.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/05-op rp.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/06-ld r,r.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/07-jr,jp,call,ret,rst.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/08-misc instrs.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/09-op r,r.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/10-bit ops.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/cpu_instrs/individual/11-op a,(hl).gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/dmg_sound.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/01-registers.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/02-len ctr.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/03-trigger.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/04-sweep.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/05-sweep details.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/06-overflow on trigger.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/07-len sweep period sync.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/08-len ctr during power.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/09-wave read while on.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/10-wave trigger while on.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/11-regs after power.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/dmg_sound/rom_singles/12-wave write while on.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "DMG audio reference suite."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/halt_bug.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB flag; old harness gates via LCD text console."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+channel = "lcd-console-or-serial"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/instr_timing/instr_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+channel = "lcd-console-or-serial"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/interrupt_time/interrupt_time.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "CGB-required/header CGB flag; boot native CGB."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/mem_timing-2/mem_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "cart-ram-result"
+pass_status = "0x80"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/mem_timing-2/rom_singles/01-read_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "cart-ram-result"
+pass_status = "0x80"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/mem_timing-2/rom_singles/02-write_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "cart-ram-result"
+pass_status = "0x80"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/mem_timing-2/rom_singles/03-modify_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "cart-ram-result"
+pass_status = "0x80"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/mem_timing/individual/01-read_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/mem_timing/individual/02-write_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/mem_timing/individual/03-modify_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/mem_timing/mem_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/oam_bug.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "OAM corruption test readme says DMG; combined passes through the real cart/console signature even though single 7 remains an exposed timing-effect diagnostic."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/1-lcd_sync.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/2-causes.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/3-non_causes.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/4-scanline_timing.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/5-timing_bug.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/6-timing_no_bug.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/7-timing_effect.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "fail"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed. Old scorecard marks oam_bug 7/8; sub-test 7 needs sub-dot OAM-corruption phase."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/gb-test-roms/oam_bug/rom_singles/8-instr_effect.gb"
+suite = "gb-test-roms"
+intended_models = ["dmg-b"]
+current_old_core_status = "pass"
+notes = "Header CGB-capable flag present; harness historically boots combined/banked forms in CGB where needed."
+[rom.expectation]
+kind = "serial-pass-string"
+string = "Passed"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m2_win_en_toggle.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 0
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m2_win_en_toggle.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 0
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m2_win_en_toggle.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_bgp_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 820
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_bgp_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 1028
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_bgp_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_bgp_change_sprites.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 2124
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_bgp_change_sprites.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 2736
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_bgp_change_sprites.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_bg_en_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 2753
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_bg_en_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 2548
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_bg_en_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_bg_en_change2.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 666
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_bg_en_change2.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_bg_map_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 845
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_bg_map_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 714
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_bg_map_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_bg_map_change2.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 545
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_bg_map_change2.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_obj_en_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 217
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_obj_en_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 206
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_obj_en_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_obj_en_change_variant.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 685
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_obj_en_change_variant.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 626
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_obj_en_change_variant.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_obj_size_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 150
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_obj_size_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 155
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_obj_size_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_obj_size_change_scx.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 190
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_obj_size_change_scx.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 140
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_obj_size_change_scx.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_tile_sel_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 1755
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_tile_sel_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 1840
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_tile_sel_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_tile_sel_change2.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 1391
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_tile_sel_change2.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_tile_sel_win_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 2755
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_tile_sel_win_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 2476
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_tile_sel_win_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_tile_sel_win_change2.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 2442
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_tile_sel_win_change2.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_win_en_change_multiple.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 0
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_win_en_change_multiple.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 0
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_win_en_change_multiple.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_win_en_change_multiple_wx.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C upstream placeholder reference; skip until hardware capture appears."
+[rom.expectation]
+kind = "placeholder-skip"
+digest = "fnv1a64:0x9ac7cebb90066345; sha256-prefix:c4c4553535071b2a"
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_win_en_change_multiple_wx.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_win_map_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 1925
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_lcdc_win_map_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 2126
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_win_map_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_lcdc_win_map_change2.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 560
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_lcdc_win_map_change2.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_obp0_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 221
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_obp0_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 432
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_obp0_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_scx_high_5_bits.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 84
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_scx_high_5_bits.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 19
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_scx_high_5_bits.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_scx_high_5_bits_change2.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 170
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_scx_high_5_bits_change2.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_scx_low_3_bits.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 396
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_scx_low_3_bits.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 540
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_scx_low_3_bits.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_scy_change.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 3497
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_scy_change.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 8450
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_scy_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_scy_change2.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 356
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_scy_change2.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_window_timing.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 103
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_window_timing.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 225
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_window_timing.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_window_timing_wx_0.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 1346
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_window_timing_wx_0.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 1202
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_window_timing_wx_0.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_wx_4_change.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C upstream placeholder reference; skip until hardware capture appears."
+[rom.expectation]
+kind = "placeholder-skip"
+digest = "fnv1a64:0x9ac7cebb90066345; sha256-prefix:c4c4553535071b2a"
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_wx_4_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_wx_4_change_sprites.gb"
+suite = "mealybug"
+intended_models = ["dmg-b", "cgb-c"]
+current_old_core_status = "gated"
+notes = "DMG-B current old-core pin from acid2_test/mealybug_report output. CGB-C compat-mode pin from acid2_test.rs / rubc-cgbc-compat-rebaseline-2026-06-10."
+[rom.expectation]
+kind = "model-expectations"
+[[rom.expectation.entries]]
+model = "dmg-b"
+kind = "gated-diff"
+max_diff = 111
+reference = "reference/test-suites/mealybug/expected/DMG-raw/m3_wx_4_change_sprites.bin"
+[[rom.expectation.entries]]
+model = "cgb-c"
+kind = "gated-diff"
+max_diff = 111
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_wx_4_change_sprites.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_wx_5_change.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C upstream placeholder reference; skip until hardware capture appears."
+[rom.expectation]
+kind = "placeholder-skip"
+digest = "fnv1a64:0x9ac7cebb90066345; sha256-prefix:c4c4553535071b2a"
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_wx_5_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mealybug/m3_wx_6_change.gb"
+suite = "mealybug"
+intended_models = ["cgb-c"]
+current_old_core_status = "gated"
+notes = "CGB-C upstream placeholder reference; skip until hardware capture appears."
+[rom.expectation]
+kind = "placeholder-skip"
+digest = "fnv1a64:0x9ac7cebb90066345; sha256-prefix:c4c4553535071b2a"
+reference = "reference/test-suites/mealybug/expected/CGB-C-rgb555/m3_wx_6_change.bin"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/add_sp_e_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/bits/mem_oam.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/bits/reg_f.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/bits/unused_hwio-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div-S.gb"
+suite = "mooneye"
+intended_models = ["sgb", "sgb2"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div-dmg0.gb"
+suite = "mooneye"
+intended_models = ["dmg0"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div-dmgABCmgb.gb"
+suite = "mooneye"
+intended_models = ["dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div2-S.gb"
+suite = "mooneye"
+intended_models = ["sgb", "sgb2"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_hwio-S.gb"
+suite = "mooneye"
+intended_models = ["sgb", "sgb2"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_hwio-dmg0.gb"
+suite = "mooneye"
+intended_models = ["dmg0"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_hwio-dmgABCmgb.gb"
+suite = "mooneye"
+intended_models = ["dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-dmg0.gb"
+suite = "mooneye"
+intended_models = ["dmg0"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-dmgABC.gb"
+suite = "mooneye"
+intended_models = ["dmg-a", "dmg-b", "dmg-c"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-mgb.gb"
+suite = "mooneye"
+intended_models = ["mgb"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-sgb.gb"
+suite = "mooneye"
+intended_models = ["sgb"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_regs-sgb2.gb"
+suite = "mooneye"
+intended_models = ["sgb2"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/call_cc_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/call_cc_timing2.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/call_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/call_timing2.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/di_timing-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/div_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ei_sequence.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ei_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/halt_ime0_ei.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/halt_ime0_nointr_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/halt_ime1_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/halt_ime1_timing2-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/if_ie_registers.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/instr/daa.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/interrupts/ie_push.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/intr_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/jp_cc_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/jp_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ld_hl_sp_e_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/oam_dma/basic.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/oam_dma/reg_read.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/oam_dma/sources-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/oam_dma_restart.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/oam_dma_start.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/oam_dma_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/pop_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/hblank_ly_scx_timing-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/intr_1_2_timing-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/intr_2_0_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/intr_2_mode0_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/intr_2_mode0_timing_sprites.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/intr_2_mode3_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/intr_2_oam_ok_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/lcdon_timing-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/lcdon_write_timing-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/stat_irq_blocking.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/stat_lyc_onoff.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ppu/vblank_stat_intr-GS.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/push_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/rapid_di_ei.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ret_cc_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/ret_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/reti_intr_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/reti_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/rst_timing.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/serial/boot_sclk_align-dmgABCmgb.gb"
+suite = "mooneye"
+intended_models = ["dmg-a", "dmg-b", "dmg-c", "mgb"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/div_write.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/rapid_toggle.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tim00.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tim00_div_trigger.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tim01.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tim01_div_trigger.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tim10.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tim10_div_trigger.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tim11.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tim11_div_trigger.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tima_reload.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tima_write_reloading.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/acceptance/timer/tma_write_reloading.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/bits_bank1.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/bits_bank2.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/bits_mode.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/bits_ramg.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/multicart_rom_8Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "fail"
+notes = "Old core fail is MBC1 multicart quirk, not model selection."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/ram_256kb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/ram_64kb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/rom_16Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/rom_1Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/rom_2Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/rom_4Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/rom_512kb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc1/rom_8Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc2/bits_ramg.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc2/bits_romb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc2/bits_unused.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc2/ram.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc2/rom_1Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc2/rom_2Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc2/rom_512kb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc5/rom_16Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc5/rom_1Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc5/rom_2Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc5/rom_32Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc5/rom_4Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc5/rom_512kb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc5/rom_64Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/emulator-only/mbc5/rom_8Mb.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/madness/mgb_oam_dma_halt_sprites.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/manual-only/sprite_priority.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "fail"
+notes = "Manual visual ROM; model intent still recorded for W8/manual gate."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/bits/unused_hwio-C.gb"
+suite = "mooneye"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_div-A.gb"
+suite = "mooneye"
+intended_models = ["agb"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_div-cgb0.gb"
+suite = "mooneye"
+intended_models = ["cgb0"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_div-cgbABCDE.gb"
+suite = "mooneye"
+intended_models = ["cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_hwio-C.gb"
+suite = "mooneye"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_regs-A.gb"
+suite = "mooneye"
+intended_models = ["agb"]
+current_old_core_status = "fail"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime. Known model-mutually-exclusive / single-mode-unwinnable classification from rubc-mooneye-85-classification; W8 proves by running each intended model separately."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/boot_regs-cgb.gb"
+suite = "mooneye"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/misc/ppu/vblank_stat_intr-C.gb"
+suite = "mooneye"
+intended_models = ["cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e"]
+current_old_core_status = "pass"
+notes = "Mooneye model/revision suffix decoded per suite README; intended-model only, not filename heuristic at runtime."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/utils/bootrom_dumper.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "fail"
+notes = "Mooneye utility ROM, not ordinary pass/fail acceptance."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"
+
+[[rom]]
+path = "reference/test-suites/mooneye-test-suite/build/utils/dump_boot_hwio.gb"
+suite = "mooneye"
+intended_models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
+current_old_core_status = "pass"
+notes = "Mooneye utility ROM, not ordinary pass/fail acceptance."
+[rom.expectation]
+kind = "mooneye-fibonacci-pass"
+registers = "B=3,C=5,D=8,E=13,H=21,L=34"

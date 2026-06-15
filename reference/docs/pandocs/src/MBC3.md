@@ -1,0 +1,103 @@
+# MBC3
+
+(max 2MByte ROM and/or 32KByte RAM and Timer)
+
+Beside for the ability to access up to 2MB ROM (128 banks), and 32KB RAM
+(4 banks), the MBC3 also includes a built-in Real Time Clock (RTC). The
+RTC requires an external 32.768 kHz Quartz Oscillator, and an external
+battery (if it should continue to tick when the Game Boy is turned off).
+
+## Memory
+
+### 0000-3FFF - ROM Bank 00 (Read Only)
+
+Contains the first 16 KiB of the ROM.
+
+### 4000-7FFF - ROM Bank 01-7F (Read Only)
+
+Same as for MBC1, except that accessing banks $20, $40, and $60 is
+supported now.
+
+### A000-BFFF - RAM Bank 00-07 or RTC register (Read/Write)
+
+Depending on the current Bank Number/RTC Register selection (see below),
+this memory space is used to access an 8 KiB external RAM Bank, or a
+single RTC Register.
+
+## Registers
+
+### A000-BFFF - RTC Register 08-0C (Read/Write)
+
+Depending on the current Bank Number/RTC Register selection (see below),
+this memory space is used to access an 8KByte external RAM Bank, or a
+single RTC Register. The mapped RTC register can be read/written by 
+accessing any address in that area, typically using address A000.
+
+### 0000-1FFF - RAM and Timer Enable (Write Only)
+
+Mostly the same as for MBC1, a value of $0A will enable reading and
+writing to external RAM - and to the RTC Registers! A value of $00 will
+disable either.
+
+### 2000-3FFF - ROM Bank Number (Write Only)
+
+Same as for MBC1, except that the whole 7 bits of the ROM Bank Number
+are written directly to this address. As with the MBC1, writing a value
+of $00 will select Bank $01 instead. All other values $01-$7F select the
+corresponding ROM Banks.
+
+### 4000-5FFF - RAM Bank Number - or - RTC Register Select (Write Only)
+
+Controls what is mapped into memory at A000-BFFF.
+
+| Value   | Selection                                     |
+|---------|-----------------------------------------------|
+| $00-$07 | The corresponding RAM Bank.                   |
+| $08-$0C | The corresponding RTC Register (see below).    |
+
+
+### 6000-7FFF - Latch Clock Data (Write Only)
+
+When writing $00, and then $01 to this register, the current time
+becomes latched into the RTC registers. The latched data will not change
+until it becomes latched again, by repeating the write $00-\>$01
+procedure. This provides a way to read the RTC registers while the
+clock keeps ticking.
+
+### Clock Counter Registers
+| Register | Name | Description | Range |
+|----------|------|-------------|-------|
+| $08 | RTC S | Seconds | 0-59 ($00-$3B) |
+| $09 | RTC M | Minutes | 0-59 ($00-$3B) |
+| $0A | RTC H | Hours | 0-23 ($00-$17) |
+| $0B | RTC DL | Lower 8 bits of Day Counter | ($00-$FF) |
+| $0C | RTC DH | Upper 1 bit of Day Counter, Carry Bit, Halt Flag. <br>Bit 0: Most significant bit (Bit 8) of Day Counter<br>Bit 6: Halt (0=Active, 1=Stop Timer)<br>Bit 7:  Day Counter Carry Bit (1=Counter Overflow) | |
+
+The Halt Flag is supposed to be set before **writing** to the RTC
+Registers.
+
+### The Day Counter
+
+The total 9 bits of the Day Counter allow counting days in range from
+0-511 ($000-$1FF). The Day Counter Carry Bit becomes set when this value
+overflows. In that case the Carry Bit remains set until the program does
+reset it. Note that you can store an offset to the Day Counter in
+battery RAM. For example, every time you read a non-zero Day Counter,
+add this Counter to the offset in RAM, and reset the Counter to zero.
+This method allows counting any number of days, making your program
+Year-10000-Proof, provided that the cartridge gets used at least every
+511 days.
+
+### Delays
+
+When accessing the RTC Registers, it is recommended to wait 4 µs
+(4 M-cycles in Normal Speed Mode) between any separate accesses.
+
+
+# MBC30
+
+(4 MiB ROM, 64 KiB RAM, timer)
+
+The MBC30 is practically identical to MBC3 in operation, but is capable of addressing twice as much memory for both ROM and RAM.
+The only title to be shipped with the MBC30 mapper was _Pocket Monsters: Crystal Version_ in Japan, with the various worldwide versions using MBC3.
+
