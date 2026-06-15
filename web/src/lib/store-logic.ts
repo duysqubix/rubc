@@ -42,6 +42,18 @@ export interface EmulatorRom {
   lastPlayed?: number;
 }
 
+/** A preloaded, MIT-licensed test ROM described by web/public/roms/manifest.json
+ *  (produced by `just roms-bundle`). Fetched + booted in-place, no upload. */
+export interface BuiltinRom {
+  id: string;
+  title: string;
+  file: string;
+  mode: "DMG" | "CGB";
+  accuracy: string;
+  license: string;
+  sizeBytes: number;
+}
+
 export interface EmulatorState {
   settings: EmulatorSettings;
   romId: string | null;

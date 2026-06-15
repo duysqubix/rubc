@@ -59,6 +59,9 @@ help:
     @echo "    just cartdump <rom>  # decode the cartridge header"
     @echo "    just env-info        # toolchain + git context"
     @echo ""
+    @echo "  WEB"
+    @echo "    just roms-bundle     # bundle preloaded MIT test ROMs -> web/public/roms/"
+    @echo ""
     @echo "  See 'just --list' for everything."
 
 # ---- build -----------------------------------------------------------------
@@ -122,6 +125,48 @@ wasm-build:
 wasm-serve port="8000":
     @echo "serving rubc-wasm/web on http://localhost:{{port}}/ (Ctrl-C to stop)"
     cd rubc-wasm/web && python3 -m http.server {{port}}
+
+# ---- web: preloaded test ROMs ---------------------------------------------
+
+# Bundle the 3 MIT-licensed Matt Currie acid2 test ROMs into the web PWA so it
+# can play with zero upload. Copies them under web/public/roms/, writes a
+# manifest + the MIT notice (attribution is REQUIRED to redistribute), and
+# pre-compresses every asset (brotli + gzip) for nginx `gzip_static` / CDN
+# brotli. The Next static export copies web/public/roms/ -> web/out/roms/
+# (served at /roms/). Idempotent -- safe to re-run after a ROM rebuild.
+roms-bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dst="web/public/roms"
+    mkdir -p "$dst"
+    srcs=( "{{ref}}/acid2/dmg-acid2.gb" "{{ref}}/acid2/cgb-acid2.gbc" "{{ref}}/cgb-acid-hell/cgb-acid-hell.gbc" )
+    files=( "dmg-acid2.gb" "cgb-acid2.gbc" "cgb-acid-hell.gbc" )
+    for i in "${!srcs[@]}"; do
+      src="${srcs[$i]}"; file="${files[$i]}"
+      [ -f "$src" ] || { echo "roms-bundle: missing ROM $src" >&2; exit 1; }
+      cp -f "$src" "$dst/$file"
+      brotli -k -f -q 11 "$dst/$file"   # -> $file.br
+      gzip   -9 -k -f    "$dst/$file"   # -> $file.gz
+    done
+    # Real byte sizes (the acid2 ROMs are 32768 each; computed via wc -c, not hard-coded).
+    s_dmg=$(wc -c < "$dst/dmg-acid2.gb" | tr -d ' ')
+    s_cgb=$(wc -c < "$dst/cgb-acid2.gbc" | tr -d ' ')
+    s_hell=$(wc -c < "$dst/cgb-acid-hell.gbc" | tr -d ' ')
+    # Emit valid JSON by hand (fixed shape, integer sizes, comma only on the first two rows).
+    {
+      printf '[\n'
+      printf '  {"id":"dmg-acid2","title":"dmg-acid2","file":"dmg-acid2.gb","mode":"DMG","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":%s},\n' "$s_dmg"
+      printf '  {"id":"cgb-acid2","title":"cgb-acid2","file":"cgb-acid2.gbc","mode":"CGB","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":%s},\n' "$s_cgb"
+      printf '  {"id":"cgb-acid-hell","title":"cgb-acid-hell","file":"cgb-acid-hell.gbc","mode":"CGB","accuracy":"pixel-exact","license":"MIT (c) 2018 Matt Currie","sizeBytes":%s}\n' "$s_hell"
+      printf ']\n'
+    } > "$dst/manifest.json"
+    brotli -k -f -q 11 "$dst/manifest.json"
+    gzip   -9 -k -f    "$dst/manifest.json"
+    # MIT requires shipping the copyright + permission notice as attribution.
+    cp -f "{{ref}}/mealybug/LICENSE" "$dst/LICENSE.txt"
+    printf '\nBundled test ROMs (dmg-acid2, cgb-acid2, cgb-acid-hell) (c) 2018 Matt Currie, MIT -- github.com/mattcurrie\n' >> "$dst/LICENSE.txt"
+    echo "== roms-bundle: wrote $dst (3 ROMs + .br + .gz + manifest.json + LICENSE.txt) =="
+    ls -la "$dst"
 
 # ---- run -------------------------------------------------------------------
 

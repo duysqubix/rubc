@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { useEmulator } from "@/lib/store";
-import type { EmulatorRom } from "@/lib/store";
+import type { BuiltinRom, EmulatorRom } from "@/lib/store";
 import { Badge } from "@/components/ui/Badge";
 import { CartIcon } from "@/components/Viewport";
 
@@ -20,6 +20,18 @@ function getTestAccuracy(title: string): string | null {
 function isTestRom(rom: EmulatorRom): boolean {
   const t = (rom.name || rom.title).toLowerCase();
   return t.includes("test") || t.includes("mooneye") || t.includes("acid2") || t.includes("acid-hell") || t.includes("cpu_instrs") || t.includes("dmg_sound") || t.includes("cgb_sound") || t.includes("instr_timing") || t.includes("mem_timing") || t.includes("halt_bug") || t.includes("interrupt_time") || t.includes("oam_bug");
+}
+
+function builtinToRom(b: BuiltinRom): EmulatorRom {
+  return {
+    id: b.id,
+    title: b.title,
+    name: b.file,
+    size: b.sizeBytes,
+    mode: b.mode,
+    thumb: `/${b.id}.png`,
+    live: null,
+  };
 }
 
 function DropZone({ onFile }: { onFile: (file: File) => void }) {
@@ -236,6 +248,26 @@ function Section({ label, hint, children }: { label: string; hint?: string; chil
 export function Library() {
   const store = useEmulator();
 
+  const [builtins, setBuiltins] = useState<BuiltinRom[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/roms/manifest.json")
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json() as Promise<BuiltinRom[]>;
+      })
+      .then((data) => {
+        if (!cancelled && Array.isArray(data)) setBuiltins(data);
+      })
+      .catch(() => {
+        // No manifest (e.g. `just roms-bundle` not run yet) -> hide the section.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const handleFile = async (file: File) => {
     // Switch to the play view FIRST so the Viewport mounts and attaches its
     // canvas before the ROM boots -- otherwise loadCore runs with no canvas and
@@ -249,12 +281,40 @@ export function Library() {
     await store.openRom(id);
   };
 
+  const handlePlayBuiltin = async (id: string) => {
+    const entry = builtins.find((b) => b.id === id);
+    if (!entry) return;
+    store.setView("play");
+    await store.openBuiltinRom(entry);
+  };
+
   const games = store.roms.filter((r) => !isTestRom(r));
-  const tests = store.roms.filter((r) => isTestRom(r));
+  const builtinIds = new Set(builtins.map((b) => b.id));
+  const tests = store.roms.filter((r) => isTestRom(r) && !builtinIds.has(r.id));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, paddingBottom: 24 }}>
       <DropZone onFile={handleFile} />
+
+      {builtins.length > 0 && (
+        <Section label={`Built-in · ${builtins.length}`} hint="// play instantly">
+          {builtins.map((b) => {
+            const r = builtinToRom(b);
+            return <RomRow key={r.id} rom={r} active={r.id === store.romId} onPlay={handlePlayBuiltin} />;
+          })}
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 10,
+              color: "var(--text-faint)",
+              marginTop: 2,
+              lineHeight: 1.5,
+            }}
+          >
+            Built-in ROMs: MIT © Matt Currie
+          </div>
+        </Section>
+      )}
 
       {games.length > 0 && (
         <Section label={`Games · ${games.length}`}>

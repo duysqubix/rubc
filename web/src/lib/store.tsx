@@ -21,10 +21,10 @@ import {
   parsePersistence,
   serializePersistence,
 } from "./store-logic";
-import type { EmulatorRom, EmulatorSettings, EmulatorState, SaveSlot, View } from "./store-logic";
+import type { BuiltinRom, EmulatorRom, EmulatorSettings, EmulatorState, SaveSlot, View } from "./store-logic";
 
 export { DEFAULT_SETTINGS, STORAGE_KEY, paletteFilter } from "./store-logic";
-export type { ControlsLayout, EmulatorRom, EmulatorSettings, Phase, SaveSlot, SaveSlots, Scaling, View } from "./store-logic";
+export type { BuiltinRom, ControlsLayout, EmulatorRom, EmulatorSettings, Phase, SaveSlot, SaveSlots, Scaling, View } from "./store-logic";
 
 export const RECENT_ROMS_KEY = "rubc-recent-roms";
 
@@ -64,6 +64,7 @@ export interface EmulatorContextValue extends EmulatorState {
   loadFile: (file: File) => Promise<EmulatorRom | null>;
   loadFrom: (index: number) => void;
   openRom: (id: string) => Promise<void>;
+  openBuiltinRom: (entry: BuiltinRom) => Promise<void>;
   powerOff: () => void;
   removeRom: (id: string) => Promise<void>;
   reset: () => void;
@@ -195,6 +196,35 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       boot(id);
     },
     [boot, rememberRom, roms, showToast],
+  );
+
+  const openBuiltinRom = useCallback(
+    async (entry: BuiltinRom) => {
+      try {
+        const res = await fetch(`/roms/${entry.file}`);
+        if (!res.ok) throw new Error(`Could not fetch ${entry.file} (HTTP ${res.status}).`);
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        // Store under entry.id and boot the SAME id: boot -> loadCore -> loadRomBytes(id)
+        // all resolve the bytes by this key, so the id must stay identical end to end.
+        await storeRomBytes(entry.id, bytes);
+        rememberRom({
+          id: entry.id,
+          title: entry.title,
+          name: entry.file,
+          size: entry.sizeBytes,
+          mode: entry.mode,
+          thumb: `/${entry.id}.png`,
+          live: null,
+          lastPlayed: Date.now(),
+        });
+        boot(entry.id);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Could not load that built-in ROM.";
+        setError(message);
+        showToast(message);
+      }
+    },
+    [boot, rememberRom, showToast],
   );
 
   const loadFile = useCallback(
@@ -398,6 +428,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       loadFile,
       loadFrom,
       openRom,
+      openBuiltinRom,
       powerOff,
       removeRom,
       reset,
@@ -414,6 +445,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       loadFile,
       loadFrom,
       openRom,
+      openBuiltinRom,
       powerOff,
       ready,
       removeRom,
