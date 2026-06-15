@@ -367,6 +367,104 @@ mod tests {
         );
     }
 
+    fn debug_introspection_rom() -> Vec<u8> {
+        let mut rom = vec![0x00; 0x8000];
+        rom[0x0143] = 0x80;
+        rom[0x0147] = 0x00;
+        let program = [
+            0x3E, 0x00, 0xE0, 0x40, 0x21, 0x00, 0x80, 0x36, 0x3C, 0x21, 0x10, 0x80, 0x36, 0x7E,
+            0x21, 0x00, 0xFE, 0x36, 0x22, 0x21, 0x01, 0xFE, 0x36, 0x33, 0x3E, 0xE4, 0xE0, 0x47,
+            0x3E, 0xD2, 0xE0, 0x48, 0x3E, 0x24, 0xE0, 0x49, 0x3E, 0x12, 0xE0, 0x42, 0x3E, 0x34,
+            0xE0, 0x43, 0x3E, 0x56, 0xE0, 0x4A, 0x3E, 0x78, 0xE0, 0x4B, 0x3E, 0x80, 0xE0, 0x68,
+            0x3E, 0x1F, 0xE0, 0x69, 0x3E, 0x03, 0xE0, 0x69, 0x3E, 0x80, 0xE0, 0x6A, 0x3E, 0xE0,
+            0xE0, 0x6B, 0x3E, 0x7C, 0xE0, 0x6B, 0x3E, 0x91, 0xE0, 0x40, 0x18, 0xFE,
+        ];
+        rom[0x0100..0x0100 + program.len()].copy_from_slice(&program);
+        rom
+    }
+
+    #[test]
+    fn debug_accessors_expose_live_state_and_are_pure_reads() {
+        let rom = debug_introspection_rom();
+        let mut probed = MachineNg::boot_cgb_native(&rom).expect("debug ROM boots as CGB");
+        let mut control = MachineNg::boot_cgb_native(&rom).expect("debug ROM boots as CGB");
+
+        for _ in 0..96 {
+            probed.step_instruction();
+            control.step_instruction();
+        }
+
+        assert_eq!(
+            probed.debug_vram()[0][0x0000],
+            0x3C,
+            "debug VRAM reads live bank 0 byte"
+        );
+        assert_eq!(
+            probed.debug_vram()[0][0x0010],
+            0x7E,
+            "debug VRAM reads live tile byte"
+        );
+        assert_eq!(
+            probed.debug_oam()[0],
+            0x22,
+            "debug OAM reads live sprite Y byte"
+        );
+        assert_eq!(
+            probed.debug_oam()[1],
+            0x33,
+            "debug OAM reads live sprite X byte"
+        );
+        assert_eq!(probed.debug_lcdc(), 0x91, "debug LCDC reads FF40");
+        assert_eq!(probed.debug_scy(), 0x12, "debug SCY reads FF42");
+        assert_eq!(probed.debug_scx(), 0x34, "debug SCX reads FF43");
+        assert_eq!(probed.debug_wy(), 0x56, "debug WY reads FF4A");
+        assert_eq!(probed.debug_wx(), 0x78, "debug WX reads FF4B");
+        assert_eq!(probed.debug_dmg_bgp(), 0xE4, "debug BGP reads FF47");
+        assert_eq!(probed.debug_dmg_obp0(), 0xD2, "debug OBP0 reads FF48");
+        assert_eq!(probed.debug_dmg_obp1(), 0x24, "debug OBP1 reads FF49");
+        assert_eq!(
+            &probed.debug_bg_palette_ram()[..2],
+            &[0x1F, 0x03],
+            "debug BG palette RAM reads live RGB555 LE bytes"
+        );
+        assert_eq!(
+            &probed.debug_obj_palette_ram()[..2],
+            &[0xE0, 0x7C],
+            "debug OBJ palette RAM reads live RGB555 LE bytes"
+        );
+
+        let _ = probed.debug_vram();
+        let _ = probed.debug_oam();
+        let _ = probed.debug_bg_palette_ram();
+        let _ = probed.debug_obj_palette_ram();
+        let _ = (
+            probed.debug_lcdc(),
+            probed.debug_scx(),
+            probed.debug_scy(),
+            probed.debug_wx(),
+            probed.debug_wy(),
+            probed.debug_dmg_bgp(),
+            probed.debug_dmg_obp0(),
+            probed.debug_dmg_obp1(),
+        );
+
+        for _ in 0..2 {
+            probed.step_frame();
+            control.step_frame();
+        }
+
+        assert_eq!(
+            probed.framebuffer(),
+            control.framebuffer(),
+            "debug accessors must not alter later framebuffer output"
+        );
+        assert_eq!(
+            probed.save_state(),
+            control.save_state(),
+            "debug accessors must not mutate serialized machine state"
+        );
+    }
+
     #[test]
     fn golden_reader_loads_sameboy_tsv_schema_as_typed_rows() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -572,6 +572,54 @@ impl MachineNg {
         self.cpu.r.pc
     }
 
+    pub fn debug_vram(&self) -> &[[u8; 0x2000]; 2] {
+        &self.bus.vram
+    }
+
+    pub fn debug_oam(&self) -> &[u8; 0xA0] {
+        &self.bus.oam
+    }
+
+    pub fn debug_lcdc(&self) -> u8 {
+        self.bus.io[0x40]
+    }
+
+    pub fn debug_scy(&self) -> u8 {
+        self.bus.io[0x42]
+    }
+
+    pub fn debug_scx(&self) -> u8 {
+        self.bus.io[0x43]
+    }
+
+    pub fn debug_wy(&self) -> u8 {
+        self.bus.io[0x4A]
+    }
+
+    pub fn debug_wx(&self) -> u8 {
+        self.bus.io[0x4B]
+    }
+
+    pub fn debug_dmg_bgp(&self) -> u8 {
+        self.bus.io[0x47]
+    }
+
+    pub fn debug_dmg_obp0(&self) -> u8 {
+        self.bus.io[0x48]
+    }
+
+    pub fn debug_dmg_obp1(&self) -> u8 {
+        self.bus.io[0x49]
+    }
+
+    pub fn debug_bg_palette_ram(&self) -> &[u8; 0x40] {
+        &self.bus.bg_palette_ram
+    }
+
+    pub fn debug_obj_palette_ram(&self) -> &[u8; 0x40] {
+        &self.bus.obj_palette_ram
+    }
+
     pub fn blargg_passed(&self) -> bool {
         if let Some(status) = self.blargg_cart_ram_done() {
             return status == 0x00;
