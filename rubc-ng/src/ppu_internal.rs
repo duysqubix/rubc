@@ -378,8 +378,7 @@ impl PpuInternal {
     // fine-X geometry; this is the hardware path: a BG fetcher feeding an
     // 8-pixel FIFO, window restart at WX == lcd_x+7, SCX&7 discard, and
     // sprite staging merged at the FIFO (TCAGBD pixel-FIFO chapter; SameBoy
-    // Core/display.c; Pan Docs pixel_fifo.md; cross-checked against the
-    // acid-proven rubc-core FIFO).
+    // Core/display.c; Pan Docs pixel_fifo.md; cross-checked against acid2).
 
     /// Mode-3 line start: latch the WY condition for this line, select and
     /// X-sort the scanline sprites, and arm the line render state.
@@ -393,7 +392,7 @@ impl PpuInternal {
     }
 
     /// Frame boundary (LY==144 line start): the window line counter and the
-    /// WY latch reset (rubc-core ppu.rs resets both when entering VBlank).
+    /// WY latch reset at VBlank entry.
     pub fn begin_frame_window_state(&mut self) {
         self.fifo_window_y_condition = false;
         self.fifo_window_line = 0;
@@ -402,7 +401,7 @@ impl PpuInternal {
     /// One mode-3 drawing dot. Returns the pixel shipped to the LCD on this
     /// dot, if any. Dot order follows the hardware pipeline: sprite fetch
     /// stalls first, then the window compare, then the BG fetcher, then the
-    /// FIFO shift (rubc-core phase_drawing_dot; SameBoy display.c render loop).
+    /// FIFO shift (SameBoy display.c render loop).
     pub fn fifo_dot(&mut self, cgb: bool, ly: u8) -> Option<FifoOutput> {
         if !self.fifo.active {
             return None;
@@ -499,7 +498,7 @@ impl PpuInternal {
         if let Some(sprite) = self.fifo.pending_sprite.take() {
             self.fifo_load_sprite(cgb, ly, sprite);
             // The BG fetcher restarts while the FIFO keeps shifting; model
-            // the residual stall as idle dots (rubc-core advance_sprite_fetch).
+            // the residual stall as idle dots.
             let remaining = self.fifo.bg_fifo.len().min(6) as u8;
             self.fifo.sprite_idle_ticks = 6 - remaining;
         }
@@ -588,7 +587,7 @@ impl PpuInternal {
             }
             FetchStep::TileDataLow => {
                 // DMG re-samples SCY between TileNo and the data fetches;
-                // CGB latches the TileNo row (rubc-core phase_bg_low_sample).
+                // CGB latches the TileNo row.
                 if !self.fifo.fetcher.window && !cgb && self.scy != self.fifo.fetcher.scy_at_tile_no
                 {
                     self.fifo.fetcher.y = ly.wrapping_add(self.scy);
@@ -645,7 +644,7 @@ impl PpuInternal {
 
     fn fifo_tile_data_addr(&self, cgb: bool, ly: u8) -> u16 {
         // DMG samples SCY live during the data stages; window and CGB use the
-        // row latched at TileNo (rubc-core fetch_bg_tile_data_addr).
+        // row latched at TileNo.
         let y = if self.fifo.fetcher.window || cgb {
             self.fifo.fetcher.y
         } else {
@@ -683,7 +682,7 @@ impl PpuInternal {
 
     /// Shift one pixel out of the FIFO. Returns (shifted, output): a discard
     /// (SCX&7 fine scroll) shifts without producing an LCD pixel and eats the
-    /// matching OBJ FIFO slot (rubc-core shift_pixel).
+    /// matching OBJ FIFO slot.
     fn fifo_shift_pixel(&mut self, cgb: bool) -> (bool, Option<FifoOutput>) {
         let Some(bg) = self.fifo.bg_fifo.pop() else {
             return (false, None);
@@ -772,7 +771,7 @@ impl PpuInternal {
                 }
                 if write.value & 0x80 == 0 {
                     // LCD off: the line render state and frame window state
-                    // reset (rubc-core write_lcdc LCD-off path).
+                    // reset on the LCD-off write path.
                     self.fifo = LineRenderState::default();
                     self.tile_sel_glitch = false;
                     self.tile_sel_high_staged = false;
@@ -780,7 +779,7 @@ impl PpuInternal {
                     self.fifo_window_line = 0;
                 } else if self.fifo.active && (old ^ write.value) & 0x20 != 0 {
                     // LCDC.5 toggled mid-line: a disable takes effect once the
-                    // BG FIFO drains (rubc-core window_disable_pending).
+                    // BG FIFO drains.
                     if old & 0x20 != 0 && self.fifo.fetcher.window {
                         self.fifo.window_disable_pending = true;
                     } else if write.value & 0x20 != 0 {

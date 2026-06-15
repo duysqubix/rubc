@@ -19,7 +19,7 @@ Frontend crate for the GameBoy emulator. Handles I/O, rendering, and input.
 ## WHERE TO WIRE
 - PPU: Replace dummy `draw()` with PPU framebuffer (160x144).
 - Audio: Implement backend (cpal/rodio) fed by APU samples.
-- Joypad: Map winit keyboard events to JOYP (0xFF00) in `rubc-core`.
+- Joypad: Map winit keyboard events to JOYP (0xFF00) in `rubc-ng`.
 
 ## CLI FLAGS
 - `rom_file`: Positional argument.
@@ -29,7 +29,7 @@ Frontend crate for the GameBoy emulator. Handles I/O, rendering, and input.
 - `--test-mode`: Enable ROM/RAM writes.
 
 ## CONVENTIONS
-- Emulation logic belongs in `rubc-core`.
+- Emulation logic belongs in `rubc-ng`.
 - `rubc` is strictly for I/O and presentation.
 - Use `pixels` for rendering, `egui` for UI.
 

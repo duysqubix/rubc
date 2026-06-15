@@ -6,7 +6,7 @@ founding constraint.
 
 ## Decision
 
-Build a new crate **`rubc-ng`** alongside `rubc-core` (old core stays as a
+Build a new crate **`rubc-ng`** alongside the old core (old core stays as a
 differential oracle and keeps master shippable until W9 switchover).
 
 **Timing spine: hybrid per-T lockstep core with explicit hardware-truth
@@ -109,7 +109,7 @@ one that proves nothing. Two early slices hit it:
    register value) must make the gate fail with a first-divergence
    diagnostic. A gate that cannot fail does not count as passed.
 5. Only after these hold: ff-merge to `rearch/rebuild`, run the full gate
-   (rubc-ng + rubc-core green, `just check`), push, delete the topic branch,
+   (ng core green, `just check`), push, delete the topic branch,
    close the bead, launch the next `bd ready`.
 
 This rule is why the SM83 lift (W5 slice 1, 499/499 vectors with field-by-

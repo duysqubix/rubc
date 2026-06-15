@@ -2,7 +2,7 @@
 #
 # rubc WebAssembly PWA — multi-stage build.
 #
-# Stage 1 compiles the rubc-core emulator to WebAssembly (wasm-bindgen +
+# Stage 1 compiles the ng emulator to WebAssembly (wasm-bindgen +
 # wasm-opt). Stage 2 builds the Next.js mobile PWA (static export) against that
 # wasm. Stage 3 is a tiny nginx image serving the exported site with the correct
 # `application/wasm` MIME type and the headers ES modules need.

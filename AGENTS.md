@@ -260,7 +260,7 @@ is the tiebreaker for any timing disagreement.
 
 ## Current State
 
-- **rubc-core/** (library): SM83 CPU **complete** (all 256 main + 256 CB
+- **rubc-ng/** (library): SM83 CPU **complete** (all 256 main + 256 CB
   opcodes, `phf` dispatch); memory bus complete; timer, interrupts (EI delay,
   HALT bug, dispatch priority) complete. **PPU complete** (FIFO renderer,
   per-dot mode scheduler, STAT/IRQ timing, dmg/cgb-acid2 pixel-exact, mooneye
@@ -279,7 +279,7 @@ is the tiebreaker for any timing disagreement.
 ## Build / Test Commands (justfile)
 
 ```bash
-just test             # cargo test -p rubc-core
+just test             # cargo test -p rubc-ng
 just sm83             # SM83 JSON opcode vectors
 just regression-test  # run blargg cpu_instrs.gb (serial output)
 just run <args>       # LOG_LEVEL=warn cargo run

@@ -12,7 +12,7 @@
 //!   the producer (`push_samples`) bounds the buffer to keep latency in check.
 //!
 //! cpal itself is pure-Rust FFI (objc2 / windows-rs / alsa) — no C compilation,
-//! matching the existing wgpu graphics stack. rubc-core stays dependency-free.
+//! matching the existing wgpu graphics stack.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};

@@ -23,7 +23,7 @@ adr = "docs/adr/0002-rubc-ng-timing-core-rebuild.md"
 definition_of_100_percent = "every applicable test ROM passes on the hardware model it targets"
 models = ["dmg0", "dmg-a", "dmg-b", "dmg-c", "mgb", "sgb", "sgb2", "cgb0", "cgb-a", "cgb-b", "cgb-c", "cgb-d", "cgb-e", "agb"]
 rom_count = 207
-generated_from = ["reference/test-suites", "rubc-core/tests/acid2_test.rs", "rubc-core/tests/mooneye_test.rs", "bd memories rubc-mooneye-85-classification and rubc-cgbc-compat-rebaseline-2026-06-10"]
+generated_from = ["reference/test-suites", "retired core acid2/mooneye harnesses", "bd memories rubc-mooneye-85-classification and rubc-cgbc-compat-rebaseline-2026-06-10"]
 
 [[known_unwinnable_by_single_model]]
 path = "reference/test-suites/mooneye-test-suite/build/acceptance/boot_div-S.gb"

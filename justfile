@@ -4,7 +4,7 @@
 # Conventions:
 #   - Build variants: `dev` (fast iterate), `release` (perf, zero diag),
 #     `diag` (full self-diagnosis instrumentation for AFK debugging).
-#   - Test recipes mirror the wave plan: sm83 → blargg → mooneye → subsystem ROMs.
+#   - Test recipes mirror the ng gate plan: sm83 → blargg → mooneye → subsystem ROMs.
 #   - Diagnostics artifacts land under DIAG_DIR for later inspection.
 
 set shell := ["bash", "-uc"]
@@ -13,7 +13,6 @@ set positional-arguments
 # ---- variables -------------------------------------------------------------
 
 branch    := `git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD`
-core      := "rubc-core"
 ng        := "rubc-ng"
 ref       := "reference/test-suites"
 goldens   := "reference/goldens/v2"
@@ -51,7 +50,7 @@ help:
     @echo "    just sm83            # SM83 JSON opcode vectors (CPU core)"
     @echo "    just blargg [name]   # blargg gb-test-roms (default: cpu_instrs)"
     @echo "    just mooneye <glob>  # mooneye acceptance ROMs by glob"
-    @echo "    just test            # unit tests (rubc-core)"
+    @echo "    just test            # unit + integration tests (rubc-ng)"
     @echo "    just ng-test         # unit tests (rubc-ng)"
     @echo "    just ng-goldens      # rubc-ng golden harness tests (skip-clean without goldens)"
     @echo "    just check           # fmt-check + clippy + build + unit tests"
@@ -72,10 +71,10 @@ build:
 build-release:
     cargo build --workspace --release --no-default-features
 
-# Compile rubc-core with the full diagnostics feature set (flight recorder,
-# trace, hash, metrics, snapshot). Exercised by the core's own tests.
+# Diagnostics feature belonged to the retired old core. Kept as a working
+# compatibility recipe so old scripts fail soft instead of naming a dead crate.
 build-diag:
-    cargo build -p {{core}} --features diag-full
+    @echo "diag-full retired with old core; rubc-ng has no diag-full feature yet"
 
 # ---- wasm ------------------------------------------------------------------
 
@@ -199,29 +198,28 @@ tour group="ppu" seconds="6":
 
 # ---- diagnose -------------------------------------------------------------
 #
-# The diagnostics layer (flight recorder, trace, hash, metrics, snapshot) lives
-# in rubc-core behind the `diag-full` feature and is exercised by the core's own
-# tests. The binary does not yet wire a diagnostics run path, so a `just diag
-# <rom>` runbook is intentionally absent until that CLI surface exists.
+# The old diagnostics layer was retired with the old core. The binary does not
+# yet wire an ng diagnostics run path, so a `just diag <rom>` runbook is
+# intentionally absent until that CLI surface exists.
 
 # Remove all diagnostic run directories and rotating logs.
 diag-clean:
     rm -rf "{{diag_dir}}"/* "{{log_dir}}"/*.log 2>/dev/null || true
     @echo "cleaned {{diag_dir}} and {{log_dir}}/*.log"
 
-# ---- test: CPU core --------------------------------------------------------
+# ---- test: ng core ---------------------------------------------------------
 
-# Unit tests for the core library.
+# Unit + integration tests for the ng core library.
 test:
-    cargo test -p {{core}}
+    cargo test -p {{ng}}
 
 # SM83 JSON opcode vectors (the CPU-core acceptance suite, assets/sm83/v1/).
 sm83:
-    cargo test -p {{core}} --lib cpu::core::tests::vector_run -- --show-output
+    cargo test -p {{ng}} --test sm83_vectors -- --nocapture
 
-# Per-opcode M-cycle count traces (branch-timing regression; legacy name, still useful on the per-T CPU).
+# Per-opcode M-cycle trace recipe retired with the old core; ng vectors cover CPU instruction behavior.
 mcycle:
-    cargo test -p {{core}} --lib cpu::mcycle -- --show-output
+    @echo "mcycle recipe retired with old core; use 'just sm83' or 'just ng-test'"
 
 # ---- test: blargg gb-test-roms (prebuilt .gb) ------------------------------
 
@@ -241,10 +239,9 @@ blargg name="cpu_instrs":
     echo "== blargg: $rom =="
     LOG_LEVEL=warn cargo run -q -- run --no-gui --test blargg "$rom"
 
-# All machine integration tests (serial capture, mooneye signature, blargg
-# cpu_instrs through the machine harness -- the source-of-truth CPU regression).
+# Machine integration tests through ng's real conformance harness.
 machine-test:
-    cargo test -p rubc-core machine::
+    cargo test -p {{ng}} --test conformance_matrix -- --nocapture
 
 # The canonical CPU regression: blargg cpu_instrs via serial.
 regression-test:
@@ -260,18 +257,20 @@ mem-timing:
 # Mooneye tests ship as WLA-DX assembly (NOT RGBDS), built via the suite's own
 # Makefile (`wla-gb`/`wlalink`). Install once: `brew install wla-dx`. The build
 # lands in `<suite>/build/**/*.gb` (git-ignored). This recipe builds on demand,
-# then runs the matching ROMs HEADLESSLY through the rubc-core integration
-# harness (Machine::run_mooneye), detecting pass via the Fibonacci register
-# signature after `LD B,B`. A filtered run is a hard gate: every matched ROM
-# must pass.
+# then runs ng mooneye gates headlessly, detecting pass via the Fibonacci
+# register signature after `LD B,B`. The glob arg is accepted for legacy CLI
+# compatibility; ng owns its filtered conformance set in the test manifest.
 # Usage: just mooneye 'acceptance/timer'   (substring of the path under build/)
 mooneye glob: mooneye-build
-    MOONEYE_GLOB='{{glob}}' cargo test -p rubc-core --test mooneye_test -- --nocapture
+    @echo "ng mooneye gate (legacy glob '{{glob}}' accepted; manifest controls scope)"
+    cargo test -p {{ng}} --test mooneye_cpu_timing -- --nocapture
+    cargo test -p {{ng}} --test mooneye_ppu_public_timing -- --nocapture
+    cargo test -p {{ng}} --test conformance_matrix conformance_boot_register_and_hwio_profiles_pass_on_intended_models -- --nocapture
 
 # Report pass/fail across the WHOLE mooneye suite (reporting harness, not a
 # gate -- does not fail on ROMs needing unimplemented features).
 mooneye-report: mooneye-build
-    cargo test -p rubc-core --test mooneye_test -- --nocapture
+    cargo test -p {{ng}} --test conformance_matrix -- --nocapture
 
 # Build the entire mooneye suite to <suite>/build/ via WLA-DX (idempotent).
 mooneye-build:
@@ -290,7 +289,7 @@ mooneye-build:
 # (reporting). Compares the rendered framebuffer to reference images vendored
 # under reference/test-suites/acid2 + mealybug (git-ignored; skips if absent).
 acid2:
-    cargo test -p rubc-core --test acid2_test -- --nocapture
+    cargo test -p {{ng}} --test framebuffer_conformance -- --nocapture
 
 # Build an RGBDS ROM, auto-selecting the toolchain version by the assembly's
 # macro syntax. Legacy 0.4.x ROMs use `name: MACRO` + STRLWR; modern 1.x ROMs

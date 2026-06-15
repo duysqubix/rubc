@@ -11,8 +11,7 @@
 //!   push) at 2 dots each, push only into an empty BG FIFO, the first tile
 //!   fetch of a line is discarded (12-dot mode-3 startup).
 //!
-//! Geometry is cross-checked against rubc-core's acid-proven FIFO renderer
-//! (rubc-core/src/bus/ppu.rs) which passes dmg-acid2 + cgb-acid2 at 0 diff.
+//! Geometry is cross-checked against acid2 and cgb-acid2 at 0 diff.
 
 use crate::ppu_internal::{SelectedSprite, SpritePalette};
 

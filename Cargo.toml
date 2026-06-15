@@ -1,10 +1,10 @@
 [workspace]
-members = [ "rubc-core", "rubc", "rubc-ng", "rubc-wasm"]
+members = [ "rubc", "rubc-ng", "rubc-wasm"]
 # rubc-wasm is a wasm32-only cdylib (web-sys/wasm-bindgen): its cdylib links
 # only on wasm32-unknown-unknown. Keep it OUT of default-members so a plain
 # native `cargo build` / `cargo test` skips it and never tries a native link.
 # Build it explicitly: `cargo build -p rubc-wasm --target wasm32-unknown-unknown`.
-default-members = [ "rubc-core", "rubc"]
+default-members = [ "rubc"]
 resolver = "2"
 
 # Enable a small amount of optimization in debug mode

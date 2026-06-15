@@ -13,7 +13,6 @@ use crate::gui::Gui;
 
 use clap::{Parser, Subcommand};
 use eframe::egui;
-use rubc_core::logger;
 use rubc_ng::{Button, MachineNg, RunStopNg};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +22,7 @@ use std::time::{Duration, Instant};
 mod audio;
 mod capture;
 mod gui;
+mod logger;
 mod vramview;
 
 const WIDTH: u32 = 160;

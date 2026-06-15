@@ -90,7 +90,7 @@ nested_u8_array_module!(u8_8x4096, 8, 0x1000);
 pub mod boxed_u8_512 {
     use super::*;
 
-    pub fn serialize<S>(value: &Box<[u8; 512]>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<S>(value: &[u8; 512], serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {

@@ -8,8 +8,8 @@ for why the old core could not be incrementally fixed.
 
 ## Why this exists
 
-The old core (`rubc-core`) welds internal fetch/output geometry to the
-public STAT/interrupt timeline — proven a hard ceiling in ADR 0001. `rubc-ng`
+The retired old core welded internal fetch/output geometry to the public
+STAT/interrupt timeline — proven a hard ceiling in ADR 0001. `rubc-ng`
 positions internal geometry and public-observable timing **independently**,
 each derived from SameBoy hardware-truth golden traces, so that coupling is
 unrepresentable by construction.
@@ -29,8 +29,8 @@ unrepresentable by construction.
 ## The review discipline (binding)
 
 Every test asserts machine-**produced** values against an **independent**
-oracle (golden trace, spec rule, or the blargg-proven old core via
-differential). A test where `actual` is copied from the golden and compared to
+oracle (golden trace, spec rule, or real test-ROM pass signature). A test where
+`actual` is copied from the golden and compared to
 itself is rejected; every gate must demonstrably fail under perturbation. This
 is enforced at lead review — see the anti-self-reference section of ADR 0002.
 

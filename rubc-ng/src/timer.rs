@@ -112,8 +112,8 @@ impl Timer {
         }
         let pending_before_tick = matches!(self.reload, Reload::Pending(_));
         // Necessary spec provenance: Pan Docs Timer Obscure Behaviour defines DIV
-        // as the visible system counter; this W6 slice intentionally follows
-        // rubc-core's proven CPU-T counter cadence while the spine owns ticking.
+        // as the visible system counter; this W6 slice follows CPU-T counter
+        // cadence while the spine owns ticking.
         self.div = self.div.wrapping_add(1);
         self.apply_falling_edge_after_div_or_tac_change();
         // Necessary spec provenance: Pan Docs Timer overflow behavior delays TMA
