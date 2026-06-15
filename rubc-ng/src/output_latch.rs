@@ -5,7 +5,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum LcdPaletteSource {
     Bg,
     Obp0,
@@ -23,14 +25,14 @@ impl LcdPaletteSource {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PaletteWrite {
     pub time: Time,
     pub source: LcdPaletteSource,
     pub value: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct OutputRawPixel {
     pub time: Time,
     pub ly: u16,
@@ -39,7 +41,7 @@ pub struct OutputRawPixel {
     pub raw_color: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct LatchedPixel {
     pub latch_time: Time,
     pub ly: u16,
@@ -50,12 +52,17 @@ pub struct LatchedPixel {
     pub final_color: u8,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LcdOutputLatch {
     palette: BTreeMap<LcdPaletteSource, Vec<PaletteWrite>>,
     latch_perturbation: i64,
     forced_source: Option<LcdPaletteSource>,
+    #[serde(skip, default = "dmg_b_timing_table")]
     table: TimingTable,
+}
+
+fn dmg_b_timing_table() -> TimingTable {
+    TimingTable::for_model(crate::model::GbModel::DmgB)
 }
 
 impl LcdOutputLatch {
@@ -82,6 +89,10 @@ impl LcdOutputLatch {
         let writes = self.palette.entry(write.source).or_default();
         writes.push(write);
         writes.sort_by_key(|write| write.time);
+    }
+
+    pub(crate) fn rebuild_timing_table(&mut self, model: crate::model::GbModel) {
+        self.table = TimingTable::for_model(model);
     }
 
     pub fn latch_pixel(&self, pixel: OutputRawPixel) -> Result<LatchedPixel, String> {

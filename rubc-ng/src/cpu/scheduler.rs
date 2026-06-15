@@ -1,10 +1,22 @@
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Time(pub u64);
 
 pub const SUBPHASES_PER_T_U8: u8 = 4;
 pub const CPU_ACCESS_END_OFFSET: u8 = 16;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CpuAccessPlan {
     pub write_visible_at: Option<u8>,
     pub end: u8,

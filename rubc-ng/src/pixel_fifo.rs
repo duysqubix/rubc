@@ -20,7 +20,7 @@ pub(crate) const FIFO_CAPACITY: usize = 8;
 
 /// One staged pixel. BG pixels keep `palette = None`; sprite pixels carry the
 /// DMG OBP selection and the OAM index used for CGB merge priority.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct FifoPixel {
     pub color: u8,
     pub bg_priority: bool,
@@ -32,7 +32,7 @@ pub(crate) struct FifoPixel {
 
 /// An 8-slot shift register (TCAGBD: the FIFO holds up to 8 pixels; SameBoy
 /// fifo.h GB_fifo_t). `push_bg_pixels` refills all 8; `pop` shifts one out.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct PixelFifo {
     pixels: [FifoPixel; FIFO_CAPACITY],
     len: usize,
@@ -125,7 +125,7 @@ impl PixelFifo {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub(crate) struct SpriteOverlay {
     pub bg_priority: bool,
     pub palette: SpritePalette,
@@ -137,7 +137,7 @@ pub(crate) struct SpriteOverlay {
 
 /// Pan Docs pixel_fifo.md fetcher steps; each takes 2 dots, Push retries every
 /// dot until the BG FIFO is empty.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum FetchStep {
     #[default]
     TileNo,
@@ -146,7 +146,7 @@ pub(crate) enum FetchStep {
     Push,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct BgFetcher {
     pub step: FetchStep,
     pub step_ticks: u8,
@@ -189,7 +189,7 @@ impl BgFetcher {
 }
 
 /// Everything the FIFO needs per scanline; rebuilt at each mode-3 start.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct LineRenderState {
     pub active: bool,
     pub bg_fifo: PixelFifo,

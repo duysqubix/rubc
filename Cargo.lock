@@ -3160,6 +3160,7 @@ name = "rubc-ng"
 version = "0.1.0"
 dependencies = [
  "rubc-core",
+ "serde",
  "serde_json",
 ]
 

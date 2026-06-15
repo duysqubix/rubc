@@ -13,6 +13,7 @@ pub mod output_latch;
 mod pixel_fifo;
 pub mod ppu_internal;
 pub mod ppu_public;
+mod serde_arrays;
 pub mod time;
 pub mod timer;
 pub mod timing;
@@ -170,6 +171,65 @@ mod tests {
         machine.set_button(Button::Right, true);
         assert_eq!(machine.read_io(0xFF00), Some(0xEE));
         assert_eq!(machine.read_io(0xFF0F).unwrap() & 0x10, 0x10);
+    }
+
+    #[test]
+    fn savestate_rejects_unsupported_version() {
+        let rom = vec![0x00; 0x8000];
+        let mut machine = MachineNg::from_rom(GbModel::DmgB, &rom).expect("valid ROM loads");
+
+        let err = machine
+            .load_state(&[2, b'{', b'}'])
+            .expect_err("v2 payload must be rejected by v3 loader");
+
+        assert_eq!(err, "unsupported savestate version: 2");
+    }
+
+    #[test]
+    fn savestate_roundtrip_real_rom_lockstep() {
+        let rom = read_reference_rom("cpu_instrs/cpu_instrs.gb");
+        let mut saved = MachineNg::boot_dmg(&rom).expect("cpu_instrs ROM boots");
+        saved.set_button(Button::A, true);
+        saved.set_button(Button::Down, true);
+        for _ in 0..100_000 {
+            saved.step_instruction();
+        }
+
+        let state = saved.save_state();
+        assert_eq!(state.first().copied(), Some(3), "savestate uses v3 header");
+        let saved_framebuffer = saved.framebuffer().to_vec();
+        let saved_serial = saved.serial_output().to_owned();
+        let saved_p1 = saved.read_io(0xFF00);
+
+        let mut restored = MachineNg::boot_dmg(&rom).expect("fresh cpu_instrs ROM boots");
+        restored
+            .load_state(&state)
+            .expect("v3 savestate loads into fresh machine");
+
+        assert_eq!(restored.framebuffer(), saved_framebuffer.as_slice());
+        assert_eq!(restored.serial_output(), saved_serial);
+        assert_eq!(restored.read_io(0xFF00), saved_p1);
+
+        for _ in 0..3 {
+            saved.step_frame();
+            restored.step_frame();
+        }
+
+        assert_eq!(
+            restored.framebuffer(),
+            saved.framebuffer(),
+            "post-load machine must remain framebuffer-identical in lockstep"
+        );
+        assert_eq!(
+            restored.serial_output(),
+            saved.serial_output(),
+            "post-load machine must keep serial output identical in lockstep"
+        );
+        assert_eq!(
+            restored.read_io(0xFF00),
+            saved.read_io(0xFF00),
+            "post-load machine must preserve joypad key state in lockstep"
+        );
     }
 
     #[test]

@@ -67,9 +67,11 @@ pub struct GoldenVramRegisters {
     pub wy: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Vram {
+    #[serde(with = "crate::serde_arrays::u8_8192")]
     pub bank0: [u8; 0x2000],
+    #[serde(with = "crate::serde_arrays::u8_8192")]
     pub bank1: [u8; 0x2000],
 }
 

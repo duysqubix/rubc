@@ -2,7 +2,7 @@ use crate::time::ClockSpine;
 
 pub const TIMER_IRQ: u8 = 0x04;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum TimerRegister {
     Div,
     Tima,
@@ -22,7 +22,7 @@ impl TimerRegister {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Timer {
     div: u16,
     tima: u8,
@@ -34,7 +34,7 @@ pub struct Timer {
     observed_cpu_t: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Reload {
     None,
     Pending(u8),

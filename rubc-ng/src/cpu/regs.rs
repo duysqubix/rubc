@@ -7,7 +7,7 @@
 use super::alu::Flags;
 
 /// The SM83 register file.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Regs {
     pub a: u8,
     pub f: u8,

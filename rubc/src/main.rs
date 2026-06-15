@@ -334,14 +334,17 @@ fn persist_save(machine: &MachineNg, save_path: &std::path::Path) {
     }
 }
 
-fn persist_state(_machine: &MachineNg, _state_path: &Path) -> Result<usize, std::io::Error> {
-    log::warn!("savestate not yet supported on ng core; skipping save");
-    Ok(0)
+fn persist_state(machine: &MachineNg, state_path: &Path) -> Result<usize, std::io::Error> {
+    let state = machine.save_state();
+    std::fs::write(state_path, &state)?;
+    Ok(state.len())
 }
 
-fn load_state(_machine: &mut MachineNg, _state_path: &Path) -> anyhow::Result<usize> {
-    log::warn!("savestate not yet supported on ng core; skipping load");
-    Ok(0)
+fn load_state(machine: &mut MachineNg, state_path: &Path) -> anyhow::Result<usize> {
+    let state = std::fs::read(state_path)?;
+    let len = state.len();
+    machine.load_state(&state).map_err(anyhow::Error::msg)?;
+    Ok(len)
 }
 
 /// Headless: run a test ROM to its terminal condition and report pass/fail.
@@ -850,7 +853,10 @@ impl eframe::App for RubcApp {
             // machine borrow ends before the closure runs.
             if self.debug_open.load(Ordering::Relaxed) {
                 if let Ok(mut guard) = self.vram_snapshot.write() {
-                    *guard = Some(vramview::VramDebugSnapshot::capture(machine, self.total_frames));
+                    *guard = Some(vramview::VramDebugSnapshot::capture(
+                        machine,
+                        self.total_frames,
+                    ));
                 }
                 self.show_vram_viewport(ctx);
             }
@@ -934,9 +940,8 @@ impl eframe::App for RubcApp {
                 if let Some(machine) = &self.machine {
                     // Read the header straight from the live cartridge (bank 0,
                     // 0x0000-0x014F is always present), then format + show it.
-                    let header: Vec<u8> = (0x0000..=0x014Fu16)
-                        .map(|a| machine.cart_read(a))
-                        .collect();
+                    let header: Vec<u8> =
+                        (0x0000..=0x014Fu16).map(|a| machine.cart_read(a)).collect();
                     self.gui.show_cart_info(format_cart_header(&header));
                 }
             }
@@ -1217,8 +1222,16 @@ mod tests {
                 .expect("system clock after epoch")
                 .as_nanos()
         ));
-        assert_eq!(persist_state(&machine, &path).expect("stub save state"), 0);
-        assert_eq!(load_state(&mut machine, &path).expect("stub load state"), 0);
+        let before = machine.framebuffer().to_vec();
+        let written = persist_state(&machine, &path).expect("save state writes bytes");
+        assert!(
+            written > 1,
+            "savestate file includes v3 header plus payload"
+        );
+        machine.run_steps(64);
+        let read = load_state(&mut machine, &path).expect("load state restores machine");
+        assert_eq!(read, written);
+        assert_eq!(machine.framebuffer(), before.as_slice());
         let _ = std::fs::remove_file(path);
     }
 }

@@ -1,4 +1,4 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Apu {
     pub t_ticks: u64,
     powered: bool,
@@ -422,7 +422,7 @@ impl Apu {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct Channel1 {
     pulse: PulseChannel,
     sweep: Sweep,
@@ -476,7 +476,7 @@ impl Channel1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Sweep {
     nr10: u8,
     shadow_frequency: u16,
@@ -515,7 +515,7 @@ impl Sweep {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct PulseChannel {
     duty_length: u8,
     envelope: Envelope,
@@ -663,7 +663,7 @@ impl PulseChannel {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
 struct Envelope {
     reg: u8,
     volume: u8,
@@ -711,7 +711,7 @@ impl Envelope {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct WaveChannel {
     nr30: u8,
     length_load: u8,
@@ -726,7 +726,7 @@ struct WaveChannel {
     wave_access_window: Option<WaveAccessWindow>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct WaveAccessWindow {
     byte_index: usize,
     remaining_t: u8,
@@ -888,7 +888,7 @@ impl WaveChannel {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct NoiseChannel {
     length_load: u8,
     envelope: Envelope,

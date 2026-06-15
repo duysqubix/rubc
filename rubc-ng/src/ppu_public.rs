@@ -6,14 +6,14 @@ use crate::time::Time;
 use crate::timing::{Observable, TimingTable};
 use std::path::Path;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PpuRegisterWrite {
     pub time: Time,
     pub addr: u16,
     pub value: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PpuPublicEvent {
     StatSample,
     Mode2IrqPrepare,
@@ -63,9 +63,10 @@ impl PpuPublicEvent {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PpuPublic {
     model: GbModel,
+    #[serde(skip, default = "dmg_b_timing_table")]
     table: TimingTable,
     origin: Time,
     base_frame: u64,
@@ -74,7 +75,12 @@ pub struct PpuPublic {
     scy: u8,
     scx: u8,
     lyc: u8,
+    #[serde(skip)]
     perturbation: Option<(&'static str, i64)>,
+}
+
+fn dmg_b_timing_table() -> TimingTable {
+    TimingTable::for_model(GbModel::DmgB)
 }
 
 impl PpuPublic {
@@ -106,6 +112,12 @@ impl PpuPublic {
 
     pub fn model(&self) -> GbModel {
         self.model
+    }
+
+    pub(crate) fn rebuild_timing_table(&mut self, model: GbModel) {
+        self.model = model;
+        self.table = TimingTable::for_model(model);
+        self.perturbation = None;
     }
 
     pub fn write_register(&mut self, write: PpuRegisterWrite) {

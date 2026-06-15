@@ -4,7 +4,7 @@ use crate::time::Time;
 use std::fmt;
 use std::path::Path;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct PpuRegisterWrite {
     time: Time,
     addr: u16,
@@ -12,7 +12,7 @@ struct PpuRegisterWrite {
     cgb_mode: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PpuInternal {
     lcdc: u8,
     scy: u8,
@@ -20,6 +20,7 @@ pub struct PpuInternal {
     wx: u8,
     wy: u8,
     vram: Vram,
+    #[serde(with = "crate::serde_arrays::u8_160")]
     oam: [u8; 0xA0],
     fetcher_x: u16,
     current_tile_data_addr: Option<u16>,
@@ -36,14 +37,14 @@ pub struct PpuInternal {
     fifo_window_line: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WindowRestart {
     pub trigger_x: usize,
     pub penalty_dots: u8,
     pub scx_low_bits_after_restart: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SelectedSprite {
     pub y: u8,
     pub x: u8,
@@ -55,38 +56,38 @@ pub struct SelectedSprite {
     pub size: SpriteSize,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpritePalette {
     Obp0,
     Obp1,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpriteSize {
     Size8x8,
     Size8x16,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SpritePriorityMode {
     DmgXOrder,
     OamOrder,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ResolvedDmgPixel {
     Bg,
     Obj(SpritePalette),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RenderedPpuPixel {
     pub raw_color: u8,
     pub source: LcdPixelSource,
     pub cgb_palette: u8,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LcdPixelSource {
     Bg,
     Obj(SpritePalette),
@@ -95,7 +96,7 @@ pub enum LcdPixelSource {
 /// One pixel shipped by the FIFO: the LCD column it lands on plus the
 /// resolved raw color / source / CGB palette (palette lookup happens at the
 /// output latch / CGB palette RAM, same as the direct renderer did).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FifoOutput {
     pub x: usize,
     pub pixel: RenderedPpuPixel,

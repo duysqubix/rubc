@@ -14,6 +14,7 @@ use crate::timing::TimingTable;
 const VBLANK_IRQ: u8 = 0x01;
 const STAT_IRQ: u8 = 0x02;
 const TAC_TIMER_EDGE_WRITE_DRIVE_OFFSET: u8 = 8;
+const SAVESTATE_VERSION: u8 = 3;
 const MODE2_DOTS: u64 = 80;
 const BASE_MODE3_DOTS: u64 = 172;
 const MODE3_FETCH_START_DELAY_DOTS: u64 = 3;
@@ -22,6 +23,10 @@ const LCD_ON_FIRST_MODE3_PUBLIC_END: u64 = MODE2_DOTS + BASE_MODE3_DOTS - 1;
 const LAST_VISIBLE_LINE: u8 = 143;
 const VBLANK_LINE: u8 = LAST_VISIBLE_LINE + 1;
 const MAX_SPRITES_PER_LINE: usize = 10;
+
+fn dmg_b_timing_table() -> TimingTable {
+    TimingTable::for_model(GbModel::DmgB)
+}
 
 #[derive(Clone, Copy, Debug)]
 struct BootCpuProfile {
@@ -64,7 +69,7 @@ pub enum RunStopNg {
     Stuck,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FramePixel {
     DmgShade(u8),
     CgbRgb555(u16),
@@ -85,27 +90,33 @@ pub enum Button {
 
 pub const MOONEYE_PASS: [u8; 6] = [3, 5, 8, 13, 21, 34];
 
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct MachineNg {
     model: GbModel,
     cpu: Cpu,
     bus: MachineBus,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct ScheduledWrite {
     at: CpuTime,
     addr: u16,
     value: u8,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct MachineBus {
     model: GbModel,
     cart: Cartridge,
+    #[serde(with = "crate::serde_arrays::u8_2x8192")]
     vram: [[u8; 0x2000]; 2],
+    #[serde(with = "crate::serde_arrays::u8_8x4096")]
     wram: [[u8; 0x1000]; 8],
+    #[serde(with = "crate::serde_arrays::u8_160")]
     oam: [u8; 0xA0],
+    #[serde(with = "crate::serde_arrays::u8_127")]
     hram: [u8; 0x7F],
+    #[serde(with = "crate::serde_arrays::u8_128")]
     io: [u8; 0x80],
     ie: u8,
     if_: u8,
@@ -115,12 +126,15 @@ struct MachineBus {
     serial_output: String,
     spine: ClockSpine,
     timer: Timer,
+    #[serde(skip, default = "dmg_b_timing_table")]
     table: TimingTable,
     ppu_public: PpuPublic,
     ppu_internal: PpuInternal,
     output_latch: LcdOutputLatch,
     framebuffer: Vec<FramePixel>,
+    #[serde(with = "crate::serde_arrays::u8_64")]
     bg_palette_ram: [u8; 0x40],
+    #[serde(with = "crate::serde_arrays::u8_64")]
     obj_palette_ram: [u8; 0x40],
     bg_palette_index: u8,
     obj_palette_index: u8,
@@ -141,7 +155,7 @@ struct MachineBus {
     oam_dma: OamDma,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct Joypad {
     select_bits: u8,
     a: bool,
@@ -170,7 +184,7 @@ impl Default for Joypad {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct Hdma {
     src_high: u8,
     src_low: u8,
@@ -180,7 +194,7 @@ struct Hdma {
     active: bool,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 struct OamDma {
     source_hi: u8,
     pending_source_hi: Option<u8>,
@@ -524,6 +538,32 @@ impl MachineNg {
         self.bus.cart.load_ram(data);
     }
 
+    pub fn save_state(&self) -> Vec<u8> {
+        let payload =
+            serde_json::to_vec(self).expect("serializing MachineNg save state should not fail");
+        let mut out = Vec::with_capacity(payload.len() + 1);
+        out.push(SAVESTATE_VERSION);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    pub fn load_state(&mut self, data: &[u8]) -> Result<(), String> {
+        let Some((&version, payload)) = data.split_first() else {
+            return Err("unsupported savestate version: 0".to_owned());
+        };
+        if version != SAVESTATE_VERSION {
+            return Err(format!("unsupported savestate version: {version}"));
+        }
+        let mut loaded: Self = serde_json::from_slice(payload).map_err(|err| err.to_string())?;
+        loaded.rebuild_after_deserialize();
+        *self = loaded;
+        Ok(())
+    }
+
+    fn rebuild_after_deserialize(&mut self) {
+        self.bus.rebuild_after_deserialize(self.model);
+    }
+
     pub fn cart_read(&self, addr: u16) -> u8 {
         self.bus.cart.read(addr)
     }
@@ -767,6 +807,13 @@ impl Joypad {
 }
 
 impl MachineBus {
+    fn rebuild_after_deserialize(&mut self, model: GbModel) {
+        self.model = model;
+        self.table = TimingTable::for_model(model);
+        self.ppu_public.rebuild_timing_table(model);
+        self.output_latch.rebuild_timing_table(model);
+    }
+
     fn set_button(&mut self, button: Button, pressed: bool) -> bool {
         self.joypad.set_button(button, pressed)
     }

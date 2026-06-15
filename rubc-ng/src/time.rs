@@ -8,7 +8,19 @@ pub const DMG_DOTS_PER_LINE: u64 = 456;
 pub const DMG_LINES_PER_FRAME: u64 = 154;
 pub const DMG_DOTS_PER_FRAME: u64 = DMG_DOTS_PER_LINE * DMG_LINES_PER_FRAME;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Time(u64);
 
 impl Time {
@@ -39,7 +51,9 @@ impl Time {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub enum ClockPhase {
     #[default]
     CpuT0,
@@ -59,7 +73,7 @@ impl ClockPhase {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClockSpine {
     pub now: Time,
     pub cpu_t: u64,

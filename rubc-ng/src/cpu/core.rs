@@ -16,7 +16,7 @@ fn time_after(start: Time, offset: u8) -> Time {
 }
 
 /// High-level CPU mode.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CpuMode {
     Running,
     Halt,
@@ -31,7 +31,7 @@ pub enum CpuMode {
 }
 
 /// Where we are within the current instruction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Exec {
     /// Between instructions: poll interrupts / promote EI, then fetch.
     Boundary,
@@ -41,7 +41,7 @@ pub enum Exec {
     CbExecute { op: u8, phase: u8 },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CpuReg8Target {
     A,
     B,
@@ -52,7 +52,7 @@ pub enum CpuReg8Target {
     L,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum CpuCycleCompletion {
     None,
     FetchOpcode,
@@ -68,7 +68,7 @@ pub enum CpuCycleCompletion {
     DispatchFinish,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ActiveCpuCycle {
     Idle {
         completion: CpuCycleCompletion,
@@ -111,7 +111,7 @@ impl ActiveCpuCycle {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ActiveCpuCycleState {
     cycle: ActiveCpuCycle,
     elapsed_t: u8,
@@ -242,7 +242,7 @@ impl<B: CpuBus> CpuBus for PerTOpcodeBus<'_, B> {
 
 /// The SM83 CPU.
 #[cfg_attr(test, derive(Clone))]
-#[derive()]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct Cpu {
     pub r: Regs,
     pub ime: bool,
