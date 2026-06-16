@@ -274,9 +274,9 @@ is in the root [`AGENTS.md`](AGENTS.md).
 ```
 rubc/
 ├── rubc-ng/              # the emulator library — timing core, bus, PPU, APU, MBCs
-├── rubc/                 # the native binary — winit/egui window, cpal audio, input
-├── rubc-wasm/            # WebAssembly bindings + the original vanilla web demo
-├── web/                  # the Next.js mobile PWA front-end
+├── rubc/                 # the native binary — eframe/egui (wgpu) window, cpal audio, input, savestates
+├── rubc-wasm/            # WebAssembly bindings (+ a standalone vanilla-JS demo)
+├── web/                  # the Next.js PWA front-end (rubc.app) — bundles MIT acid test ROMs
 ├── deploy/               # nginx config for the Docker demo
 ├── docs/                 # ACCURACY.md, USAGE.md, media, the PPU/CPU doc map
 └── justfile              # task runner (run `just` to list recipes)

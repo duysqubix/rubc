@@ -1,39 +1,43 @@
-# AGENTS.md - rubc Frontend
+# AGENTS.md — rubc binary (native frontend)
 
 ## OVERVIEW
-Frontend crate for the GameBoy emulator. Handles I/O, rendering, and input.
+Native frontend for the Game Boy emulator. Owns ALL I/O + presentation; zero
+emulation logic (that lives in `rubc-ng`). Drives `rubc_ng::MachineNg`.
 
 ## FILES
 | File | Purpose |
 | :--- | :--- |
-| `main.rs` | CLI, winit event loop, emulator orchestration |
-| `gui.rs` | egui integration for overlays |
+| `main.rs` | clap CLI, eframe app + per-frame loop, savestate/.sav I/O, headless test-ROM harness |
+| `gui.rs` | egui menu bar (File / Debug / About dialogs) |
+| `audio.rs` | cpal output: pumps `machine.drain_samples()` (stereo f32) to the default device |
+| `capture.rs` | headless screenshot (PNG) + GIF capture from `machine.framebuffer()` |
+| `vramview.rs` | detachable egui debug window (VRAM tilesheet/tilemap, OAM, palettes) via `machine.debug_*()` |
+| `logger.rs` | pure-Rust `log::Log` impl; `LOG_LEVEL` env (default Warn). Relocated here when rubc-core was retired |
 
-## RUNTIME LOOP
-1. `input.update()`: Handle winit events.
-2. `emulator.update()`: Tick CPU cycles (target ~59.7 Hz).
-3. `window.request_redraw()`: Trigger render.
-4. `emulator.draw()`: Fill pixels buffer.
-5. `pixels.render_with()`: Render world + egui.
+## STACK
+`eframe` 0.34 (wgpu) drives a real native window + re-exports `egui`; `cpal`
+0.18 audio; `clap` 4.5 CLI; `chrono` (logger timestamps). NOT winit/pixels.
 
-## WHERE TO WIRE
-- PPU: Replace dummy `draw()` with PPU framebuffer (160x144).
-- Audio: Implement backend (cpal/rodio) fed by APU samples.
-- Joypad: Map winit keyboard events to JOYP (0xFF00) in `rubc-ng`.
+## CLI (clap subcommands)
+- `run ROM [--no-gui] [--force-dmg|--force-cgb] [--save FILE]` — boot windowed (or headless test-ROM run)
+- `screenshot ROM --out PNG [--frames N]` — headless single-frame capture
+- `gif ROM --out GIF [--frames N]` — animated capture
+- `cartdump ROM [--raw] [--out FILE]` — decode the cartridge header
+- `controls` — print the keyboard map
+- bare `ROM` — shorthand for `run ROM`
 
-## CLI FLAGS
-- `rom_file`: Positional argument.
-- `--disassemble`: Dump disasm to <ROM>.txt and exit.
-- `--breakpoints=<addrs>`: Log CPU state at PC addresses.
-- `--panic-on-stuck`: Halt on illegal opcode.
-- `--test-mode`: Enable ROM/RAM writes.
+## PER-FRAME LOOP (main.rs RubcApp::logic)
+input (keyboard → `machine.set_button`) → `machine.step_frame()` → periodic
+`save_ram()` flush → `drain_samples()` → cpal → framebuffer → egui texture →
+optional VRAM snapshot → absolute-deadline pacing (~16.74 ms / 59.7 Hz).
 
 ## CONVENTIONS
-- Emulation logic belongs in `rubc-ng`.
-- `rubc` is strictly for I/O and presentation.
-- Use `pixels` for rendering, `egui` for UI.
+- Emulation logic NEVER here — only in `rubc-ng`. This crate is I/O + presentation.
+- The machine is the single `rubc_ng::MachineNg`; `boot_dmg`/`boot_cgb` return
+  `Result` (the old core returned `Self`) — `.expect(...)` at boot.
+- `FramePixel` is `DmgShade(u8)` | `CgbRgb555(u16)`; capture.rs maps it to RGBA.
 
 ## ANTI-PATTERNS
-- Do not put emulation logic in `rubc`.
-- Do not keep dummy `draw()` pattern.
-- Do not block winit loop; respect per-frame cycle budget.
+- Do NOT put emulation logic in `rubc`.
+- Do NOT block the eframe loop; respect the per-frame deadline.
+- Savestate is wired (`machine.save_state`/`load_state`, v3); do NOT re-stub it.

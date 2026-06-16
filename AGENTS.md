@@ -260,20 +260,25 @@ is the tiebreaker for any timing disagreement.
 
 ## Current State
 
-- **rubc-ng/** (library): SM83 CPU **complete** (all 256 main + 256 CB
-  opcodes, `phf` dispatch); memory bus complete; timer, interrupts (EI delay,
-  HALT bug, dispatch priority) complete. **PPU complete** (FIFO renderer,
-  per-dot mode scheduler, STAT/IRQ timing, dmg/cgb-acid2 pixel-exact, mooneye
-  PPU 13/13). **APU complete** (4 channels + frame sequencer + stereo sample
-  output; blargg dmg_sound 12/12, cgb_sound 12/12). **CGB complete** (color,
-  double-speed, VRAM/WRAM banking, HDMA, palettes). **MBC0/1/2/3+RTC/5.**
-  Battery-backed `.sav` persistence.
-- **rubc/** (binary): `winit` + `pixels` + `egui` window, framebuffer wired to
-  the PPU output, keyboard joypad input, and `cpal` audio. `screenshot` / `gif`
-  capture subcommands.
-- **Tests:** `opcode_test.rs` (SingleStepTests/sm83 vectors), `mooneye_test.rs`
-  (WLA-DX-built suite, 93/115), `acid2_test.rs` (acid2 + mealybug + cgb-acid-
-  hell pixel diffs), plus blargg gates in `machine.rs`. `just check` runs the
+- **rubc-ng/** (the SOLE emulation core; old `rubc-core` retired): SM83 CPU
+  complete (all 256 main + 256 CB opcodes); per-T spine with declarative,
+  model-parameterized `TimingTable` (DMG0..AGB); CPU emits bus intents, the
+  spine applies them — CPU never ticks peripherals. **PPU complete** (FIFO
+  renderer + 3 independent timing profiles: public LY/STAT/IRQ, internal
+  fetcher/FIFO, output latch; dmg/cgb-acid2 AND cgb-acid-hell pixel-exact).
+  **APU complete** (4 channels + 512 Hz frame sequencer + stereo; blargg
+  dmg_sound 12/12, cgb_sound 12/12). **CGB complete** (color, double-speed,
+  VRAM/WRAM banking, HDMA, palettes). **MBC0/1/2/3+RTC/5.** Battery `.sav` +
+  savestate v3. See [`rubc-ng/src/AGENTS.md`](rubc-ng/src/AGENTS.md).
+- **rubc/** (binary): `eframe`/`egui` (wgpu) window, `cpal` audio, keyboard
+  joypad, `clap` CLI; `run`/`screenshot`/`gif`/`cartdump`/`controls`
+  subcommands; savestate + VRAM debug window. See [`rubc/src/AGENTS.md`](rubc/src/AGENTS.md).
+- **rubc-wasm/** + **web/**: core compiled to wasm; `web/` is the Next.js PWA
+  (rubc.app) with preloaded MIT acid test ROMs bundled under `web/public/roms/`.
+- **Tests (rubc-ng/tests/):** `sm83_vectors.rs` (436/436), `conformance_matrix.rs`
+  (157/207 floor, ratchets up), `framebuffer_conformance.rs` (acid2 + mealybug +
+  cgb-acid-hell pixel diffs), `mooneye_cpu_timing.rs`, `mooneye_ppu_public_timing.rs`,
+  plus golden-gated `w2/w3/w4/w8b` waves and blargg gates. `just check` runs the
   full gate.
 
 ## Build / Test Commands (justfile)
