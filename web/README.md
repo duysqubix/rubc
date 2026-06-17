@@ -25,13 +25,15 @@ The app calls the `RubcWasm` class from `rubc-wasm` (built with
 To refresh it from a fresh emulator build, from the repo root:
 
 ```bash
-just wasm-build                                   # writes rubc-wasm/web/pkg/
-cp rubc-wasm/web/pkg/rubc_wasm.js        web/src/lib/wasm/
-cp rubc-wasm/web/pkg/rubc_wasm_bg.wasm   web/src/lib/wasm/
+just wasm-build   # builds rubc-wasm AND syncs the dev copy into web/src/lib/wasm/
+just wasm-check   # CI/pre-push guard: fails if the committed dev copy is stale
 ```
 
-The production Docker build does this overlay automatically against the
-wasm-opt-optimized binary, so the committed copy is only a dev convenience.
+`just wasm-build` now auto-syncs `web/src/lib/wasm/`, so the committed copy can't
+silently drift from source (it once shipped the retired old core to dev for days —
+rubc-xltx). The production Docker build overlays the wasm-opt-optimized binary at
+build time, so the committed copy is only a dev convenience for `npm run dev`
+(which does not recompile Rust). Run `just wasm-check` to verify they're in sync.
 
 ## Develop
 

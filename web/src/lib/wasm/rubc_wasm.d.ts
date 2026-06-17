@@ -2,7 +2,7 @@
 /* eslint-disable */
 
 /**
- * A browser-driveable Game Boy: wraps a [`Machine`] plus reusable scratch
+ * A browser-driveable Game Boy: wraps a [`MachineNg`] plus reusable scratch
  * buffers for the RGBA frame and drained audio samples.
  */
 export class RubcWasm {
@@ -95,11 +95,9 @@ export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly __wbg_rubcwasm_free: (a: number, b: number) => void;
     readonly rubcwasm_drain_audio: (a: number, b: number) => void;
-    readonly rubcwasm_frame_len: (a: number) => number;
     readonly rubcwasm_frame_rgba: (a: number) => number;
     readonly rubcwasm_frame_rgba_copy: (a: number, b: number) => void;
     readonly rubcwasm_has_battery: (a: number) => number;
-    readonly rubcwasm_height: (a: number) => number;
     readonly rubcwasm_is_cgb: (a: number) => number;
     readonly rubcwasm_load_ram: (a: number, b: number, c: number) => void;
     readonly rubcwasm_load_state: (a: number, b: number, c: number) => number;
@@ -108,6 +106,8 @@ export interface InitOutput {
     readonly rubcwasm_save_state: (a: number, b: number) => void;
     readonly rubcwasm_set_button: (a: number, b: number, c: number) => void;
     readonly rubcwasm_step_frame: (a: number) => void;
+    readonly rubcwasm_frame_len: (a: number) => number;
+    readonly rubcwasm_height: (a: number) => number;
     readonly rubcwasm_width: (a: number) => number;
     readonly __wbindgen_export: (a: number, b: number, c: number) => void;
     readonly __wbindgen_export2: (a: number, b: number) => number;

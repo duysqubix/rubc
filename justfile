@@ -118,7 +118,40 @@ wasm-build:
     else
       echo "warning: expected wasm artifact not found: $wasm" >&2
     fi
-    echo "built: $out  (serve: just wasm-serve)"
+    # Keep the browser dev copy (web/src/lib/wasm/) in lockstep with the fresh
+    # build. `npm run dev` does NOT recompile Rust, so this committed copy is what
+    # dev serves. The rubc-ng switchover forgot this manual copy and shipped the
+    # OLD core to dev for days (rubc-xltx); auto-syncing here makes that impossible.
+    devwasm="web/src/lib/wasm"
+    echo "== wasm-build: sync dev copy =>$devwasm =="
+    for f in rubc_wasm_bg.wasm rubc_wasm.js rubc_wasm.d.ts rubc_wasm_bg.wasm.d.ts; do
+      [ -f "$out/$f" ] && cp -f "$out/$f" "$devwasm/$f"
+    done
+    echo "built: $out (+ synced $devwasm)  (serve: just wasm-serve)"
+
+# Rebuild the wasm and FAIL if the dev copy (web/src/lib/wasm/) drifts from a
+# fresh build. Guards rubc-xltx: `npm run dev` does NOT recompile Rust, so a stale
+# committed wasm silently serves an old core. Compares the dev copy before/after a
+# fresh build (independent of git state). Build is deterministic per-toolchain;
+# pin rust-toolchain.toml for cross-machine CI.
+wasm-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    devwasm="web/src/lib/wasm"
+    snap="$(mktemp -d)"; log="$(mktemp)"
+    trap 'rm -rf "$snap" "$log"' EXIT
+    cp -rf "$devwasm"/. "$snap"/
+    if ! just wasm-build >"$log" 2>&1; then
+      echo "wasm-check: wasm build FAILED:" >&2; cat "$log" >&2; exit 1
+    fi
+    if diff -rq "$snap" "$devwasm" >/dev/null 2>&1; then
+      echo "wasm-check: dev wasm in sync with source ✓"
+    else
+      echo "ERROR: web/src/lib/wasm/ was STALE vs a fresh build (rubc-xltx)." >&2
+      echo "       It has now been resynced — review and commit the change:" >&2
+      diff -rq "$snap" "$devwasm" >&2 || true
+      exit 1
+    fi
 
 # Serve the wasm demo over HTTP (ES modules require http://, not file://).
 # Usage: just wasm-serve [port]

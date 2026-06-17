@@ -1,7 +1,7 @@
 /* @ts-self-types="./rubc_wasm.d.ts" */
 
 /**
- * A browser-driveable Game Boy: wraps a [`Machine`] plus reusable scratch
+ * A browser-driveable Game Boy: wraps a [`MachineNg`] plus reusable scratch
  * buffers for the RGBA frame and drained audio samples.
  */
 export class RubcWasm {
