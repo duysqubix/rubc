@@ -8,8 +8,10 @@ import {
   normalizeSaveStateRecord,
   saveStateRecordKey,
   slotFromSaveStateRecord,
+  serializeSaveStateFile,
+  parseSaveStateFile,
 } from "./save-state-record";
-import type { SaveStateRecord, SaveStateSlotMetadata } from "./save-state-record";
+import type { SaveStateRecord, SaveStateSlotIndex, SaveStateSlotMetadata } from "./save-state-record";
 
 export const BTN = { A: 0, B: 1, SELECT: 2, START: 3, RIGHT: 4, LEFT: 5, UP: 6, DOWN: 7 };
 
@@ -221,6 +223,46 @@ export async function exportSave(key: string): Promise<void> {
 export async function importSave(key: string, file: File): Promise<void> {
   const buffer = await file.arrayBuffer();
   await storeSaveRam(key, new Uint8Array(buffer));
+}
+
+// Download the full machine snapshot for `slot` as a portable .rubcstate file.
+// Returns false (caller surfaces a toast) when that slot is empty.
+export async function exportSaveState(romId: string, slot: number): Promise<boolean> {
+  if (!isSaveStateSlotIndex(slot)) return false;
+  const record = await loadSaveStateRecord(romId, slot);
+  if (!record) return false;
+  const json = serializeSaveStateFile(slot, record);
+  const blob = new Blob([json], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${romId.replace(/[^a-z0-9]/gi, "_")}.slot${slot + 1}.rubcstate`;
+  a.click();
+  URL.revokeObjectURL(url);
+  return true;
+}
+
+export interface ImportedSaveState {
+  romId: string;
+  slot: SaveStateSlotIndex;
+  metadata: SaveStateSlotMetadata;
+}
+
+// Parse a .rubcstate file and persist it to IndexedDB under its embedded slot,
+// so the next play of that ROM can restore it. Returns null on any malformed
+// input. Reuses parseSaveStateFile (validation) + storeSaveStateRecord (the
+// same write path used by in-app save states).
+export async function importSaveState(file: File): Promise<ImportedSaveState | null> {
+  const text = await file.text();
+  const parsed = parseSaveStateFile(text);
+  if (!parsed) return null;
+  const stored = await storeSaveStateRecord(parsed.slot, parsed.record);
+  if (!stored) return null;
+  return {
+    romId: parsed.record.romId,
+    slot: parsed.slot,
+    metadata: slotFromSaveStateRecord(parsed.record),
+  };
 }
 
 export class EmulatorCore {

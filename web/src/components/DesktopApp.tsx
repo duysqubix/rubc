@@ -7,6 +7,7 @@ import type { BuiltinRom, EmulatorRom, EmulatorContextValue } from "@/lib/store"
 import { Button, Badge, StatusPill, Kbd, Switch } from "@/components/ui";
 import { Viewport, CartIcon } from "@/components/Viewport";
 import { Settings } from "@/components/Settings";
+import { RomActionsMenu } from "@/components/RomActionsMenu";
 
 function fmtClock(seconds: number): string {
   const m = Math.floor(seconds / 60);
@@ -51,10 +52,13 @@ function builtinToRom(b: BuiltinRom): EmulatorRom {
 function DeskRomItem({ rom, active, onPlay }: { rom: EmulatorRom; active: boolean; onPlay: (id: string) => void }) {
   const [hover, setHover] = useState(false);
   return (
-    <button
-      onClick={() => onPlay(rom.id)}
+    <div
+      style={{ position: "relative" }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+    >
+    <button
+      onClick={() => onPlay(rom.id)}
       style={{
         display: "flex",
         alignItems: "center",
@@ -65,6 +69,7 @@ function DeskRomItem({ rom, active, onPlay }: { rom: EmulatorRom; active: boolea
         border: active ? "1px solid var(--accent)" : "1px solid transparent",
         borderRadius: "var(--radius)",
         padding: "7px 8px",
+        paddingRight: 30,
         cursor: "pointer",
         transition: "background 120ms",
       }}
@@ -113,6 +118,21 @@ function DeskRomItem({ rom, active, onPlay }: { rom: EmulatorRom; active: boolea
       </div>
       <Badge tone={rom.mode === "CGB" ? "cgb" : "dmg"}>{rom.mode || "DMG"}</Badge>
     </button>
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          right: 6,
+          display: "flex",
+          alignItems: "center",
+          opacity: hover ? 1 : 0.55,
+          transition: "opacity 120ms",
+        }}
+      >
+        <RomActionsMenu rom={rom} compact />
+      </div>
+    </div>
   );
 }
 

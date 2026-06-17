@@ -5,6 +5,7 @@ import { useEmulator } from "@/lib/store";
 import type { BuiltinRom, EmulatorRom } from "@/lib/store";
 import { Badge } from "@/components/ui/Badge";
 import { CartIcon } from "@/components/Viewport";
+import { RomActionsMenu } from "@/components/RomActionsMenu";
 
 function getTestAccuracy(title: string): string | null {
   const t = title.toLowerCase();
@@ -113,6 +114,7 @@ function RomRow({ rom, active, onPlay }: { rom: EmulatorRom; active: boolean; on
   const year = "1998";
 
   return (
+    <div style={{ position: "relative" }}>
     <button
       onPointerDown={() => setPress(true)}
       onPointerUp={() => setPress(false)}
@@ -128,6 +130,7 @@ function RomRow({ rom, active, onPlay }: { rom: EmulatorRom; active: boolean; on
         border: active ? "1px solid var(--accent)" : "1px solid var(--border)",
         borderRadius: "var(--radius-md)",
         padding: 10,
+        paddingRight: 52,
         cursor: "pointer",
         boxShadow: press ? "0 0 0 0 var(--bg-deep)" : "0 2px 0 0 var(--bg-deep)",
         transform: press ? "translateY(2px)" : "none",
@@ -220,6 +223,19 @@ function RomRow({ rom, active, onPlay }: { rom: EmulatorRom; active: boolean; on
         )}
       </div>
     </button>
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          bottom: 0,
+          right: 8,
+          display: "flex",
+          alignItems: "center",
+        }}
+      >
+        <RomActionsMenu rom={rom} />
+      </div>
+    </div>
   );
 }
 

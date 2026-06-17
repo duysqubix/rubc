@@ -63,6 +63,7 @@ export interface EmulatorContextValue extends EmulatorState {
   flash: (message: string) => void;
   loadFile: (file: File) => Promise<EmulatorRom | null>;
   loadFrom: (index: number) => void;
+  importStateSlot: (index: number, slot: SaveSlot) => void;
   openRom: (id: string) => Promise<void>;
   openBuiltinRom: (entry: BuiltinRom) => Promise<void>;
   powerOff: () => void;
@@ -336,6 +337,14 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
     [loadCore, showToast],
   );
 
+  // Register an imported save-state's metadata into the slot bank so it shows up
+  // in the Saves UI and is loadable via loadFrom. The bytes are already written
+  // to IndexedDB by importSaveState; this only mirrors the metadata into store
+  // state, reusing the existing saveTo reducer action.
+  const importStateSlot = useCallback((index: number, slot: SaveSlot) => {
+    dispatch({ type: "saveTo", index, slot });
+  }, []);
+
   const removeRom = useCallback(
     async (id: string) => {
       const next = roms.filter((item) => item.id !== id);
@@ -431,6 +440,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       flash: showToast,
       loadFile,
       loadFrom,
+      importStateSlot,
       openRom,
       openBuiltinRom,
       powerOff,
@@ -448,6 +458,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       error,
       loadFile,
       loadFrom,
+      importStateSlot,
       openRom,
       openBuiltinRom,
       powerOff,
