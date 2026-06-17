@@ -415,8 +415,12 @@ fn run_windowed(
             .with_min_inner_size([WIDTH as f32, HEIGHT as f32]),
         renderer: eframe::Renderer::Wgpu,
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            // Fifo = vsync -> tear-free scrolling (rubc-wgm7). Do NOT add
+            // `desired_maximum_frame_latency: Some(1)` here: on macOS Metal it
+            // leaves the eframe window created-but-never-presented (invisible)
+            // while the app runs at full FPS underneath. Fifo alone is already
+            // tear-free; the default frame latency keeps the window visible.
             present_mode: eframe::wgpu::PresentMode::Fifo,
-            desired_maximum_frame_latency: Some(1),
             ..Default::default()
         },
         ..Default::default()
