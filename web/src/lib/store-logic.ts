@@ -2,6 +2,7 @@ export const STORAGE_KEY = "rubc.mobile.v1";
 export const BOOT_DELAY_MS = 1500;
 export const TOAST_DELAY_MS = 1700;
 
+export type ShaderEffect = "off" | "lcd-grid" | "scanline" | "crt";
 export type Palette = "auto" | "dmg" | "grayscale";
 export type Scaling = "fit" | "integer";
 export type ControlsLayout = "docked" | "overlay";
@@ -9,6 +10,7 @@ export type Phase = "empty" | "booting" | "running" | "paused";
 export type View = "play" | "library" | "settings";
 
 export interface EmulatorSettings {
+  shaderEffect: ShaderEffect;
   sound: boolean;
   volume: number;
   palette: Palette;
@@ -89,6 +91,7 @@ export type EmulatorAction =
   | { type: "clearToast" };
 
 export const DEFAULT_SETTINGS: EmulatorSettings = {
+  shaderEffect: "off",
   sound: false,
   volume: 70,
   palette: "auto",
@@ -234,6 +237,7 @@ function isSlotIndex(index: number): index is 0 | 1 | 2 | 3 {
 function normalizeSettings(value: unknown): EmulatorSettings {
   const settings: EmulatorSettings = { ...DEFAULT_SETTINGS };
   if (!isRecord(value)) return settings;
+  if (isShaderEffect(value.shaderEffect)) settings.shaderEffect = value.shaderEffect;
   if (typeof value.sound === "boolean") settings.sound = value.sound;
   if (isFiniteNumber(value.volume)) settings.volume = clamp(Math.round(value.volume), 0, 100);
   if (isPalette(value.palette)) settings.palette = value.palette;
@@ -278,6 +282,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
+}
+
+function isShaderEffect(value: unknown): value is ShaderEffect {
+  return value === "off" || value === "lcd-grid" || value === "scanline" || value === "crt";
 }
 
 function isPalette(value: unknown): value is Palette {

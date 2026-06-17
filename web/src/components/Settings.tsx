@@ -3,7 +3,7 @@
 import React from "react";
 import { useEmulator } from "../lib/store";
 import { Switch, Badge, StatusPill, Card, Kbd } from "./ui";
-import type { Scaling } from "../lib/store";
+import type { Scaling, ShaderEffect } from "../lib/store";
 
 interface SegmentedOption<T extends string> {
   value: T;
@@ -187,6 +187,29 @@ export function Settings() {
               { value: "auto", label: "Auto" },
               { value: "dmg", label: "DMG green" },
               { value: "grayscale", label: "Gray" },
+            ]}
+          />
+        </Field>
+        <Field
+          label="Shader effect"
+          hint={
+            s.shaderEffect === "off"
+              ? "// raw pixels"
+              : s.shaderEffect === "lcd-grid"
+                ? "// pixel grid lines"
+                : s.shaderEffect === "scanline"
+                  ? "// horizontal scanlines"
+                  : "// crt with vignette"
+          }
+        >
+          <Segmented<ShaderEffect>
+            value={s.shaderEffect}
+            onChange={(v) => set({ shaderEffect: v })}
+            options={[
+              { value: "off", label: "Off" },
+              { value: "lcd-grid", label: "LCD Grid" },
+              { value: "scanline", label: "Scanline" },
+              { value: "crt", label: "CRT" },
             ]}
           />
         </Field>

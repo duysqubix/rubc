@@ -1,3 +1,5 @@
+import { GLRenderer } from "./shaders";
+import type { ShaderEffect } from "./shaders";
 import init, { RubcWasm } from "./wasm/rubc_wasm.js";
 import type { InitOutput } from "./wasm/rubc_wasm.js";
 import {
@@ -222,6 +224,8 @@ export async function importSave(key: string, file: File): Promise<void> {
 }
 
 export class EmulatorCore {
+  glRenderer: GLRenderer | null = null;
+  shaderEffect: ShaderEffect = "off";
   wasm: InitOutput | null = null;
   emu: RubcWasm | null = null;
   audioCtx: AudioContext | null = null;
@@ -295,12 +299,40 @@ export class EmulatorCore {
     this.nextAudioTime += frames / this.audioCtx.sampleRate;
   }
 
+  setShaderEffect(effect: ShaderEffect) {
+    this.shaderEffect = effect;
+    if (this.glRenderer) {
+      this.glRenderer.setEffect(effect);
+    }
+  }
+
   drawFrame() {
     if (!this.emu || !this.wasm || !this.canvasCtx || !this.imageData) return;
     try {
       const ptr = this.emu.frame_rgba();
       // Rebuild the view every frame: wasm memory can grow and detach the buffer.
       const view = new Uint8ClampedArray(this.wasm.memory.buffer, ptr, this.emu.frame_len);
+      
+      if (this.shaderEffect !== "off") {
+        if (!this.glRenderer) {
+          this.glRenderer = new GLRenderer();
+          this.glRenderer.setEffect(this.shaderEffect);
+        }
+        const offscreen = this.glRenderer.draw(view);
+        if (offscreen) {
+          if (this.canvasCtx.canvas.width !== offscreen.width || this.canvasCtx.canvas.height !== offscreen.height) {
+            this.canvasCtx.canvas.width = offscreen.width;
+            this.canvasCtx.canvas.height = offscreen.height;
+          }
+          this.canvasCtx.drawImage(offscreen, 0, 0);
+          return;
+        }
+      }
+
+      if (this.canvasCtx.canvas.width !== 160 || this.canvasCtx.canvas.height !== 144) {
+        this.canvasCtx.canvas.width = 160;
+        this.canvasCtx.canvas.height = 144;
+      }
       this.imageData.data.set(view);
       this.canvasCtx.putImageData(this.imageData, 0, 0);
     } catch {
@@ -502,6 +534,10 @@ export class EmulatorCore {
     if (this.emu) {
       this.emu.free();
       this.emu = null;
+    }
+    if (this.glRenderer) {
+      this.glRenderer.dispose();
+      this.glRenderer = null;
     }
     this.currentSaveKey = null;
     this.canvasCtx = null;

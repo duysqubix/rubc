@@ -24,7 +24,7 @@ import {
 import type { BuiltinRom, EmulatorRom, EmulatorSettings, EmulatorState, SaveSlot, View } from "./store-logic";
 
 export { DEFAULT_SETTINGS, STORAGE_KEY, paletteFilter } from "./store-logic";
-export type { BuiltinRom, ControlsLayout, EmulatorRom, EmulatorSettings, Phase, SaveSlot, SaveSlots, Scaling, View } from "./store-logic";
+export type { BuiltinRom, ControlsLayout, EmulatorRom, EmulatorSettings, Phase, SaveSlot, SaveSlots, Scaling, ShaderEffect, View } from "./store-logic";
 
 export const RECENT_ROMS_KEY = "rubc-recent-roms";
 
@@ -398,6 +398,10 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
       void emulator.audioCtx.suspend();
     }
   }, [state.settings.sound]);
+
+  useEffect(() => {
+    emulator.setShaderEffect(state.settings.shaderEffect);
+  }, [state.settings.shaderEffect]);
 
   useEffect(() => {
     // Turbo is a frontend speed multiplier; the core needs no speed concept.
