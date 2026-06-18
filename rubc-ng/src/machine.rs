@@ -248,12 +248,17 @@ impl Hdma {
         0x8000 | (u16::from(self.dst_high & 0x1F) << 8) | u16::from(self.dst_low & 0xF0)
     }
 
-    #[allow(dead_code)]
     fn status(&self) -> u8 {
+        // Pan Docs FF55: bit 7 is 0 while a transfer is ACTIVE, 1 when not
+        // active. $FF means a completed transfer; a manually-stopped HBlank
+        // transfer reads bit7=1 with the remaining ($10-block count minus 1).
+        let remaining = self.remaining_blocks.saturating_sub(1) & 0x7F;
         if self.active {
-            0x80 | self.remaining_blocks.saturating_sub(1)
-        } else {
+            remaining
+        } else if self.remaining_blocks == 0 {
             0xFF
+        } else {
+            0x80 | remaining
         }
     }
 }
@@ -1042,14 +1047,15 @@ impl MachineBus {
             0xFF4F if self.model.is_cgb() => 0xFE | self.vram_bank,
             0xFF4F => 0xFF,
             0xFF50 => 0xFF,
-            0xFF55 if self.model.is_cgb() && self.hdma.active => self.hdma.status(),
-            0xFF51..=0xFF55 if self.model.is_cgb() => 0xFF,
+            0xFF55 if self.model.is_cgb() => self.hdma.status(),
+            0xFF51..=0xFF54 if self.model.is_cgb() => 0xFF,
             0xFF51..=0xFF67 => 0xFF,
             0xFF68 if self.model.is_cgb() => self.bg_palette_index | 0x40,
             0xFF69 if self.model.is_cgb() => 0xFF,
             0xFF6A if self.model.is_cgb() => self.obj_palette_index | 0x40,
             0xFF6B if self.model.is_cgb() => 0xFF,
             0xFF68..=0xFF7F if !self.model.is_cgb() => 0xFF,
+            0xFF70 if self.model.is_cgb() => self.wram_bank | 0xF8,
             0xFF6C..=0xFF71 | 0xFF74 => 0xFF,
             0xFF72 | 0xFF73 if self.model.is_cgb() => self.io[(addr - 0xFF00) as usize],
             0xFF75 if self.model.is_cgb() => self.io[0x75] | 0x8F,
@@ -1297,7 +1303,13 @@ impl MachineBus {
     fn selected_wram_bank(&self) -> usize {
         usize::from(self.wram_bank.max(1))
     }
+    fn lcd_enabled(&self) -> bool {
+        self.io[0x40] & 0x80 != 0
+    }
     fn ly(&self) -> u8 {
+        if !self.lcd_enabled() {
+            return 0;
+        }
         ((self.spine.ppu_dot / DMG_DOTS_PER_LINE) % 154) as u8
     }
     fn ppu_mode(&self) -> u8 {
@@ -1574,9 +1586,22 @@ impl MachineBus {
     fn tick_one_subphase(&mut self) {
         let old_cpu_t = self.spine.cpu_t;
         let old_ppu_dot = self.spine.ppu_dot;
+        let old_line_dot = self.spine.line_dot;
+        let old_frame_dot = self.spine.frame_dot;
+        let ppu_was_off = !self.lcd_enabled();
         let ppu_divisor = if self.double_speed { 2 } else { 1 };
         self.spine
             .step_subphase_with_ppu_divisor(&self.table, ppu_divisor);
+        // The PPU does not advance while the LCD is off (LCDC.7 = 0): LY stays
+        // 0, no mode cycling, no synthetic VBlank, no HBlank HDMA. The LCD
+        // off/on edges reset ppu_dot in write_ppu_register; here we only hold
+        // it frozen across the continuously-off period (and never clobber the
+        // ppu_dot=4 the LCD-on edge sets when the LCD is re-enabled).
+        if ppu_was_off && !self.lcd_enabled() {
+            self.spine.ppu_dot = old_ppu_dot;
+            self.spine.line_dot = old_line_dot;
+            self.spine.frame_dot = old_frame_dot;
+        }
         self.cpu_now.0 = self.spine.now.subphases();
         self.timer.observe_spine(&self.spine);
         self.if_ |= self.timer.take_interrupt_request();
@@ -1584,7 +1609,7 @@ impl MachineBus {
             self.apu
                 .tick_spine(self.timer.div_counter(), self.double_speed);
         }
-        if self.spine.ppu_dot != old_ppu_dot {
+        if self.lcd_enabled() && self.spine.ppu_dot != old_ppu_dot {
             self.on_ppu_dot();
         }
     }
@@ -1656,7 +1681,7 @@ impl MachineBus {
                 }
             }
         }
-        if ly < 144 && line_dot == 252 && self.hdma.active {
+        if self.lcd_enabled() && ly < 144 && line_dot == 252 && self.hdma.active {
             self.copy_hdma_block();
         }
     }
@@ -1872,6 +1897,34 @@ mod tests {
     }
 
     #[test]
+    fn svbk_ff70_reads_back_selected_wram_bank_on_cgb() {
+        // Regression: FF70 (SVBK) must read back the selected WRAM bank in
+        // bits 0-2 with the upper bits set (`bank | 0xF8`), NOT a flat 0xFF.
+        // Pokemon Crystal's VBlank handler reads FF70 to recover the HBlank-
+        // HDMA source bank; a 0xFF read made it pick bank 7 (empty) instead of
+        // the data bank, leaving the menu blank. Bank 6 -> 0xFE; 0 remaps to 1.
+        let mut machine = cgb_machine();
+        machine.write_io(0xFF70, 0x06);
+        assert_eq!(
+            machine.read_io(0xFF70),
+            Some(0xFE),
+            "SVBK reads back bank 6 | 0xF8"
+        );
+        machine.write_io(0xFF70, 0x03);
+        assert_eq!(
+            machine.read_io(0xFF70),
+            Some(0xFB),
+            "SVBK reads back bank 3 | 0xF8"
+        );
+        machine.write_io(0xFF70, 0x00);
+        assert_eq!(
+            machine.read_io(0xFF70),
+            Some(0xF9),
+            "SVBK 0 remaps to bank 1"
+        );
+    }
+
+    #[test]
     fn stat_read_exposes_live_mode_bit_one_not_stale_io_latch() {
         let mut machine = cgb_machine();
         machine.bus.frame_counter = 1;
@@ -1926,7 +1979,7 @@ mod tests {
 
         assert_eq!(
             machine.read_io(0xFF55),
-            Some(0x81),
+            Some(0x01),
             "HDMA remains active with two blocks queued"
         );
 
@@ -1943,7 +1996,7 @@ mod tests {
         );
         assert_eq!(
             machine.read_io(0xFF55),
-            Some(0x80),
+            Some(0x00),
             "one block remains active"
         );
 
@@ -1961,6 +2014,49 @@ mod tests {
             machine.read_io(0xFF55),
             Some(0xFF),
             "HDMA completes after second HBlank block"
+        );
+    }
+
+    #[test]
+    fn lcd_off_freezes_ppu_and_blocks_hblank_hdma() {
+        // Regression: while the LCD is off (LCDC.7 = 0) the PPU does not
+        // advance — LY is frozen at 0, STAT reports mode 0, no synthetic VBlank
+        // is raised, and there are no HBlanks so an armed HBlank HDMA transfers
+        // nothing. rubc-ng used to keep advancing ppu_dot with the LCD off,
+        // which cycled LY / faked VBlanks / ran HBlank HDMA and hung Pokemon
+        // Crystal's overworld map-load (loaded with the LCD off).
+        let mut machine = cgb_machine();
+        for i in 0..0x10u16 {
+            machine.bus.write_visible(0xC200 + i, 0x40 | i as u8);
+        }
+        machine.write_io(0xFF40, 0x00);
+        machine.bus.if_ = 0;
+        machine.write_io(0xFF51, 0xC2);
+        machine.write_io(0xFF52, 0x00);
+        machine.write_io(0xFF53, 0x80);
+        machine.write_io(0xFF54, 0x00);
+        machine.write_io(0xFF55, 0x81);
+        for _ in 0..4000 {
+            machine.step();
+        }
+        assert_eq!(
+            machine.read_io(0xFF44),
+            Some(0),
+            "LY frozen at 0 while LCD off"
+        );
+        assert_eq!(
+            machine.read_io(0xFF41).map(|s| s & 0x03),
+            Some(0),
+            "STAT reports mode 0 while LCD off"
+        );
+        assert_eq!(
+            machine.bus.if_ & VBLANK_IRQ,
+            0,
+            "no synthetic VBlank raised while LCD off"
+        );
+        assert_eq!(
+            machine.bus.vram[0][0], 0,
+            "HBlank HDMA does not copy while the LCD is off"
         );
     }
 
