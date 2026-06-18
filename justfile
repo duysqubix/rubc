@@ -127,7 +127,14 @@ wasm-build:
     for f in rubc_wasm_bg.wasm rubc_wasm.js rubc_wasm.d.ts rubc_wasm_bg.wasm.d.ts; do
       [ -f "$out/$f" ] && cp -f "$out/$f" "$devwasm/$f"
     done
-    echo "built: $out (+ synced $devwasm)  (serve: just wasm-serve)"
+    # The PWA loads the wasm at RUNTIME from /rubc_wasm_bg.wasm (emulator.ts
+    # init module_or_path), which Next serves from web/public/. The Docker build
+    # does NOT rebuild this served copy, so it must be committed current or
+    # rubc.app serves a stale core. Keep it in lockstep with the fresh build.
+    pubwasm="web/public/rubc_wasm_bg.wasm"
+    echo "== wasm-build: sync served copy =>$pubwasm ="
+    [ -f "$out/rubc_wasm_bg.wasm" ] && cp -f "$out/rubc_wasm_bg.wasm" "$pubwasm"
+    echo "built: $out (+ synced $devwasm + $pubwasm)  (serve: just wasm-serve)"
 
 # Rebuild the wasm and FAIL if the dev copy (web/src/lib/wasm/) drifts from a
 # fresh build. Guards rubc-xltx: `npm run dev` does NOT recompile Rust, so a stale
@@ -138,18 +145,24 @@ wasm-check:
     #!/usr/bin/env bash
     set -euo pipefail
     devwasm="web/src/lib/wasm"
-    snap="$(mktemp -d)"; log="$(mktemp)"
-    trap 'rm -rf "$snap" "$log"' EXIT
+    pubwasm="web/public/rubc_wasm_bg.wasm"
+    snap="$(mktemp -d)"; snappub="$(mktemp)"; log="$(mktemp)"
+    trap 'rm -rf "$snap" "$snappub" "$log"' EXIT
     cp -rf "$devwasm"/. "$snap"/
+    cp -f "$pubwasm" "$snappub"
     if ! just wasm-build >"$log" 2>&1; then
       echo "wasm-check: wasm build FAILED:" >&2; cat "$log" >&2; exit 1
     fi
-    if diff -rq "$snap" "$devwasm" >/dev/null 2>&1; then
-      echo "wasm-check: dev wasm in sync with source ✓"
+    ok=1
+    diff -rq "$snap" "$devwasm" >/dev/null 2>&1 || ok=0
+    cmp -s "$snappub" "$pubwasm" || ok=0
+    if [ "$ok" = 1 ]; then
+      echo "wasm-check: dev (web/src/lib/wasm) + served (web/public) wasm in sync with source ✓"
     else
-      echo "ERROR: web/src/lib/wasm/ was STALE vs a fresh build (rubc-xltx)." >&2
+      echo "ERROR: committed wasm was STALE vs a fresh build (rubc-xltx)." >&2
       echo "       It has now been resynced — review and commit the change:" >&2
       diff -rq "$snap" "$devwasm" >&2 || true
+      cmp "$snappub" "$pubwasm" >&2 || true
       exit 1
     fi
 
