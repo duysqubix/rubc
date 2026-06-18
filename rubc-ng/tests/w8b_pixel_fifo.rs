@@ -101,6 +101,44 @@ fn fifo_window_restarts_at_wx_trigger_and_advances_window_line_at_activation() {
 }
 
 #[test]
+fn fifo_window_at_wx7_ignores_bg_fine_x_scroll() {
+    // Regression (Crystal town/zone banner jump): a WX=7 window is flush
+    // against the left edge (trigger at lcd_x=0). Its restart clears the BG
+    // FIFO, so the BG's line-start SCX&7 fine-scroll discard must NOT bleed
+    // into the window pixels. If it does, the banner shifts horizontally by
+    // SCX&7 as the player scrolls (the reported bug).
+    let mut vram = empty_vram();
+    // Window tile 2 row 0: colors [0,1,2,3,0,1,2,3] (lo=0x55, hi=0x33) so any
+    // horizontal shift is detectable.
+    vram.bank0[0x0020] = 0x55;
+    vram.bank0[0x0021] = 0x33;
+    // BG tile 1: all color 3 (would show through if the window mis-rendered).
+    vram.bank0[0x0010] = 0xFF;
+    vram.bank0[0x0011] = 0xFF;
+    for col in 0..32 {
+        vram.bank0[0x1800 + col] = 1; // BG map -> tile 1
+        vram.bank0[0x1C00 + col] = 2; // window map -> tile 2
+    }
+    // LCD+BG on, window on (bit5), window map 9C00 (bit6), 8000 data. WX=7
+    // (window from x=0), WY=0, SCX=3 (a non-zero BG fine-scroll).
+    let mut ppu = PpuInternal::for_test(0x91 | 0x20 | 0x40, 0, 3, 7, 0, vram, [0u8; 0xA0]);
+    let line = render_line(&mut ppu, false, 0);
+    assert_eq!(line.len(), 160);
+    for (x, color, source) in line.iter() {
+        assert_eq!(
+            *source,
+            LcdPixelSource::Bg,
+            "x={x}: window pixel is BG-source"
+        );
+        assert_eq!(
+            *color,
+            (*x as u8) & 3,
+            "x={x}: WX=7 window column renders unshifted (no SCX&7 bleed)"
+        );
+    }
+}
+
+#[test]
 fn fifo_sprite_merge_is_first_wins_on_dmg_and_oam_index_wins_on_cgb() {
     let mut vram = empty_vram();
     // Sprite tile 5: all color 1. Sprite tile 6: all color 2.

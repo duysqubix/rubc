@@ -450,9 +450,13 @@ impl PpuInternal {
         }
         self.fifo.window_active = true;
         self.fifo.window_started_this_line = true;
-        // WX<7: the compare fired before the first visible pixel; keep the
-        // X=0 restart but discard the off-screen window columns.
-        if self.fifo.lcd_x == 0 && self.wx < 6 {
+        // The window restart at X=0 clears the BG FIFO, so the BG's line-start
+        // SCX&7 fine-scroll discard must NOT bleed into the window pixels. Reset
+        // the discard to the window's own left-clip: 7-WX off-screen columns for
+        // WX<7, and 0 for WX==7 (window flush against the left edge). Without
+        // this a WX=7 banner shifts horizontally as SCX changes (Crystal town
+        // banner jumping while walking).
+        if self.fifo.lcd_x == 0 && self.wx < 8 {
             self.fifo.scx_discard = 7 - self.wx;
         }
         self.fifo.bg_fifo.clear();
