@@ -52,7 +52,7 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-13
+          - os: macos-14
             target: x86_64-apple-darwin
           - os: macos-14
             target: aarch64-apple-darwin
@@ -73,10 +73,13 @@ jobs:
           # linker=clang with -fuse-ld=/usr/bin/mold, neither of which the runner has.
           sudo apt-get install -y --no-install-recommends libasound2-dev libgtk-3-dev clang mold
 
-      # No toolchain action: rust-toolchain.toml pins the compiler and rustup
-      # installs it on the first cargo call. Each runner builds its native target.
+      # rust-toolchain.toml pins the compiler; rustup installs it on first use.
+      # Build per-target: the Intel-mac binary is cross-compiled on the arm64
+      # runner, so releases never wait on scarce macos-13 Intel runners.
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
       - name: Build release binary
-        run: cargo build --release --locked -p rubc
+        run: cargo build --release --locked -p rubc --target ${{ matrix.target }}
 
       - name: Package
         id: package
@@ -86,9 +89,9 @@ jobs:
           dist="rubc-${tag}-${{ matrix.target }}"
           mkdir "$dist"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp target/release/rubc.exe "$dist/"
+            cp "target/${{ matrix.target }}/release/rubc.exe" "$dist/"
           else
-            cp target/release/rubc "$dist/"
+            cp "target/${{ matrix.target }}/release/rubc" "$dist/"
           fi
           cp README.md LICENSE "$dist/" 2>/dev/null || true
           if [ "${{ runner.os }}" = "Windows" ]; then
