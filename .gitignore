@@ -30,11 +30,14 @@ Cargo.lock
 # reference/goldens/instrumentation.patch against SameBoy).
 
 # Local-only agent / tooling scaffolding (agent configs, skills).
-# Kept per-machine; never committed. (.beads IS tracked — it bootstraps the issue tracker.)
+# Kept per-machine; never committed. (.beads IS tracked; .agents/skills/release/ IS tracked — the release runbook ships with the repo.)
 /.claude/
 /.codex/
 /.omo/
-/.agents/
+/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/release/
 graph.svg
 # Disassembly dumps produced by `just disasm` / --disassemble.
 *.gb.txt
