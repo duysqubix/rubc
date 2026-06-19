@@ -62,6 +62,10 @@ help:
     @echo "  WEB"
     @echo "    just roms-bundle     # bundle preloaded MIT test ROMs -> web/public/roms/"
     @echo ""
+    @echo "  RELEASE"
+    @echo "    just release --dry-run             # preview next version + notes"
+    @echo "    just release --notes-file N --yes  # cut the release (binaries via CI)"
+    @echo ""
     @echo "  See 'just --list' for everything."
 
 # ---- build -----------------------------------------------------------------
@@ -488,6 +492,17 @@ ng-goldens:
       exit 0
     fi
     /usr/bin/env cargo test -p {{ng}} golden_
+
+# ---- release ---------------------------------------------------------------
+
+# Cut a release: compute the next version from conventional commits, bump every
+# crate version + Cargo.lock, run `just check`, commit, tag, push, and create the
+# GitHub release. Cross-platform binaries are attached by .github/workflows/
+# release.yml on the pushed tag. Operator (or the AI) authors notes via
+# --notes-file; --dry-run previews the version + categorized commits.
+# Usage: just release --dry-run   |   just release --notes-file NOTES.md --yes
+release *args:
+    ./scripts/release.sh {{args}}
 
 # ---- inspection ------------------------------------------------------------
 
