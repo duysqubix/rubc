@@ -72,7 +72,7 @@ classify_bump() {
   subjects="$(git log "$range" --pretty=%s)"
   bodies="$(git log "$range" --pretty=%b)"
   if printf '%s\n' "$subjects" | grep -qE '^[a-z]+(\([^)]+\))?!:' \
-     || printf '%s\n' "$bodies" | grep -q 'BREAKING CHANGE'; then
+     || printf '%s\n' "$bodies" | grep -qE '^BREAKING[ -]CHANGE:'; then
     printf 'major'
   elif printf '%s\n' "$subjects" | grep -qE '^feat(\([^)]+\))?!?:'; then
     printf 'minor'
@@ -149,7 +149,7 @@ git rev-parse -q --verify "refs/tags/${NEW_TAG}" >/dev/null 2>&1 \
 # Counts for the summary line.
 N_FEAT="$(git log "$RANGE" --pretty=%s | grep -cE '^feat(\([^)]+\))?!?:' || true)"
 N_FIX="$(git log "$RANGE" --pretty=%s | grep -cE '^fix(\([^)]+\))?!?:' || true)"
-N_BREAK="$(git log "$RANGE" --pretty=%s | grep -cE '^[a-z]+(\([^)]+\))?!:' || true)"
+N_BREAK="$(git log "$RANGE" --pretty='%s%n%b' | grep -cE '^([a-z]+(\([^)]+\))?!:|BREAKING[ -]CHANGE:)' || true)"
 
 note "rubc release plan"
 printf '  previous : %s\n  next     : %s  (bump: %s)\n  commits  : %s since %s — %s feat, %s fix, %s breaking\n\n' \
