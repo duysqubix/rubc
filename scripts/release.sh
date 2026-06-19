@@ -183,7 +183,7 @@ fi
 
 # Resolve notes: explicit file, or generated changelog written to a temp file.
 NOTES_PATH=""
-cleanup() { [ -n "${TMP_NOTES:-}" ] && rm -f "$TMP_NOTES"; }
+cleanup() { [ -n "${TMP_NOTES:-}" ] && rm -f "$TMP_NOTES"; return 0; }
 trap cleanup EXIT
 if [ -n "$NOTES_FILE" ]; then
   [ -f "$NOTES_FILE" ] || die "--notes-file '$NOTES_FILE' not found"
