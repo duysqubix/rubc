@@ -2902,7 +2902,7 @@ dependencies = [
 
 [[package]]
 name = "rubc"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2920,7 +2920,7 @@ dependencies = [
 
 [[package]]
 name = "rubc-ng"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2928,7 +2928,7 @@ dependencies = [
 
 [[package]]
 name = "rubc-wasm"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",

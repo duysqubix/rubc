@@ -1,6 +1,6 @@
 [package]
 name = "rubc-wasm"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "MIT"
 description = "WebAssembly bindings exposing the rubc-ng Game Boy emulator to JavaScript."
