@@ -6,7 +6,7 @@ license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 cpal = "0.18"
 chrono = "0.4"
 # eframe drives a real native window (winit + wgpu under the hood) and turns
@@ -16,8 +16,8 @@ eframe = { version = "0.34", features = ["wgpu"] }
 egui = "0.34"
 # Pure-Rust image encoders for headless capture (screenshot/gif). Both pull only
 # Rust deps (miniz_oxide/fdeflate for PNG, weezl LZW for GIF) -- no C / -sys / FFI.
-gif = "0.13"
-png = "0.17"
+gif = "0.14"
+png = "0.18"
 log = "0.4"
 rubc-ng = { path = "../rubc-ng" }
 rfd = "0.17.2"

@@ -593,7 +593,12 @@ impl RubcApp {
         let tex = self.logo_tex.get_or_insert_with(|| {
             let decoder = png::Decoder::new(std::io::Cursor::new(logo_bytes));
             let mut reader = decoder.read_info().unwrap();
-            let mut buf = vec![0; reader.output_buffer_size()];
+            let mut buf = vec![
+                0;
+                reader
+                    .output_buffer_size()
+                    .expect("logo output buffer size")
+            ];
             let info = reader.next_frame(&mut buf).unwrap();
             let size = [info.width as _, info.height as _];
             let color_image = match info.color_type {

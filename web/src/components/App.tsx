@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useEmulator } from "@/lib/store";
 import { Button } from "./ui/Button";
 
@@ -69,7 +70,7 @@ function TopBar({ emu }: { emu: ReturnType<typeof useEmulator> }) {
             </div>
           </>
         ) : (
-          <a href="/" aria-label="rubc home" style={{ fontFamily: "var(--font-pixel)", fontSize: 22, color: "var(--accent)", letterSpacing: "0.02em", textDecoration: "none" }}>rubc</a>
+          <Link href="/" aria-label="rubc home" style={{ fontFamily: "var(--font-pixel)", fontSize: 22, color: "var(--accent)", letterSpacing: "0.02em", textDecoration: "none" }}>rubc</Link>
         )}
       </div>
       <IconBtn label="Menu" onClick={() => emu.setMenuOpen(true)} disabled={!rom}>≡</IconBtn>

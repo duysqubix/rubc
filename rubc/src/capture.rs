@@ -357,12 +357,14 @@ mod tests {
         assert!(meta.len() > 0, "png is empty");
 
         // Decode the PNG back and count distinct RGBA colours.
-        let decoder = png::Decoder::new(std::fs::File::open(&out).expect("open png"));
+        let decoder = png::Decoder::new(std::io::BufReader::new(
+            std::fs::File::open(&out).expect("open png"),
+        ));
         let mut reader = decoder.read_info().expect("png header");
         let info = reader.info();
         assert_eq!(info.width, W as u32);
         assert_eq!(info.height, H as u32);
-        let mut buf = vec![0u8; reader.output_buffer_size()];
+        let mut buf = vec![0u8; reader.output_buffer_size().expect("png output buffer size")];
         let frame = reader.next_frame(&mut buf).expect("png frame");
         let bytes = &buf[..frame.buffer_size()];
         let distinct: std::collections::BTreeSet<&[u8]> = bytes.chunks_exact(4).collect();

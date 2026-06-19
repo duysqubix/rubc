@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useEmulator } from "@/lib/store";
 import { emulator, BTN } from "@/lib/emulator";
 import type { BuiltinRom, EmulatorRom, EmulatorContextValue } from "@/lib/store";
@@ -27,13 +28,13 @@ function fmtAgo(ms: number): string {
 
 function Logo({ h = 30 }: { h?: number }) {
   return (
-    <a href="/" aria-label="rubc home" style={{ display: "inline-flex", lineHeight: 0 }}>
+    <Link href="/" aria-label="rubc home" style={{ display: "inline-flex", lineHeight: 0 }}>
       <img
         src="/logo.png"
         alt="rubc"
         style={{ height: h, width: "auto", imageRendering: "pixelated", objectFit: "contain" }}
       />
-    </a>
+    </Link>
   );
 }
 
@@ -334,7 +335,7 @@ function ControlsTab() {
             marginBottom: 6,
           }}
         >
-          // keyboard
+          {"// keyboard"}
         </div>
         <MapRow label="D-pad">
           <Kbd>←</Kbd>
@@ -395,7 +396,7 @@ function AccuracyTab() {
           marginBottom: 2,
         }}
       >
-        // verified on real silicon
+        {"// verified on real silicon"}
       </div>
       <StatusPill status="pass" label="dmg-acid2" detail="pixel-exact" />
       <StatusPill status="pass" label="cgb-acid2" detail="pixel-exact" />
@@ -661,18 +662,9 @@ export function DesktopApp() {
   const dirT = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { phase, rom, settings: s } = emu;
   const [dragging, setDragging] = useState(false);
-  // Panels start open (matches SSR markup); a mount effect collapses them on a
-  // narrow viewport (e.g. the desktop URI opened on a phone) where they'd
-  // otherwise overflow and hide the screen.
-  const [leftOpen, setLeftOpen] = useState(true);
-  const [rightOpen, setRightOpen] = useState(true);
-
-  useEffect(() => {
-    if (window.innerWidth <= 820) {
-      setLeftOpen(false);
-      setRightOpen(false);
-    }
-  }, []);
+  const panelsStartOpen = () => typeof window === "undefined" || window.innerWidth > 820;
+  const [leftOpen, setLeftOpen] = useState(panelsStartOpen);
+  const [rightOpen, setRightOpen] = useState(panelsStartOpen);
 
   const onDir = (d: string) => {
     if (phase !== "running") return;

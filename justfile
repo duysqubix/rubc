@@ -101,7 +101,7 @@ wasm-build:
     else
       echo "Need wasm-pack OR wasm-bindgen-cli. Install one of:"
       echo "  cargo install wasm-pack"
-      echo "  cargo install wasm-bindgen-cli --version 0.2.122"
+      echo "  cargo install wasm-bindgen-cli --version 0.2.125"
       exit 1
     fi
     wasm="$out/rubc_wasm_bg.wasm"

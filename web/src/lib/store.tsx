@@ -356,10 +356,16 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   );
 
   useEffect(() => {
-    const saved = parsePersistence(readLocalStorage(STORAGE_KEY));
-    dispatch({ type: "hydrate", persisted: saved });
-    setRoms(readRecentRoms());
-    setHydrated(true);
+    // Defer hydration to a microtask so the first (hydrating) render matches the
+    // SSR/static-export markup (defaults), then apply persisted state in a
+    // post-hydration client render. Avoids a React hydration mismatch AND the
+    // react-hooks "setState synchronously in effect" lint error.
+    queueMicrotask(() => {
+      const saved = parsePersistence(readLocalStorage(STORAGE_KEY));
+      dispatch({ type: "hydrate", persisted: saved });
+      setRoms(readRecentRoms());
+      setHydrated(true);
+    });
   }, []);
 
   useEffect(() => {

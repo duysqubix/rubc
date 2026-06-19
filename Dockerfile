@@ -13,10 +13,10 @@
 # then open http://localhost:8080/ and load a .gb/.gbc ROM.
 
 # ---- Stage 1: build the wasm bundle -----------------------------------------
-FROM rust:1.88-bookworm AS wasm-builder
+FROM rust:1.96-bookworm AS wasm-builder
 
 # wasm-bindgen-cli version must match the wasm-bindgen crate dependency.
-ARG WASM_BINDGEN_VERSION=0.2.122
+ARG WASM_BINDGEN_VERSION=0.2.125
 
 WORKDIR /build
 
@@ -29,7 +29,7 @@ RUN apt-get update \
 # generated pkg/ out of the build context.
 COPY . .
 
-# The repo ships a rust-toolchain.toml (channel = stable). rustup honours it on
+# The repo ships a rust-toolchain.toml (channel = 1.96.0, pinned). rustup honours
 # the first cargo invocation inside /build, so add the wasm target AFTER the
 # copy — to whatever toolchain that file selects — or the build fails with a
 # missing wasm32 `core` (E0463).
@@ -47,7 +47,7 @@ RUN cargo build -p rubc-wasm --target wasm32-unknown-unknown --release \
       rubc-wasm/web/pkg/rubc_wasm_bg.wasm
 
 # ---- Stage 2: build the Next.js PWA (static export) -------------------------
-FROM node:22-bookworm-slim AS web-builder
+FROM node:24-bookworm-slim AS web-builder
 WORKDIR /web
 
 # Install deps against the committed lockfile (cached unless package*.json change).
@@ -55,10 +55,16 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci
 
 # App sources, then overlay the freshly-optimized wasm from stage 1 so the
-# bundle never ships a stale hand-committed binary.
+# deployed site never ships a stale hand-committed binary. The glue import
+# resolves src/lib/wasm/, but the app loads the binary at runtime from the
+# public/ copy (see below) — both are refreshed from the stage-1 build.
 COPY web/ ./
 COPY --from=wasm-builder /build/rubc-wasm/web/pkg/rubc_wasm_bg.wasm ./src/lib/wasm/rubc_wasm_bg.wasm
 COPY --from=wasm-builder /build/rubc-wasm/web/pkg/rubc_wasm.js       ./src/lib/wasm/rubc_wasm.js
+# The PWA fetches the wasm at RUNTIME from /rubc_wasm_bg.wasm (Next serves it
+# from public/), so the served binary is web/public/ — overlay it with the
+# fresh build too, or the site serves whatever stale wasm was committed.
+COPY --from=wasm-builder /build/rubc-wasm/web/pkg/rubc_wasm_bg.wasm ./public/rubc_wasm_bg.wasm
 
 # Preloaded MIT test ROMs (web/public/roms/, produced by `just roms-bundle` and
 # committed) must be present so the PWA's "Built-in" library ships in the image.

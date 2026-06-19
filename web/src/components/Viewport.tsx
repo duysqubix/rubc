@@ -26,7 +26,7 @@ function EdgeFlash({ dir }: { dir: string | null }) {
     left:  { ...base, top: 0, bottom: 0, left: 0, width: "16%", background: "linear-gradient(90deg, rgba(136,192,112,0.3), transparent)" },
     right: { ...base, top: 0, bottom: 0, right: 0, width: "16%", background: "linear-gradient(270deg, rgba(136,192,112,0.3), transparent)" },
   };
-  return <div style={map[dir]} key={dir + Math.random()} />;
+  return <div style={map[dir]} key={dir} />;
 }
 
 function FpsHud({ turbo }: { turbo: boolean }) {

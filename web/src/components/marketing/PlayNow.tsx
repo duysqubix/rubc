@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui";
 
 // Minimal type for the (non-standard) beforeinstallprompt event (Chrome/Android).
@@ -62,12 +62,14 @@ export function PlayNow({
   children?: React.ReactNode;
 }) {
   const installEvent = useRef<BeforeInstallPromptEvent | null>(null);
-  const [href, setHref] = useState("/play/mobile");
+  const href = useSyncExternalStore(
+    () => () => {},
+    playHref,
+    () => "/play/mobile",
+  );
   const [iosSheet, setIosSheet] = useState(false);
 
   useEffect(() => {
-    // Resolve the real destination on mount (the static export prerenders one).
-    setHref(playHref());
     const onBip = (e: Event) => {
       e.preventDefault();
       installEvent.current = e as BeforeInstallPromptEvent;

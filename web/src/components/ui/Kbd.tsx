@@ -1,6 +1,6 @@
 import React from "react";
 
-export interface KbdProps extends React.HTMLAttributes<HTMLElement> {}
+export type KbdProps = React.HTMLAttributes<HTMLElement>;
 
 export function Kbd({ children, style, ...rest }: KbdProps) {
   return (
