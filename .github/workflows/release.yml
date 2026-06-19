@@ -65,11 +65,13 @@ jobs:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
       # cpal links ALSA; rfd (file dialogs) links GTK3. Only Linux needs system -dev libs.
-      - name: Install Linux build deps
+      - name: Install Linux build deps (ALSA + GTK3 + clang/mold linker)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libasound2-dev libgtk-3-dev
+          # clang + mold: .cargo/config.toml pins the x86_64-linux target to
+          # linker=clang with -fuse-ld=/usr/bin/mold, neither of which the runner has.
+          sudo apt-get install -y --no-install-recommends libasound2-dev libgtk-3-dev clang mold
 
       # No toolchain action: rust-toolchain.toml pins the compiler and rustup
       # installs it on the first cargo call. Each runner builds its native target.
