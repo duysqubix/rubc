@@ -31,7 +31,7 @@ jobs:
   ensure-release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
       - name: Ensure the release exists
@@ -60,7 +60,7 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - name: Checkout the tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
